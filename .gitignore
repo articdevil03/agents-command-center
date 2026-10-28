@@ -1,0 +1,34 @@
+node_modules/
+scratch/
+logs/
+.cc-test-*/
+.mutation-proof.lock
+.dist-build.lock*
+dist/
+config/launch-safety.json
+
+# Raw reviewer and coder output, kept as evidence, never shipped
+.review-logs/
+
+# Per-user data written at runtime (the app's own data root when run from source)
+/chats/
+/avatars/
+/settings.json
+/requests.json
+/example-project/
+config/client-prefs.json
+config/workspaces.json
+# Folder paths and session ids of the owner's own sessions (folder warning), never committed or exported
+config/own-sessions.json
+config/own-sessions.json.tmp
+
+# Recovery copies of an unreadable per-user file, never shipped or committed
+*.bad-*
+
+# Scratch the design tools write and now delete (run-audit.py, mutate.py)
+design/audits/_run.html
+design/audits/_chrome/
+design/simple/_mut.html
+
+# The owner's private word list for the public export, never committed or exported
+.leak-patterns.local

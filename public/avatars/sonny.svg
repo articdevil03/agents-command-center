@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Sonny, coder: mint bean with little coral headphones -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#84d7b8"/><stop offset=".65" stop-color="#4fc79a"/><stop offset="1" stop-color="#46af88"/></radialGradient></defs>
+  <path fill="url(#b)" d="M32 11C43 11 48 19 48 30V45C48 54 41 60 32 60S16 54 16 45V30C16 19 21 11 32 11Z"/>
+  <path d="M13 32C13 2 51 2 51 32" fill="none" stroke="#ff8a5c" stroke-width="3.5" stroke-linecap="round"/>
+  <rect x="8" y="27" width="10" height="15" rx="4.5" fill="#ff8a5c"/>
+  <rect x="46" y="27" width="10" height="15" rx="4.5" fill="#ff8a5c"/>
+  <path d="M21.5 36q3.5-4.5 7 0M35.5 36q3.5-4.5 7 0" fill="none" stroke="#26262b" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M29 43q3 2.6 6 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

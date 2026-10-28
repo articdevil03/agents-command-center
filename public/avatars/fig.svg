@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Fig: magenta gourd with a little flower -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#e98cc2"/><stop offset=".65" stop-color="#e05aa8"/><stop offset="1" stop-color="#c54f94"/></radialGradient></defs>
+  <path fill="url(#b)" d="M32 9C40 9 44 15 43 21C42.5 25 41 27 42.5 29C50.5 31.5 56 37.5 56 46C56 55 46 60 32 60S8 55 8 46C8 37.5 13.5 31.5 21.5 29C23 27 21.5 25 21 21C20 15 24 9 32 9Z"/>
+  <g fill="#ffe066">
+    <circle cx="42" cy="9" r="3"/><circle cx="45.3" cy="11.4" r="3"/><circle cx="44" cy="15.3" r="3"/><circle cx="40" cy="15.3" r="3"/><circle cx="38.7" cy="11.4" r="3"/>
+  </g>
+  <circle cx="42" cy="12.5" r="2.2" fill="#ff8a3c"/>
+  <path d="M21.5 43q3.5-4.5 7 0M35.5 43q3.5-4.5 7 0" fill="none" stroke="#26262b" stroke-width="2.4" stroke-linecap="round"/>
+  <path fill="#26262b" d="M28.5 47.5H35.5Q35.5 52.5 32 52.5T28.5 47.5Z"/>
+  <ellipse cx="17" cy="48" rx="3.2" ry="2" fill="#ffc2e0" opacity=".5"/>
+  <ellipse cx="47" cy="48" rx="3.2" ry="2" fill="#ffc2e0" opacity=".5"/>
+</svg>

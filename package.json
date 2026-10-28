@@ -1,0 +1,66 @@
+{
+  "name": "command-center",
+  "version": "1.0.0",
+  "private": true,
+  "license": "MIT",
+  "author": "Agents Command Center contributors",
+  "description": "Local mission control for your AI coding agents",
+  "main": "electron/main.js",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node server/index.ts",
+    "app": "electron electron/main.js",
+    "test": "node --import ./test/crash-catcher-self.ts --test test/*.test.ts",
+    "dist": "node scripts/dist.mjs",
+    "dist:smoke": "node scripts/packaged-smoke.mjs",
+    "dist:proof": "node scripts/packaged-smoke-proof.mjs",
+    "export:public": "node scripts/export-public.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "ws": "^8.18.0",
+    "zod": "^4.5.4"
+  },
+  "devDependencies": {
+    "electron": "^44.2.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.agents.command-center",
+    "productName": "Command Center",
+    "asar": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "server/**/*",
+      "public/**/*",
+      "config/**/*",
+      "package.json",
+      "LICENSE",
+      "!config/launch-safety.json",
+      "!config/own-sessions.json",
+      "!config/own-sessions.json.tmp",
+      "!config/workspaces.json",
+      "!config/client-prefs.json",
+      "!config/projects.json",
+      "!**/*.bad-*",
+      "!logs/**",
+      "!scratch/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-darwin/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-linux/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-darwin/**",
+      "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-linux/**"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": "portable"
+    },
+    "portable": {
+      "artifactName": "Command Center.exe"
+    }
+  }
+}

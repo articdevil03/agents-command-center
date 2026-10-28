@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Taro: tangerine squat blob with a bobble antenna, winking -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#ffb877"/><stop offset=".65" stop-color="#ff9a3c"/><stop offset="1" stop-color="#e08835"/></radialGradient></defs>
+  <path d="M33 22C33 15 36 10 39.5 7.5" fill="none" stroke="#e08835" stroke-width="2.4" stroke-linecap="round"/>
+  <circle cx="40.5" cy="6.5" r="4.2" fill="#ffd84a"/>
+  <path fill="url(#b)" d="M32 20C47 20 57 29 57 41S46 58 32 58S7 53 7 41S17 20 32 20Z"/>
+  <circle cx="25" cy="38" r="3.1" fill="#26262b"/>
+  <path d="M35.5 38.5q3.5-4 7 0" fill="none" stroke="#26262b" stroke-width="2.4" stroke-linecap="round"/>
+  <path d="M28 44q4 3.6 8 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+  <ellipse cx="17" cy="44" rx="3.2" ry="2" fill="#ff5d6c" opacity=".35"/>
+  <ellipse cx="47" cy="44" rx="3.2" ry="2" fill="#ff5d6c" opacity=".35"/>
+</svg>

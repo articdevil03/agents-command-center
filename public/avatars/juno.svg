@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Juno: milk-chocolate pudding with a cherry on top -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#d3a684"/><stop offset=".65" stop-color="#b98260"/><stop offset="1" stop-color="#9f6d4f"/></radialGradient></defs>
+  <path fill="url(#b)" d="M16 25C16 15 48 15 48 25C48 31 54 40 54 50C54 57 49 59 44 59H20C15 59 10 57 10 50C10 40 16 31 16 25Z"/>
+  <path d="M35 13C35 8 38 5 41 4" fill="none" stroke="#3f9a4c" stroke-width="1.9" stroke-linecap="round"/>
+  <circle cx="34" cy="14" r="4.6" fill="#e63950"/>
+  <circle cx="26" cy="37" r="3.1" fill="#26262b"/>
+  <circle cx="38" cy="37" r="3.1" fill="#26262b"/>
+  <path d="M27.5 43q4.5 4 9 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

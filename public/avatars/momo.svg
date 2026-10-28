@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Momo: peach squishy mochi with a raspberry bow -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#ffcaad"/><stop offset=".65" stop-color="#ffb38a"/><stop offset="1" stop-color="#e09e79"/></radialGradient></defs>
+  <path fill="url(#b)" d="M6 46C6 32 17 24 32 24S58 32 58 46C58 55 50 58 32 58S6 55 6 46Z"/>
+  <path fill="#e0457b" d="M44 26C39 19 33 20 34 26C33 32 39 33 44 26Z"/>
+  <path fill="#e0457b" d="M44 26C49 19 55 20 54 26C55 32 49 33 44 26Z"/>
+  <circle cx="44" cy="26" r="2.8" fill="#c73868"/>
+  <circle cx="24.5" cy="41" r="3" fill="#26262b"/>
+  <circle cx="39.5" cy="41" r="3" fill="#26262b"/>
+  <path d="M29 46q1.5 1.9 3 0q1.5 1.9 3 0" fill="none" stroke="#26262b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <ellipse cx="17.5" cy="46" rx="3.2" ry="2" fill="#ff6b8a" opacity=".4"/>
+  <ellipse cx="46.5" cy="46" rx="3.2" ry="2" fill="#ff6b8a" opacity=".4"/>
+</svg>

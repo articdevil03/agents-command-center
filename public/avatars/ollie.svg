@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Ollie: aqua jellyfish dome with three wiggly legs -->
+  <defs><radialGradient id="b" gradientUnits="userSpaceOnUse" cx="24" cy="22" r="40"><stop offset="0" stop-color="#9ae2de"/><stop offset=".65" stop-color="#6fd6d0"/><stop offset="1" stop-color="#62bcb7"/></radialGradient></defs>
+  <path d="M21 42C21 48 16.5 50 18.5 56M32 42C32 49 29.5 52 32 58M43 42C43 48 47.5 50 45.5 56" fill="none" stroke="#62bcb7" stroke-width="5" stroke-linecap="round"/>
+  <path fill="url(#b)" d="M8 40C8 22 19 11 32 11S56 22 56 40C56 43 54 45 51 45H13C10 45 8 43 8 40Z"/>
+  <circle cx="25" cy="30" r="3.1" fill="#26262b"/>
+  <circle cx="39" cy="30" r="3.1" fill="#26262b"/>
+  <path d="M29 36q3 2.6 6 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+  <ellipse cx="18.5" cy="36" rx="3" ry="1.9" fill="#ff7aa2" opacity=".4"/>
+  <ellipse cx="45.5" cy="36" rx="3" ry="1.9" fill="#ff7aa2" opacity=".4"/>
+</svg>

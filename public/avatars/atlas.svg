@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Atlas, leader: periwinkle mochi dome with a tiny gold crown -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#a3aeff"/><stop offset=".65" stop-color="#7d8bff"/><stop offset="1" stop-color="#6e7ae0"/></radialGradient></defs>
+  <path fill="url(#b)" d="M8 48C8 30 19 19 32 19S56 30 56 48C56 55 52 58 45 58H19C12 58 8 55 8 48Z"/>
+  <path fill="#f4b73a" stroke="#f4b73a" stroke-width="2" stroke-linejoin="round" d="M23 22L21.5 10L27.5 15L32 7.5L36.5 15L42.5 10L41 22Z"/>
+  <circle cx="32" cy="7" r="1.8" fill="#f4b73a"/>
+  <circle cx="24" cy="38" r="3.2" fill="#26262b"/>
+  <circle cx="40" cy="38" r="3.2" fill="#26262b"/>
+  <path d="M28.5 44q3.5 3 7 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+  <ellipse cx="17.5" cy="44" rx="3.2" ry="2" fill="#ff7aa2" opacity=".45"/>
+  <ellipse cx="46.5" cy="44" rx="3.2" ry="2" fill="#ff7aa2" opacity=".45"/>
+</svg>

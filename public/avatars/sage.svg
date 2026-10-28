@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Sage: orchid jelly cube with fluffy pink earmuffs -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#dca6ea"/><stop offset=".65" stop-color="#c77fdc"/><stop offset="1" stop-color="#ab6cbf"/></radialGradient></defs>
+  <path fill="url(#b)" d="M16 21C24 18 40 18 48 21C54 23 56 29 56 37V49C56 55 50 59 42 59H22C14 59 8 55 8 49V37C8 29 10 23 16 21Z"/>
+  <path d="M9 35C9 7 55 7 55 35" fill="none" stroke="#e86a9a" stroke-width="3.2" stroke-linecap="round"/>
+  <circle cx="9" cy="37" r="6.5" fill="#f59ac0"/>
+  <circle cx="55" cy="37" r="6.5" fill="#f59ac0"/>
+  <circle cx="25" cy="39" r="3.1" fill="#26262b"/>
+  <circle cx="39" cy="39" r="3.1" fill="#26262b"/>
+  <path d="M29 45q3 2.6 6 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

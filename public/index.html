@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; base-uri 'none'; form-action 'none'">
+  <title>Command Center</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='o' x1='10' y1='10' x2='40' y2='56' gradientUnits='userSpaceOnUse'%3E%3Cstop offset='0' stop-color='%23a3aeff'/%3E%3Cstop offset='1' stop-color='%235a5fe0'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M42.2 46.6A19 19 0 1 1 42.2 17.4' fill='none' stroke='url(%23o)' stroke-width='12' stroke-linecap='round'/%3E%3Ccircle cx='50.5' cy='32' r='6.5' fill='%23ffc94d'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+  <script defer src="/logos.js"></script>
+  <script defer src="/app.js"></script>
+</head>
+<body class="light boot">
+<div id="app">
+  <header id="top">
+    <svg class="mark c" viewBox="0 0 64 64" role="img" aria-label="Command Center"><title>Command Center</title><defs><linearGradient id="orbitMark" x1="10" y1="10" x2="40" y2="56" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#a3aeff"/><stop offset="1" stop-color="#5a5fe0"/></linearGradient></defs><path d="M42.2 46.6A19 19 0 1 1 42.2 17.4" fill="none" stroke="url(#orbitMark)" stroke-width="12" stroke-linecap="round"/><circle cx="50.5" cy="32" r="6.5" fill="#ffc94d"/></svg>
+    <div id="ptabs" role="tablist" aria-label="Projects"></div>
+    <button id="pmore" class="c" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="All projects" title="All projects" hidden><svg width="13" height="13" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round"/></svg></button>
+    <button id="addProj" class="c" type="button" aria-haspopup="dialog" aria-label="New project" title="New project"><svg width="14" height="14" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+    <div class="spacer"></div>
+    <button class="ibtn c" id="inboxBtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Needs you, nothing waiting"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M4.5 12.5V8a4.5 4.5 0 0 1 9 0v4.5l1.3 1.6H3.2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7.3 15.6a1.9 1.9 0 0 0 3.4 0" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><span class="lbl2">Needs you</span><span class="n" id="inboxN" hidden></span></button>
+    <button class="ibtn ico c" id="soundBtn" type="button" aria-haspopup="dialog" aria-expanded="false" data-muted="true" aria-label="Completion sound" title="Completion sound: off"><svg class="snd-on" width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M2.8 7h2.6L9 4v10l-3.6-3H2.8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M11.8 6.6a3.4 3.4 0 0 1 0 4.8M13.9 4.6a6.2 6.2 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><svg class="snd-off" width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M2.8 7h2.6L9 4v10l-3.6-3H2.8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="m12 7 4 4M16 7l-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+    <div class="themetg c" id="themeTg" role="radiogroup" aria-label="Theme">
+      <button type="button" role="radio" data-theme-toggle="light" aria-checked="true" aria-label="Light" title="Light"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="9" cy="9" r="3.2" stroke="currentColor" stroke-width="1.5"/><path d="M9 1.8v1.6M9 14.6v1.6M16.2 9h-1.6M3.4 9H1.8M14.1 3.9 13 5M5 13l-1.1 1.1M14.1 14.1 13 13M5 5 3.9 3.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      <button type="button" role="radio" data-theme-toggle="dark" aria-checked="false" aria-label="Dark" title="Dark"><svg width="15" height="15" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M15 10.6A6.3 6.3 0 1 1 7.4 3a5 5 0 0 0 7.6 7.6Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></button>
+    </div>
+    <button class="ibtn ico c" id="setBtn" type="button" aria-haspopup="dialog" aria-label="Settings" title="Settings"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M10.3 2.6h3.4l.5 2.6c.6.2 1.2.5 1.7.9l2.5-.9 1.7 2.9-2 1.8c.1.6.1 1.3 0 1.9l2 1.8-1.7 2.9-2.5-.9c-.5.4-1.1.7-1.7.9l-.5 2.6h-3.4l-.5-2.6c-.6-.2-1.2-.5-1.7-.9l-2.5.9-1.7-2.9 2-1.8a6 6 0 0 1 0-1.9l-2-1.8 1.7-2.9 2.5.9c.5-.4 1.1-.7 1.7-.9Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.6"/></svg></button>
+    <button class="me c" id="meBtn" type="button" aria-haspopup="dialog" aria-label="Your picture" title="Your picture"><img id="meImg" alt=""></button>
+    <div class="winbtns c" id="winBtns" hidden>
+      <button class="ibtn ico" id="winMin" type="button" aria-label="Minimize" title="Minimize"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M4.5 9h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      <button class="ibtn ico" id="winMax" type="button" aria-label="Maximize" title="Maximize" data-maximized="false"><svg class="wmax" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="4.5" y="4.5" width="9" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/></svg><svg class="wrestore" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.75" y="6.25" width="8" height="8" rx="1.8" stroke="currentColor" stroke-width="1.5"/><path d="M6.25 3.75h6.2a1.8 1.8 0 0 1 1.8 1.8v6.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+      <button class="ibtn ico" id="winClose" type="button" aria-label="Close" title="Close"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="m5 5 8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+    </div>
+  </header>
+  <div id="conn" role="status" hidden></div>
+
+  <div id="main">
+    <section id="first" aria-label="Get started" hidden></section>
+    <section id="stage" class="wide" aria-label="Project">
+      <nav class="rail" id="rail" aria-label="Crew">
+        <div class="rhead"><span class="rl" id="crewLbl">Crew</span><button class="rtg" id="railBtn" type="button" aria-controls="crew" aria-expanded="true" aria-label="Hide crew details" title="Hide crew details"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M5.2 3.2 9 7l-3.8 3.8" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+        <button class="crewsw" id="setupsBtn" type="button" aria-haspopup="dialog" aria-expanded="false"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.5" stroke="currentColor" stroke-width="1.4"/><circle cx="12.5" cy="7.5" r="2" stroke="currentColor" stroke-width="1.4"/><path d="M2 15c.6-2.6 2.3-4 4.5-4s3.9 1.4 4.5 4M11 11.3c.5-.2 1-.3 1.5-.3 1.8 0 3 1.1 3.5 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg><span class="cn" id="setupsLbl"></span><span class="cv" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 12 12"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg></span></button>
+        <div class="crew" id="crew" aria-label="Crew seats"></div>
+        <div class="jobs" id="crewJobs" aria-label="Background jobs" hidden></div>
+        <button class="stopall" id="stopAll" type="button"><i></i><span id="stopAllLbl">Stop all tabs</span></button>
+      </nav>
+      <div class="col">
+        <div class="shead">
+          <div class="seg" id="tabs" role="tablist" aria-label="Tabs in this project"></div>
+          <button class="mini" id="addtab" type="button" aria-haspopup="dialog" aria-label="Add a tab" title="Add a tab"><svg width="13" height="13" viewBox="0 0 12 12" aria-hidden="true"><path d="M6 1.5v9M1.5 6h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+          <div class="spacer"></div>
+          <button class="soft" id="sideBtn" type="button" aria-pressed="false" aria-controls="side" aria-label="Details: activity, changes, notes and usage" title="Activity, changes, notes and usage"><svg width="15" height="15" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="2" y="3" width="14" height="12" rx="2.2" stroke="currentColor" stroke-width="1.4"/><path d="M11.5 3v12" stroke="currentColor" stroke-width="1.4"/></svg><span class="lbl2">Details</span></button>
+        </div>
+        <div class="sline" id="sline">
+          <button id="statusBtn" type="button" aria-expanded="false" aria-controls="stepsWrap"></button>
+          <div class="spacer"></div>
+          <span class="savest" id="saveSt" role="status" data-saved-state></span>
+          <button class="soft" id="saveBtn" type="button" data-session-action="save"></button>
+          <button class="soft ico" id="chatMore" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Chat options: past sessions, clear" title="Past sessions, clear"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="3" cy="7" r="1.3" fill="currentColor"/><circle cx="7" cy="7" r="1.3" fill="currentColor"/><circle cx="11" cy="7" r="1.3" fill="currentColor"/></svg></button>
+        </div>
+        <div class="stepsWrap" id="stepsWrap" role="region" aria-label="Steps" inert><div><div class="steps" id="pipe" aria-label="Process"></div><div class="stepacts" id="stepActs"></div><div class="rounds" id="rounds"></div><div class="stepnote" id="stepnote"></div></div></div>
+        <div id="view"></div>
+        <div class="composer" id="composer">
+          <section class="apv" id="approvalPanel" role="region" aria-labelledby="approvalTitle" tabindex="-1" hidden>
+            <div class="h"><svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 4v3.5M7 9.6v.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><h2 id="approvalTitle">Waiting for your answer</h2><span class="n" id="approvalCount"></span></div>
+            <code id="approvalSummary" tabindex="0"></code>
+            <div class="acts"><button class="btn primary sm" id="approvalAllow" type="button">Allow</button><button class="btn sm" id="approvalDeny" type="button">Deny</button><p class="st" id="approvalError" role="status" aria-live="polite"></p></div>
+          </section>
+          <div class="jobsline" id="jobsLine" role="status" hidden></div>
+          <div class="queue" id="queue" aria-label="Messages waiting for the reply to end" hidden></div>
+          <p class="acp-note" id="acpNote" role="note" hidden></p>
+          <div class="cbox" id="cbox">
+            <div id="atts" class="atts" aria-label="Attachments" hidden></div>
+            <textarea id="ci" rows="1" placeholder="Message the leader..." aria-label="Message the leader"></textarea>
+            <div class="ctools" id="ctools"><button class="tool" id="attachBtn" type="button" title="Attach images or files (or paste them)"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M13.2 7.4 8 12.6a3.3 3.3 0 0 1-4.7-4.7l5.4-5.4a2.2 2.2 0 0 1 3.1 3.1L6.5 11a1.1 1.1 0 0 1-1.6-1.6l4.7-4.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="tl2">Attach</span></button><input id="attachInput" type="file" accept="image/png,image/jpeg,image/webp,.txt,.md,.markdown,.pdf,.csv,.json,.jsonc,.yaml,.yml,.toml,.xml,.html,.htm,.css,.scss,.js,.jsx,.mjs,.cjs,.ts,.tsx,.py,.rs,.go,.java,.c,.h,.cc,.cpp,.cs,.swift,.kt,.sql,.sh,.ps1,.bat,.log,.diff,.patch" multiple hidden><button class="tool perm" id="permBtn" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Permission mode"><i class="perm-dot" aria-hidden="true"></i><span data-permission-label>Auto-accept edits</span><svg class="perm-chevron" width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="m3 4.5 3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button class="tool fold" id="folderBtn" type="button"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4.5c0-.8.7-1.5 1.5-1.5h3l1.5 1.5h4.5c.8 0 1.5.7 1.5 1.5v5.5c0 .8-.7 1.5-1.5 1.5h-9C2.7 13 2 12.3 2 11.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg><span id="folder"></span></button><span class="spacer"></span><span class="loadinghint" id="chatStatus" role="status" hidden></span><button class="send" id="sendBtn" type="button" aria-label="Send message"><svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></button></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside id="side" aria-label="Details" hidden>
+      <div class="sgrip" id="sgrip" role="separator" aria-orientation="vertical" aria-label="Details width" aria-valuemin="280" aria-valuemax="560" aria-valuenow="320" tabindex="0" title="Drag to resize. Arrow keys work too"></div>
+      <div class="sidehead"><b>Details</b><button class="mini" id="sideClose" type="button" aria-label="Close details"><svg width="13" height="13" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button></div>
+      <div class="sidecard">
+        <div class="pills" role="tablist" aria-label="Details"><button type="button" role="tab" id="sp-activity" data-l="activity" aria-controls="sideBody" aria-selected="true">Activity</button><button type="button" role="tab" id="sp-changes" data-l="changes" aria-controls="sideBody" aria-selected="false" tabindex="-1">Changes</button><button type="button" role="tab" id="sp-notes" data-l="notes" aria-controls="sideBody" aria-selected="false" tabindex="-1">Notes</button><button type="button" role="tab" id="sp-usage" data-l="usage" aria-controls="sideBody" aria-selected="false" tabindex="-1">Usage</button></div>
+        <div id="sideBody" role="tabpanel" aria-labelledby="sp-activity">
+          <div class="sidepanel" id="feed"><span class="faint">Nothing yet.</span></div>
+          <div class="sidepanel" id="lowerBody" hidden></div>
+          <div class="sidepanel" id="usagePanel" hidden>
+            <div class="sec"><span class="lbl">Plan limits</span><div class="meters" id="meters" aria-label="Plan usage" hidden></div><span class="faint" id="metersNote" style="font-size:12.5px">Limits show up only while a run reports them.</span></div>
+            <div class="sec"><span class="lbl" id="usageTitle">This session</span><div id="usage" style="display:grid;gap:10px"></div><span class="faint" id="contextLine" style="font-size:12.5px"></span></div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<div class="scrim" id="scrim" hidden aria-hidden="true"></div>
+
+<div class="pop" id="pop" role="dialog" aria-label="Choose model and effort" hidden inert aria-hidden="true"></div>
+<div class="pop" id="seatPop" role="dialog" aria-label="Seat" hidden inert aria-hidden="true"></div>
+<div class="pop" id="projPop" role="dialog" aria-label="All projects" hidden inert aria-hidden="true"></div>
+<div class="pop" id="ctxPop" role="dialog" aria-label="Options" hidden inert aria-hidden="true"></div>
+<div class="pop" id="setupPop" role="dialog" aria-label="Crew choices" hidden inert aria-hidden="true"></div>
+<div class="pop permpop" id="permPop" role="dialog" aria-label="Choose permission mode" hidden inert aria-hidden="true"></div>
+<div class="pop" id="inboxPop" role="dialog" aria-label="Needs you" tabindex="-1" hidden inert aria-hidden="true">
+  <div class="grp" id="inboxHead">Needs you</div>
+  <div id="inboxList"></div>
+  <div id="inboxRecords"></div>
+  <div class="grp row" id="reqHead"><span><span id="reqHeadLabel">Requests</span><span class="n" id="reqN" hidden></span></span><button class="btn sm" id="reqNew" type="button" aria-expanded="false" aria-controls="reqForm">New request</button></div>
+  <form class="rform request-form" id="reqForm" hidden novalidate>
+    <span class="lbl" id="reqFrom">From this tab</span>
+    <label class="lbl" for="reqTo">To</label><select class="inp" id="reqTo"></select>
+    <label class="lbl" for="reqTitle">Title</label><input class="inp" id="reqTitle" maxlength="200" required placeholder="What do you need?">
+    <label class="lbl" for="reqBody">Details</label><textarea class="inp" id="reqBody" rows="3" maxlength="24576" required placeholder="Sizes, files, deadline"></textarea>
+    <div class="mfoot"><span class="action-status" id="reqStatus" role="status"></span><button class="btn sm primary" id="reqSend" type="submit">Send request</button></div>
+  </form>
+  <div id="reqList"></div>
+</div>
+<div class="pop sndpop" id="soundPop" role="dialog" aria-label="Completion sound" hidden inert aria-hidden="true">
+  <div class="sndrow"><div class="d"><b>Completion sound</b><small>A bell when a seat finishes, fails or needs you</small></div><button type="button" class="switch" role="switch" id="soundSwitch" aria-checked="false" aria-label="Completion sound"></button></div>
+  <div class="sndvol">
+    <div class="sndhead"><label class="lbl" for="soundVol">Volume</label><output id="soundVolOut" for="soundVol">100%</output></div>
+    <div class="sndslide"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M3.8 7h2.4L9.6 4v10l-3.4-3H3.8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg><input type="range" id="soundVol" min="0" max="100" step="1" value="100"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M2.8 7h2.6L9 4v10l-3.6-3H2.8Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M11.8 6.6a3.4 3.4 0 0 1 0 4.8M13.9 4.6a6.2 6.2 0 0 1 0 8.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div>
+  </div>
+  <button type="button" class="btn sm sndtest" id="soundTest"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 2.2v7.6a.6.6 0 0 0 .9.5l6-3.8a.6.6 0 0 0 0-1L4.4 1.7a.6.6 0 0 0-.9.5Z" fill="currentColor"/></svg>Test sound</button>
+</div>
+
+<div class="modal" id="modal" role="dialog" aria-label="Add a tab" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
+  <h2>Add a tab to <span id="mProj">Project</span></h2>
+  <div class="field"><label class="lbl" for="tName">Name</label><input id="tName" maxlength="64" placeholder="e.g. Automation"></div>
+  <div class="field"><span class="lbl">Kind</span><div class="choice" role="radiogroup" aria-label="Kind" id="kindBox"></div></div>
+  <div class="field"><span class="lbl">Crew</span><div class="choice" role="radiogroup" aria-label="Crew" id="tplBox"></div></div>
+  <div class="field"><span class="lbl">Home folder</span><div class="pathrow"><span class="path" id="tDir" title="No folder chosen">No folder chosen</span><button class="btn" id="browse" type="button">Browse</button><span class="inline-warn" id="tFolderWarn" role="alert" hidden>Choose a folder first</span></div></div>
+  <p class="faint" style="font-size:12.5px">Starts in the project folder. Its crew works in the folder you pick; no CLI is held to it by a sandbox, they are only asked to stay inside.</p>
+  <label class="onlybox" for="tOnly"><input type="checkbox" id="tOnly" checked><span>Work on this project only</span><small>Adds an AGENTS.md to the folder so the leader stays on this project.</small></label>
+  <div class="mfoot"><p class="mstat" id="tStat" role="status"></p><button class="btn" data-close type="button">Cancel</button><button class="btn primary" id="createTab" type="button" disabled>Create tab</button></div>
+</div>
+<div class="modal" id="projModal" role="dialog" aria-label="New project" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
+  <h2>New project</h2>
+  <div class="field"><label class="lbl" for="pName">Name</label><input id="pName" placeholder="e.g. Swimeroo" maxlength="64"></div>
+  <div class="field"><span class="lbl">Project folder</span><div class="pathrow"><span class="path" id="pDir" title="No folder chosen">No folder chosen</span><button class="btn" id="pBrowse" type="button">Browse</button><span class="inline-warn" id="pFolderWarn" role="alert" hidden>Choose a folder first</span></div><p class="faint" id="pFolderHelp" style="font-size:12.5px"></p></div>
+  <div class="field"><span class="lbl">First tab Kind</span><div class="kseg" role="radiogroup" aria-label="Kind" id="pKind" style="margin:0"></div></div>
+  <div class="field"><span class="lbl">Crew</span><div class="choice" role="radiogroup" aria-label="Crew" id="pTpl"></div></div>
+  <label class="onlybox" for="pOnly"><input type="checkbox" id="pOnly" checked><span>Work on this project only</span><small>Adds an AGENTS.md to the folder so the leader stays on this project.</small></label>
+  <div class="mfoot"><p class="mstat" id="npStat" role="status">Choose a name and a folder to create it.</p><button class="btn" data-close type="button">Cancel</button><button class="btn primary" id="createProj" type="button" disabled>Create project</button></div>
+</div>
+<div class="modal" id="renameModal" role="dialog" aria-label="Rename" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
+  <h2 id="renameTitle">Rename</h2>
+  <div class="field"><input id="renameInput" maxlength="64" aria-label="Name"></div>
+  <div class="mfoot"><button class="btn" data-close type="button">Cancel</button><button class="btn primary" id="renameSave" type="button">Save</button></div>
+</div>
+<div class="modal" id="avModal" role="dialog" aria-label="Choose a picture" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
+  <h2 id="avTitle">Your picture</h2>
+  <div class="avgrid" id="avgrid" role="radiogroup" aria-label="Pictures"></div>
+  <p class="mstat" id="avatarStatus" role="status"></p>
+  <p class="faint" id="avSub" style="font-size:12px;margin:0">A picture is only decoration. Status and the leader badge always show separately.</p>
+  <input type="file" id="avUp" accept="image/png,image/jpeg,image/webp" hidden>
+  <div class="mfoot"><button class="btn primary" data-close type="button">Done</button></div>
+</div>
+<div class="modal" id="viewer" role="dialog" aria-label="Screenshots" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true" style="width:760px">
+  <h2 id="viewerTitle">Screenshots</h2>
+  <div id="viewerFiles"></div>
+  <div class="mfoot"><button class="btn primary" data-close type="button">Close</button></div>
+</div>
+<div class="modal setm" id="setModal" role="dialog" aria-label="Settings" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
+  <button class="dialog-close" data-close aria-label="Close settings" type="button"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+  <nav id="setNav" aria-label="Settings sections"><h2>Settings</h2></nav>
+  <div class="sbody" id="setBody"></div>
+</div>
+<div class="modal" id="runModal" role="dialog" aria-label="Run a seat" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
+  <h2 id="runTitle">Run a seat</h2>
+  <p class="faint" id="runSub" style="font-size:13px"></p>
+  <div id="runBlk"></div>
+  <div class="field"><label class="lbl" for="runPrompt">Brief</label><textarea id="runPrompt" rows="6" placeholder="What should this seat do? The first line names the run."></textarea></div>
+  <div class="kv"><span>Folder</span><span class="path" id="runFolder"></span></div>
+  <p class="faint" id="runAccess" style="font-size:12.5px;margin:-8px 0 0"></p>
+  <div class="mfoot"><p class="mstat" id="runStat" role="status"></p><button class="btn" data-close type="button">Cancel</button><button class="btn primary" id="runStart" type="button">Start run</button></div>
+</div>
+<div class="modal" id="confirmModal" role="alertdialog" aria-labelledby="confirmTitle" aria-describedby="confirmBody" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
+  <h2 id="confirmTitle">Are you sure?</h2>
+  <p class="muted" id="confirmBody"></p>
+  <div class="field" id="confirmPhraseField" hidden><label class="lbl" for="confirmPhrase" id="confirmPhraseLabel">Type the words to confirm</label><input id="confirmPhrase" autocomplete="off"></div>
+  <p class="mstat bad" id="confirmErr" role="alert"></p>
+  <div class="mfoot"><button class="btn" id="confirmCancel" type="button">Cancel</button><button class="btn primary" id="confirmOk" type="button">OK</button></div>
+</div>
+<div class="tip" id="tip" aria-hidden="true"></div>
+<div id="undo" role="status" hidden inert aria-hidden="true"></div>
+<div class="toast" id="toast" role="status" hidden inert aria-hidden="true"></div>
+</body>
+</html>

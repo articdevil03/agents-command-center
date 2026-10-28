@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Dune: sandy toast loaf with a teal scarf -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#e4c8a2"/><stop offset=".65" stop-color="#d9b07a"/><stop offset="1" stop-color="#bf9b6b"/></radialGradient></defs>
+  <path fill="url(#b)" d="M14 30C8 30 6 24 9 19C12 13 20 10 32 10S52 13 55 19C58 24 56 30 50 30V54C50 57 48 59 45 59H19C16 59 14 57 14 54Z"/>
+  <circle cx="26" cy="28" r="3.1" fill="#26262b"/>
+  <circle cx="38" cy="28" r="3.1" fill="#26262b"/>
+  <path d="M29 34q3 2.6 6 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+  <ellipse cx="20.5" cy="34" rx="2.8" ry="1.8" fill="#ff7a6b" opacity=".4"/>
+  <ellipse cx="43.5" cy="34" rx="2.8" ry="1.8" fill="#ff7a6b" opacity=".4"/>
+  <rect x="11" y="41" width="42" height="8" rx="4" fill="#2fa59c"/>
+  <path fill="#2fa59c" d="M38 45L42 59.5L49 57.5L45.5 44Z"/>
+  <path d="M42.5 57.8l5.5-1.6" stroke="#25887f" stroke-width="1.4" stroke-linecap="round"/>
+</svg>

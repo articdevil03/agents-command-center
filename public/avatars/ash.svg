@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Ash: plain slate pebble, the neutral "you" picture -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#adb9cd"/><stop offset=".65" stop-color="#8a9bb8"/><stop offset="1" stop-color="#7988a2"/></radialGradient></defs>
+  <path fill="url(#b)" d="M10 41C10 27 20 17 33 17S55 27 54 41C53 53 44 59 32 59S10 53 10 41Z"/>
+  <circle cx="25" cy="37" r="3.1" fill="#26262b"/>
+  <circle cx="39" cy="37" r="3.1" fill="#26262b"/>
+  <path d="M29 43.5q3 2.6 6 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+</svg>

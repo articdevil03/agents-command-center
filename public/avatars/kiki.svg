@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Kiki: coral-red bean with two soft ear nubs and a star clip -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#ff9797"/><stop offset=".65" stop-color="#ff6b6b"/><stop offset="1" stop-color="#e05e5e"/></radialGradient></defs>
+  <path fill="url(#b)" d="M12 44C12 34 13 26 15 19C16 14 21 13 24 17L26 20C30 19 34 19 38 20L40 17C43 13 48 14 49 19C51 26 52 34 52 44C52 54 43 59 32 59S12 54 12 44Z"/>
+  <path fill="#ffd84a" stroke="#ffd84a" stroke-width="1.6" stroke-linejoin="round" d="M20 23L21.4 26.1L24.8 26.5L22.2 28.7L22.9 32.1L20 30.3L17.1 32.1L17.8 28.7L15.2 26.5L18.6 26.1Z"/>
+  <ellipse cx="26" cy="39" rx="2.6" ry="3.6" fill="#26262b"/>
+  <ellipse cx="38" cy="39" rx="2.6" ry="3.6" fill="#26262b"/>
+  <path d="M29 45.5q3 2.6 6 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+  <ellipse cx="19.5" cy="45" rx="3" ry="1.9" fill="#ffd0d0" opacity=".6"/>
+  <ellipse cx="44.5" cy="45" rx="3" ry="1.9" fill="#ffd0d0" opacity=".6"/>
+</svg>

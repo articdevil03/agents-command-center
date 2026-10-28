@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Vera, reviewer 1: lilac drop with round glasses -->
+  <defs><radialGradient id="b" cx=".38" cy=".35" r=".8"><stop offset="0" stop-color="#d6baf8"/><stop offset=".65" stop-color="#c49cf5"/><stop offset="1" stop-color="#ac89d8"/></radialGradient></defs>
+  <path fill="url(#b)" d="M32 5C38 15 53 27 53 42C53 53 44 60 32 60S11 53 11 42C11 27 26 15 32 5Z"/>
+  <g fill="#fff" fill-opacity=".35" stroke="#26262b" stroke-width="2.2">
+    <circle cx="24" cy="41" r="6.3"/>
+    <circle cx="40" cy="41" r="6.3"/>
+  </g>
+  <path d="M30.3 40.5q1.7-1.8 3.4 0M17.7 40L13 38.5M46.3 40L51 38.5" fill="none" stroke="#26262b" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="24" cy="41.5" r="2.5" fill="#26262b"/>
+  <circle cx="40" cy="41.5" r="2.5" fill="#26262b"/>
+  <path d="M29.5 51q2.5 2.2 5 0" fill="none" stroke="#26262b" stroke-width="2.1" stroke-linecap="round"/>
+</svg>

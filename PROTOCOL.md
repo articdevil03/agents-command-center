@@ -1,0 +1,290 @@
+# Command Center server protocol
+
+The server listens on loopback and serves the local UI over HTTP. The browser connects to the same host with a WebSocket. Requests and events are JSON objects with a string `type`. The server validates message envelopes, tab and slot identities, payload values, and HTTP/WebSocket Host and Origin headers.
+
+## App key
+
+Host and Origin checks only stop other websites; any local process can send those headers. Every connection also needs the **app key**: 32 random bytes as 64 hex characters, made fresh on each app start. Electron makes it, passes it to the server as `CC_APP_KEY`, and hands it to the page through the preload bridge (`window.cc.appKey()`); it is never in a URL, a log or a file. A bare `npm start` makes its own key and prints one line, `Open http://127.0.0.1:<port>/#key=<key>`; the page reads `#key=` from `location.hash` and removes it with `history.replaceState`. The server reads `CC_APP_KEY` once at startup and deletes it from its environment, so no child process inherits it.
+
+- WebSocket: `ws://<host>/?key=<key>` (a browser page cannot set upgrade headers). A missing or wrong key is refused with `403` in both the `verifyClient` check and the `upgrade` handler.
+- HTTP: every non-`GET`/`HEAD` route (`POST /api/paste-image`, `/api/paste-file`, `/api/avatar`) needs the header `X-App-Key: <key>`; missing or wrong is `403`. `GET` of the page files stays open so the page can load and read its key. `/api/leader-mcp/<tab>` keeps its own per-leader bridge token.
+- The comparison is `crypto.timingSafeEqual` on equal-length buffers; no key set means nothing matches.
+- Every HTTP response (static files, uploads, avatars, errors) carries `X-Frame-Options: DENY`, `Content-Security-Policy: frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`, so a website cannot frame the app.
+
+## Initial state and selection
+
+The client sends `{ "type": "hello" }`. The server replies with a `state` message followed by `chatHistory` for the selected tab. Hello does not start a leader session. `selectTab` changes the selected tab and sends that tab's transcript to the requesting client.
+
+```json
+{
+  "type": "state",
+  "selectedTabId": "sample-development",
+  "projects": [
+    {
+      "id": "sample",
+      "name": "Sample",
+      "folder": "C:/work/sample",
+      "tabs": [
+        {
+          "id": "sample-development",
+          "name": "Development",
+          "kind": "dev",
+          "process": "main",
+          "folder": "C:/work/sample",
+          "crew": [],
+          "runs": [],
+          "processState": {},
+          "derived": {},
+          "leaderStatus": "not-started",
+          "permissionMode": "accept",
+          "permissionAction": null,
+          "pendingRequestCount": 0,
+          "changes": { "repo": false, "branch": null, "ahead": 0, "behind": 0, "lastCommit": null, "uncommittedFiles": [] },
+          "notes": { "path": null, "content": "", "truncated": false },
+          "chatRevision": 0,
+          "savedRevision": 0
+        }
+      ]
+    }
+  ],
+  "modelOptions": {},
+  "effortOptions": {},
+  "opencodeModels": [],
+  "claudeModels": [],
+  "discoveryInfo": {},
+  "clientPrefs": {},
+  "globalWork": [],
+  "settings": { "tools": {}, "github": {}, "vault": {}, "folders": {}, "skills": {}, "permissionModes": {}, "permissionActions": {}, "uploads": {} },
+  "requests": [],
+  "pendingRequestCounts": {},
+  "requestActions": {},
+  "launchSafety": { "blocked": [], "uncertain": [], "released": [], "notices": [] }
+}
+```
+
+The example omits fields for brevity. Each tab is its saved workspace tab plus:
+
+- `crew`: saved slot settings with a tab-scoped `seatKey` (`<tabId>.<slot>`), live `status`, `task`, `isLeader`, and active `runs` IDs.
+- `runs`: process-engine run records with `runId`, `seatKey`, captured output, usage, stall state, and launch source.
+- `processState`: the tab's `server/process.ts` state. `derived` contains its `stepBar`, `approvedCardLine`, `leaderStatusLine`, `workingSeats`, `runViews`, `roundFlag`, `leaderTurnActive`, and `busy` views. `busy` is true while any engine seat is `working`, any run is working, a leader turn is active or a Save is queued or running.
+- `leaderStatus`: `not-started`, `ready`, or `dead`; plus optional `leaderUsage`.
+- `chatRevision` and `savedRevision`: transcript revision counters. A transcript that cannot be read costs only its own tab: both are `0` and the tab carries `chatProblem` (the reason); every other tab and the rest of the state are unaffected. That tab still opens, with an empty history at revision `0`; a `chat` to it is refused, and Clear keeps the damaged file as `<tab>.jsonl.bad-<time>`, starts an empty chat and sends `chatCleared` with `noUndo: true`.
+- `activeWork`: true while the tab has something the app would cut off by closing: a running worker, an active leader turn or a Save, or an unconfirmed process (`launchSafety.uncertain`) of this tab. The page asks before the app closes while any tab has it.
+- `permissionMode`: this tab's saved `ask`, `accept`, `plan`, or `bypass` choice. Missing entries default to `accept`, except after the app recovered from a damaged settings file: then they are `ask` until the owner picks a mode for the tab.
+- `permissionAction`: latest permission change and its server-owned `requestId` and status.
+- `pendingRequestCount`: pending requests addressed to this tab.
+- `changes`: read-only local git summary, recomputed on tab select and after a run finishes. A non-repository is `{ "repo": false }` with empty details.
+- `notes`: capped contents of `<tab folder>/.command-center/<tabId>/RESUME.md` (until the tab has saved one, the folder's older shared `<tab folder>/.command-center/RESUME.md`, read only), or empty content when missing. `truncated` reports the 64 KiB limit.
+
+`settings` contains Claude, Codex, OpenCode, and Gemini CLI versions and sign-in status, GitHub CLI status, the optional vault path and default project folder, and per-CLI instruction/skill/MCP/plugin inventory. Gemini is install-only: its sign-in status remains unknown, its inventory contains only `~/.gemini/GEMINI.md` and the selected project's `GEMINI.md`, and the server does not call Gemini auth or MCP commands. Settings are persisted at `<data root>/settings.json`; requests are persisted at `<data root>/requests.json`. `installed` and `signedIn` are `true`, `false`, or `null`; `null` means unknown, never guessed. Inventory keeps server names and parsed version/account fields only, never raw CLI output or tokens. The latest settings action is in its target's `action` field with `requestId`, `status`, and `message`; preference changes use `preferenceAction`, tab permission changes use `permissionActions`, and uploads use `uploads`. `requests` contains persisted cross-tab requests with `pending`, `accepted`, `declined`, or `destinationRemoved` status. `pendingRequestCounts` is keyed by destination tab id. `requestActions` keeps all running asynchronous actions plus the latest 32 finished actions keyed by request id. A running action is never evicted, so a client treats a pending id it saw listed that later disappears, or that a post-reconnect snapshot does not list, as finished (`unknown`, never Working). Clients otherwise retire pending ids on a terminal `done`/`failed` result or snapshot, and retain the latest terminal result per control.
+
+The server sends a full `state` after a change. State is shared across connected clients; transcript messages and leader output include their `tabId`. Each tab's `derived.busy` includes a queued or running Save, a live worker, an engine seat marked working, or an active leader turn. `derived.leaderTurnActive` is true exactly while that tab has an active leader turn; it excludes worker runs and a queued Save. A running Save uses the leader and therefore counts as an active leader turn. `globalWork` is a list of plain-language reasons the app has work that belongs to no tab (a running Settings action, an upload in flight, an unconfirmed process from an earlier session): the page adds them to the close warning. Run output and usage appear in `state` only while the run is live. A burst of usage events sends one `state` at once and at most one more per 400 ms. `runs` holds every working run plus the 50 most recent finished runs; older runs are read through `historyList` and `historyRun`.
+
+## Server events
+
+- `state`: current projects, tabs, crew, process state, settings, preferences, and launch-safety state.
+- `output`: `{ tabId, runId, seatKey, chunk }` worker output.
+- `runStart`: `{ tabId, runId, seatKey, cli, model, effort, folder, startedAt, canWrite, launchedByLeader }`.
+- `runFinish`, `runFail`, `runStop`: terminal worker event with `{ tabId, runId, seatKey, outcome, exitCode }`. `runStop` also includes `internal: true` for an automatic stall stop. These events update the tab's process state.
+- `runStalled`: `{ tabId, runId, seatKey, action }`, where action is `relaunch` or `escalate`.
+- `rateLimit`: `{ tabId, runId, windows }` for a worker limit update.
+- `chatHistory`: `{ tabId, messages, revision, savedRevision }`.
+- `chatMessage`: one persisted user or assistant message, including `tabId` and `revision`. A user message echoes its optional `requestId`; the id is stored and appears again in `chatHistory`.
+- `chatDelta`: `{ tabId, text }` streaming leader text.
+- `chatDone`, `chatError`: end of a leader turn, with the latest transcript revision and saved revision. `chatError` may include `message`.
+- `chatNotice`: `{ tabId, message }`, a note about a leader process that belongs to no turn (for example, "Could not confirm the old Codex leader stopped"). The client shows the text and leaves the running turn, its streamed draft and the busy state alone; `chatError` is only for a failed turn.
+- `folderBusy`: `{ action: "chat" | "run", tabId, requestId?, items: [{ tool, agoSeconds }] }`, the answer to a `chat` or `run` that was held because another agent is working in the tab's folder. Nothing was saved or started. `tool` is `Claude Code`, `Codex` or `OpenCode`, or `null` for files that changed with none of Command Center's own agents working there; `requestId` is the held chat's. The page shows the list with Continue anyway and Cancel, and Continue anyway repeats the message with `confirmBusy: true` under a fresh request id. A session counts when it was active in the last 2 minutes in this folder, a folder inside it or one that contains it; Command Center's own leader and crew sessions never count, and neither does another Command Center tab.
+- `steerRefused`: `{ tabId, requestId?, reason: "approval" | "save" | "starting" | "unavailable", message }`, the answer to a `steer` the server did not push into the running reply. Nothing was saved or sent; the client keeps the message where it was queued. A `chatMessage` that carries `split: true` is the reply so far, written down because a steer follows it: the client drops its streamed draft.
+- `chatCleared`: `{ tabId, revision, savedRevision }` after Clear stops that tab's leader and resets its transcript.
+- `chatRestored`: `{ tabId, messages, revision, savedRevision }` after `undoClear` restores the exact transcript snapshot from before Clear.
+- `chatUndoRejected`: `{ tabId, reason }`, where `reason` is `expired`, `unavailable` or `busy` (a leader answer or a Save is still running).
+- `saved`: `{ tabId, revision, savedRevision }` after the leader writes a handover successfully.
+- `leaderLaunch`: persisted launch notice with `{ id, seatId, seatName, brief, source, pending }`. `source` is the leader's current name, `Local client`, or `Stall relaunch`; `pending` is true only while the server is persisting and attempting the launch.
+- `runAccepted`, `killAccepted`, `stopAllAccepted`, `launchBlockCleared`, `launchNoticesAcked`, and `unconfirmedReleased`: direct acknowledgements for the corresponding requests. A clear-block acknowledgement includes `cleared` to report whether a block existed.
+- `historyList`, `historyRun`: history query results. `historyRun` echoes the requested `seatKey` and `timestamp` and includes the brief, capped output, byte count, truncation flag, and parsed outcome; clients match replies by `seatKey` + `timestamp`. A history lookup that fails sends a plain `error` with only a `message`: it names no seat, so a client cannot match it to a request and instead gives up on a list or run that stays unanswered for a while (the page waits 15 seconds) and lets it be asked again.
+- `actionResult`: `{ action, requestId, ...result }` after a state-changing WebSocket action succeeds. Errors/refusals echo a valid `requestId` and the action.
+- `settingsRefreshed`: read-only Settings inventory refresh completed.
+- `error`: `{ message }` for rejected requests or failed operations. A request refused synchronously names its `action`, includes a valid `requestId` when present, and includes its `tabId` and/or `projectId` when carried. A refusal from an async action (Settings, permission mode, requests, approvals) carries only `{ action, requestId }`; match it by request id. Errors without `action` (history lookups and background failures) roll back nothing. `chat` accepts at most 8 images and 8 files.
+
+Launch notices are persisted in `state.launchSafety.notices` (the newest 50 are kept). A notice keeps at most 4000 characters of the brief as a reminder; the run itself gets the whole brief (`launch_seat` accepts up to 200000 characters). `launchSafety.live` (in `launch-safety.json`, not in `state`) lists runs started and not yet seen to end: after a hard crash the next start blocks those seats (clear with `unblockSeat`), because nothing tracks their processes any more; a clean shutdown clears it. An older `launch-safety.json` without the `released`, `uncertain`, `live`, `notices`, `timestamps` or `nextNoticeId` entries is read with them empty; a damaged entry still refuses to start. Existing launch-safety rows using old bare seat IDs remain visible. New worker records use tab-scoped seat keys and run IDs.
+
+## Client messages
+
+Fields shown are required unless marked optional. Invalid or unknown messages receive an `error` event.
+
+| `type` | Fields | Effect |
+|---|---|---|
+| `hello` | none | Sends state and selected-tab transcript. |
+| `selectTab` | `tabId` | Selects a tab and returns its transcript. |
+| `addProject` | `id`, `name`, `folder`, `tabId?`, `tabFolder?`, `kind?`, `process?` | Adds a project with one default Development tab. Defaults are `dev/main`; `tabFolder` defaults to `folder`. |
+| `renameProject` | `projectId`, `name` | Renames a project. |
+| `removeProject` | `projectId` | Removes an idle project. The last project cannot be removed. |
+| `addTab` | `projectId`, `tabId?`, `name?`, `kind?`, `process?`, `folder?` | Adds a tab with default crew for its process. Folder defaults to the project folder. An explicit `tabId` that already has a saved chat or run history (a removed tab's id) is refused; a generated id is always fresh. |
+| `renameTab` | `tabId`, `name` | Renames a tab. |
+| `removeTab` | `tabId` | Removes an idle tab. A project's last tab cannot be removed. Nothing changes (the tab and its leader stay) if the workspace cannot be saved. Its launch blocks and notices go with it; its chat file stays on disk. |
+| `changeFolder` | `tabId`, `folder` | Changes an idle tab's working folder. It stops the old leader and does **not** start a new one: the leader for the new folder starts on the tab's next chat message, so that folder's project hooks never run unasked. |
+| `changeProjectFolder` | `projectId`, `folder` | Changes the project's default folder for new tabs. Existing tab folders are unchanged. |
+| `setProcess` | `tabId`, `process`, `kind?` | Changes an idle tab's process and rebuilds its crew from `server/process.ts` defaults, preserving compatible slot preferences. The tab's leader session is stopped with its usage banked; the next chat starts a replacement. |
+| `updateSeat` | `tabId`, `slot`, `name?`, `cli?`, `model?`, `effort?`, `pic?`, `confirm?` | Updates the named slot. `pic` is a generated `/api/avatar/avatar-<uuid>.<ext>` route or a shipped preset `avatars/<name>.svg` that exists in `public/avatars/`; anything else is refused. Worker write permission comes from the process definition. `cli` (`claude`, `codex` or `opencode`) moves the seat to another CLI. It is accepted only when `state.settings.tools.<cli>.installed` is `true` (`false`, and `null` for not checked yet, are refused with a plain error). `model` is then required in the same message and must be valid for the NEW CLI. `effort` is kept when it exists on the new CLI, otherwise it becomes that CLI's default (`medium`, or the first option). A `cli` equal to the seat's current CLI is ignored. It is saved exactly like `model`. A worker keeps the setup of runs already going; its next run uses the new CLI. On the leader seat the change is refused with `Finish or stop <name>'s current turn first` while a leader turn is active or an approval is pending; otherwise it ends the leader session the way `stopSeat` does (usage banked, chat log kept) and the next `chat` starts the leader on the new CLI. A model change on a live leader applies live for Claude and from the next turn for Codex and OpenCode. While the leader is writing an answer the choice (model and effort) is saved at once but reaches the live leader only when that answer ends, so a change can never cut an answer short; Stop drops a change still waiting. `setProcess` keeps a seat's switched CLI together with its model. A `cli` of the form `acp:<id>` (a CLI added with `addAcpCli`, `state.acpClis[].kind`) is accepted for the LEADER slot only, needs `confirm: true` (Full access), needs its program to resolve on PATH outside every project folder, and takes `model: "default"` (its own model) and `effort: "default"`. |
+| `setAdvisor` | `tabId`, `advisor` | Sets a Claude advisor model using `{ "model": "..." }` or a model string. `null` or `false` clears it. |
+| `run` | `tabId`, `slot`, `prompt`, `confirmBusy?` | Starts a worker run. Several runs may use the same slot at once. The reply includes a unique `runId`. When the CLI process ends, any process it left running (a dev server, a background shell) is stopped before the run is reported over, and the run's log gets a `[cleanup] stopped N processes this run left running` line. Every start counts against the launch budget of 4 per 5 minutes, your own Run included, not only the leader's launches; the refusal (`launch budget exceeded: ...`) says when the next one is allowed. Held with `folderBusy` (and not started) while another agent is working in the folder, as `chat` is; a run the leader starts is never held, it posts one `chatNotice` per outside session per 10 minutes. |
+| `killRun` | `runId` | Requests a kill for exactly one run and replies with `killAccepted`. The seat is launch-blocked until explicitly unblocked. |
+| `stopSeat` | `tabId`, `slot` | Marks the engine seat stopped and requests kills for every active run in that tab slot. A worker seat is launch-blocked even when nothing was running. Each live run settles in the engine, and the review gate is rechecked, only when its process close is confirmed or it is explicitly released. Also stops that tab's leader session when `slot` is the leader. |
+| `killSeat` | `seatId` | Alias for `stopSeat`, using a tab-scoped `<tabId>.<slot>` key. |
+| `stopAll` | none | Marks every working engine seat stopped, stops every leader session, requests kills for all worker runs, and replies with `stopAllAccepted`. Live runs settle on confirmed close or explicit release, as for `stopSeat`. A review that was waiting for workers is paused, not opened: its reviewer and the leader are marked stopped and the round stays paused until a seat is run again. A leader's half-written answer is kept in the chat, ending with `(Stopped before it finished.)`. |
+| `chat` | `tabId`, `text`, `requestId?`, `images?`, `files?`, `confirmBusy?` | Sends one message to that tab's lazy leader. `requestId`, when present, must be 1-64 ASCII letters, digits, `_` or `-`, starting with a letter or digit. The server echoes it on the persisted user `chatMessage` and on a refusal `error`. Image/file paths must be returned by the upload endpoints and contained in scratch. The leader prompt lists non-image file paths it may read. With `confirmBusy: true` the server quiets the agents the person was last shown (`folderBusy`) for this tab for 10 minutes and sends the message; an agent that was not shown still holds it. |
+| `steer` | `tabId`, `text`, `requestId?`, `images?`, `files?`, `confirmBusy?` | Pushes a message into the reply that is running now (Claude: the SDK input stream; Codex: `turn/steer`; OpenCode: a second `prompt_async`). Validated like `chat`; the same folder warning (`folderBusy`) applies. In the same tick the reply so far is saved as an assistant message (`split: true`) and the steer is saved as a user message, so the chat reads [reply so far][steer][rest of the reply]. With no reply running it is an ordinary `chat`. Refused with `steerRefused` while an approval waits, Save runs, the leader has not started the reply, or the CLI cannot take a message mid-reply. A steer the CLI hands back (its turn had just ended) is sent as the next turn and not saved twice. A `chat` that meets a running reply gets an `error` with `reason: "busy"`. |
+| `save` | `tabId` | Serializes Saves per tab (one tab's Save waiting on its own approval never holds up another tab's Save). It waits up to 30 seconds for an active leader turn, asks the leader to write `<tab folder>/.command-center/<tabId>/RESUME.md`, and marks the transcript revision saved only if that file exists and its modification time is later than when Save began. A timeout, missing or stale file, or leader failure returns `error`. A successful Save also writes one entry to the leader's "Past sessions" (see Chat storage). |
+| `clear` | `tabId` | Immediately stops only that tab's leader, clears its active transcript, and emits `chatCleared`. The server keeps the transcript and both revisions for 10 seconds. Its next chat starts a fresh leader that is instructed to read the existing handover first. Clear never waits behind Save. |
+| `undoClear` | `tabId` | Within 10 seconds of Clear, restores the exact transcript and revisions, stops any fresh leader session for that tab, and emits `chatRestored`. After the window, or when that tab has no pending Clear, it emits `chatUndoRejected` and changes no transcript. |
+| `approveLook` | `tabId` | Applies the process engine's look-approval transition. |
+| `advanceStep` | `tabId` | Advances the tab process. |
+| `reviewFindings` | `tabId` | Marks review findings and advances the process to fixes. |
+| `finishFix` | `tabId` | Marks the fix step done. |
+| `reviewClean` | `tabId` | Marks review clean and advances the process. |
+| `selectMarketingMaker` | `tabId`, `slot` | Selects a marketing maker slot in that tab. |
+| `updateClientPref`, `setClientPref` | `key`, `value` | Updates a validated client preference, saved in `client-prefs.json` and sent in `state.clientPrefs`. Keys are `sidebarCollapsed`, `notificationsEnabled`, `bellEnabled`, `bellVolume` (0-100), `previewUrl`, `rightPanelCollapsed`, `rightPanelWidth`, `theme` (`light`, `dark`, `system`), `avatar` (a preset name or an image data URL up to 512 KB), `dismissedRuns` (up to 2000 run ids), `crewRailOpen` (boolean, default `true`) and `detailsOpen` (boolean, default `false`). |
+| `unblockSeat`, `clearLaunchBlock` | `seatKey` or `seatId`, `confirm` | Removes a persisted launch block and replies with `launchBlockCleared`. `confirm` must be `allow this seat to launch again` for both names. Old bare seat IDs are accepted. |
+| `ackLaunchNotices` | `ids` | Removes the listed positive notice IDs and replies with `launchNoticesAcked`. |
+| `ackLaunchNotice` | `id` | Acknowledges one persisted launch notice. |
+| `historyList` | `seatKey` | Lists the newest 200 log runs of one tab-scoped key or old bare seat ID (only that seat's files are read). It does not require a current workspace entry. A leader's saved sessions are listed here too (see Chat storage). |
+| `historyRun` | `seatKey`, `timestamp`, `full?` | Reads a run's brief, output tail, byte count, and outcome. `full: true` is still capped. The reply echoes `full: true` when the request asked for the fuller log, `full: false` otherwise. |
+| `refreshSettings` | `requestId?` | Re-reads CLI status and Skills & MCP inventory for the selected tab. Read-only. With a `requestId` the reply is the normal `actionResult` (or `error`, also when the check fails) carrying it; `settingsRefreshed` follows a success either way. |
+| `installCli` | `requestId`, `cli`, `confirm` | Installs only a missing CLI using `npm install -g` and that CLI's fixed package. `confirm` must be `true`; Install is unavailable while installed. Gemini uses `@google/gemini-cli`. |
+| `cliLogin` | `requestId`, `cli` | Opens Claude, Codex, or OpenCode login in a new visible console and rechecks its sign-in status. Gemini sign-in is not exposed because its read-only status check and login command have not been verified. |
+| `ghLogin` | `requestId` | Opens `gh auth login --web` in a new visible console and rechecks `gh auth status`. Only connected state and account name are retained. |
+| `setNotesVault` | `requestId`, `path` | Stores an optional absolute existing directory. Use `null` or `""` to clear it. Save continues writing to the tab folder. |
+| `setDefaultProjectFolder` | `requestId`, `folder` | Stores an absolute existing directory for new projects. |
+| `mcpAdd` | `requestId`, `cli`, `name`, `commandOrUrl` | Adds MCP where supported. Name matches `^[A-Za-z0-9_-]{1,64}$`; URLs must be credential-free `https://`; commands are parsed into argv and shell metacharacters are refused. Claude servers are added with `-s user` so every tab sees them and they survive a restart. |
+| `mcpRemove` | `requestId`, `cli`, `name`, `confirm` | Removes MCP for Claude (`-s user`) or Codex only. `confirm` must be `true`. OpenCode removal is not offered. |
+| `pluginInstall` | `requestId`, `name` | Installs a Claude plugin through its CLI. |
+| `pluginUninstall` | `requestId`, `name`, `confirm` | Removes a Claude plugin. `confirm` must be `true`. |
+| `addAcpCli` | `requestId`, `name`, `command` | Adds a leader CLI that speaks the Agent Client Protocol. `command` is the start command, a bare program name plus plain-word arguments (`gemini --acp`): anything that would need a shell (quotes, `& | < > ^ % $`, a path) is refused. Saved in `<data root>/config/acp-clis.json`; the list is in `state.acpClis` (`id`, `name`, `program`, `args`, `kind`). At most 12; a name that gives an existing id is refused. |
+| `removeAcpCli` | `requestId`, `id` | Removes an ACP CLI from the list; refused while any tab uses it as its leader CLI. |
+| `setPermissionMode` | `requestId`, `tabId`, `mode`, `confirm?` | Saves this tab's `ask`, `accept`, `plan`, or `bypass` mode. Requests for one tab are serialized, and queued requests that have not started are skipped when a newer choice arrives. The live leader is looked up when a queued request applies. A started request applies to that leader before it saves, and a failed apply or save stops only that same leader if it is still current. If a permission failure interrupts a turn, its partial answer and error are saved to chat and the next session reads the tab's `.command-center/<tabId>/RESUME.md` (or, until it has saved one, the folder's older shared `.command-center/RESUME.md`); the saved mode stays unchanged. With no running leader, the new mode is saved for the next session. Removing a tab or project deletes its saved permission mode, and a request that finishes after removal cannot save. `ask` maps to SDK `default`, `accept` to `acceptEdits`, `plan` to `plan`, and `bypass` to `bypassPermissions`; bypass requires `confirm: true`. The leader session is launched allowed to switch to bypass later (`allowDangerouslySkipPermissions`); this does not change the starting mode. A tab id that does not exist is refused and leaves no action in state. |
+| `sendRequest` | `requestId`, `fromTabId`, `toTabId`, `title`, `body` | Persists a request between different existing tabs. Title is capped at 200 characters and body at 24 KiB. A source tab may hold at most 50 pending requests (the 51st is refused with the echoed `requestId`); only the newest 200 resolved requests are kept. |
+| `resolveRequest` | `requestId`, `id`, `status`, `tabId` | Resolves a pending request to `accepted` or `declined`. `tabId` is the tab the request was sent to (its `toTabId`), whichever tab is open; a missing or different `tabId`, or an unknown tab, is refused. A request whose destination was removed becomes `destinationRemoved` and cannot be resolved. |
+| `releaseUnconfirmed` | `runId`, `confirm` | Explicitly releases one run whose kill could not be confirmed and records the release. `confirm` must be `release may leave a process running and editing files`. The engine marks the run failed and keeps its seat launch-blocked. |
+| `releaseUnconfirmedSeat` | `seatId`, `confirm` | Releases all unconfirmed runs for the tab-scoped seat. `confirm` must be `release may leave a process running and editing files`. The seat remains launch-blocked. |
+
+The server refuses project/tab IDs that are unsafe or duplicated, changes to busy tabs, removal of a project's last tab, and removal of the last project. Slot membership, CLI, model, effort, and write permission are validated against the tab's kind/process definition. The Pack C settings, permission, and request actions in the table above require a request id in the chat format. Each matching result or refusal echoes that id, and the server keeps progress in `state`. `POST /api/avatar`, `POST /api/paste-file`, and `POST /api/paste-image` require `X-Request-Id`.
+
+## Chat storage and leader lifecycle
+
+Each tab transcript is JSONL at `<data root>/chats/<tabId>.jsonl`. Messages, Clear events, restore events, and saved revisions are replayed at startup. A leader is created only for the first chat on that tab. Leaders run in the tab folder. A Claude leader loads the `user`, `project`, and `local` Claude settings; a Codex or OpenCode leader loads that CLI's own user configuration (the server never writes `~/.codex`, `~/.claude` or `~/.config/opencode`). The server performs one startup health check total, and only when the first tab's leader seat is Claude; it loads the `user` Claude settings only and runs from the data root, never from a project folder, so no project hook runs at app start. The check is one paid model turn, so a pass is remembered in `<data root>/leader-check.json` (model and CLI path) and not repeated for the same model and CLI within 24 hours; a failed check is never remembered.
+
+Save requests are serialized per tab (each tab has its own queue; one tab's Save never holds up another tab's). A Save waits for the tab's active leader turn with a timeout, then asks the leader to write `<tab folder>/.command-center/<tabId>/RESUME.md` before updating `savedRevision`. Clear bypasses that queue: it stops the tab leader and resets its active transcript view immediately while preserving the JSONL history. The next leader turn after Clear, and after any other event that leaves a tab with no leader memory (an app start, Stop, a folder or process change, a CLI switch, Undo, a leader that died), is instructed to read the handover before replying; a successful read turn consumes that requirement. Save is refused (`send a message first so the leader reads the saved handover; saving now would overwrite it`) while that read is still owed. If a Save times out but its turn later finishes OK and wrote the handover, the server marks it saved and sends `saved`, which clears the failed card.
+
+Each successful Save also records a "past session" for the leader: one log and one brief file under `logs/` named like a worker run, `<tabId>.<leaderSlot>-<timestamp>.log` (the transcript at Save time, `You: ...` / `<leader name>: ...`, ending with the usual exit marker, status `done`) and `.brief.txt` (`Saved handover: <path of RESUME.md>`). `historyList` and `historyRun` for the leader's seat key (`<tabId>.<leaderSlot>`) return them like any run. The newest 50 are kept per leader, older ones are removed file by file. Removing a tab leaves its chat file and logs on disk and its id is not handed out again; a launch block or notice of its seats is dropped with it.
+
+Clear Undo is tab-scoped and lasts 10 seconds. The server journals a restore event so the restored messages, chat revision, and saved revision survive a restart. An Undo request for a different tab cannot consume another tab's pending snapshot.
+
+### Leader CLIs
+
+The leader seat's `cli` decides what runs it. All three behave the same for chat, Save/Clear, approvals, usage and Stop.
+
+| CLI | Process | Crew tools | Permission modes |
+|---|---|---|---|
+| `acp:<id>` | the CLI's saved start command (program resolved on PATH outside every project folder, no shell, `.cmd` shims through `cmd.exe` with plain-word arguments only), Agent Client Protocol: JSON-RPC 2.0, one JSON object per line on stdin/stdout, one session | HTTP MCP server `tab-crew` given in `session/new` (the same bridge as OpenCode, a token of its own); a CLI that does not take HTTP MCP servers starts without crew tools and the chat gets one notice | Full access only (see Limits) |
+| `claude` | Claude Agent SDK, long-lived `claude` child | SDK MCP server `tab-crew` | SDK modes as above |
+| `codex` | `codex app-server` over stdio (JSON-RPC, no `jsonrpc` field), one thread per leader session | Codex `dynamicTools`, answered through `item/tool/call` | `ask` = `untrusted` + workspace-write, `accept` = `on-request` + workspace-write, `plan` = `on-request` + read-only, `bypass` = `never` + danger-full-access. A mode change is stored and used from the next `turn/start`. |
+| `opencode` | `opencode serve` on a free `127.0.0.1` port, password in the `OPENCODE_SERVER_PASSWORD` environment variable, one session | MCP bridge (below), added at runtime with `POST /mcp` | Session rules, last match wins: `*` ask first, then `read`, `glob`, `grep` and `list` allow (looking is free, like Claude's default mode and Codex) with `read` of `*.env` and `*.env.*` asking again, `tab-crew_*` always allow; `accept` adds `edit` allow, `plan` adds `edit` deny, `bypass` allows everything. A mode change is a `PATCH /session/<id>` with the full list (OpenCode appends it, so the newest list wins). |
+
+Only a fixed command line is spawned (`codex app-server`, `opencode serve --hostname 127.0.0.1 --port <n>`) in the tab folder. The model, prompt and every secret travel in JSON-RPC or HTTP bodies, never in argv. The child environment drops `CC_DATA_DIR` and `CC_TEST_FORCE_PACKAGED`. Codex takes the model and effort on every turn; OpenCode takes the model per prompt (`provider/model` is split at the first `/`). Every approval goes through the same browser approval path as Claude: Codex commands are tool `Bash` and file changes `Edit`; OpenCode `bash` is `Bash`, and `edit`, `write` and `patch` are `Edit`; anything else keeps its own name. Requests with no screen (Codex `requestUserInput` and MCP elicitation, OpenCode `question.asked`) are declined, and no request is left unanswered on Stop or exit. Stop interrupts or aborts the turn, then ends the whole process tree; a server shutdown ends leader children too. A server that crashes leaves `logs/.children-<pid>.json`, the list of processes it was watching; the next server start (the server does not listen until this finished, the whole sweep, every file at once, has one 8 s cap; whatever has not finished by then stays in its registry file for the next start, and a failed sweep never stops the start) ends those that are still the same processes, removes the file, and logs `[cleanup] stopped N processes left by an earlier server`.
+
+Starting (spawn, Codex `initialize` and `thread/start`, OpenCode health, `POST /mcp`, `POST /session`) has a 20 second deadline; a turn itself is not capped. A failed start, a Codex turn that is not `completed`, a final Codex `error`, an OpenCode `session.error`, a failed prompt, a dropped event stream and a child exit mid-turn each end the turn with exactly one `chatError` (a callback from a leader that is no longer the tab's current one is ignored), and the next message starts a fresh leader. Usage fills the existing context meter: Codex reports the last turn's input tokens and the model window (no cost); OpenCode reports input plus cache tokens, the cumulative message cost, and the model's context limit, which is read from `/config/providers` into memory only and never stored or logged. Past sessions read the run logs and the chat store, neither of which depends on the CLI.
+
+An ACP leader sends `initialize` (protocol version 1, no file or terminal capabilities: the CLI uses its own), `session/new` (`cwd` = the tab folder), then one `session/prompt` per turn. `agent_message_chunk` is the reply (a new paragraph after a tool step), `agent_thought_chunk` is never shown, `tool_call` shows only its KIND as the step line (`execute`, `read`, `search`, `edit`, `delete`, `move`, `fetch`, `think`, `switch_mode`, `other`) and never its title, path, command or content, `usage_update` fills the context meter. The prompt's `stopReason` `end_turn` ends the turn; `max_tokens`, `max_turn_requests`, `refusal` and `cancelled` end it with a plain message. `session/request_permission` is answered with the `allow_once` option (else `allow_always`; with no allow option the request is refused and the chat gets a notice). Stop sends `session/cancel`, then ends the process tree. A CLI that is not signed in fails the start or the turn with `<name> is not signed in: <the CLI's own sign-in description from initialize.authMethods>`. `state.projects[].tabs[].acpLeader` is `null`, or `{ name, model }` for a tab led by an ACP CLI, with the model the CLI reported for its session (`null` before it started).
+
+### Leader MCP bridge
+
+`POST /api/leader-mcp/<tabId>` serves the four crew tools to an OpenCode leader as a minimal MCP server with plain `application/json` replies: `initialize`, `ping`, `tools/list`, `tools/call` (a tool failure is a result with `isError: true`) and `notifications/*` (`202`, no body); any other method is JSON-RPC `-32601`. Any request carrying an `Origin` header is refused (`403`), so a web page can never reach it. Methods other than `POST` get `405`. `Authorization: Bearer <token>` is compared with `timingSafeEqual` against a fresh random 32-byte token made for that one leader instance (`401` when missing, wrong, or revoked). The body is capped at 1 MiB (`413`), and the server's normal `Host` check applies. The token lives only in that leader's runtime registration, is revoked when the leader stops or dies, and reaches only that tab's tools. It never appears in state, logs or errors.
+
+### Advisor
+
+`setAdvisor` is applied: a Claude leader started with the native CLI (the same condition as `--effort`) gets `--advisor <model>` in its arguments. The advisor is read when the leader session starts, so a change takes effect on the next session (after Stop, Clear, a CLI switch or a restart). Codex and OpenCode leaders ignore it.
+
+### Limits
+
+- An ACP leader runs in Full access only: it may edit files and run commands without asking, and Command Center cannot make it ask yet (OpenCode over ACP wrote a file without ever sending `session/request_permission`, probed 2026-10-18). `state.permissionMode` of its tab is always `bypass`; `setPermissionMode` with any other mode is refused, with `bypass` it changes nothing. The tab's saved mode stays in `settings.json` and applies again if the leader is switched to Claude, Codex or OpenCode. An ACP CLI cannot be a crew seat in this version. Its model is the CLI's own and cannot be changed from here; `steer` is not possible (the message is handed back as the next turn).
+- Codex with `untrusted` asks only for commands it does not consider safe. Probed on Windows: `node -e "...writeFileSync..."` was asked, while `echo second > two.txt` was not asked and wrote the file even with a read-only sandbox. Ask and Plan on a Codex leader are only as strong as Codex's own classifier, and **Codex's read-only sandbox is not a boundary**: a Codex worker seat counts as able to write everywhere below (launch approval, stall relaunch).
+- OpenCode `plan` denies edits but still asks for shell commands, and an allowed command can write.
+- An OpenCode leader reads, globs, greps and lists without asking in Ask, Accept and Plan (Bypass allows everything). Reading a `.env` file and anything outside the tab folder (`external_directory`) still asks, and so does everything else.
+- The advisor is Claude-only.
+- Switching a leader's CLI starts a fresh session: the old CLI's conversation is not carried over (the chat log stays, and the next leader reads the saved handover).
+- A Claude leader applies a model change live; Codex and OpenCode apply it from the next turn. A Codex or OpenCode leader reads the seat's saved effort on every turn.
+- A Codex turn keeps the approval policy it started with, so a permission-mode change while a Codex turn runs is refused ("Finish or stop <leader>'s current turn first, then change the mode.") and the chat is not stopped. OpenCode applies a mode change live.
+- A failed Codex or OpenCode turn (error, failed or interrupted turn, refused prompt, unanswerable permission request) reports once and ends that leader's process; the next message starts a fresh session.
+
+Leader tools are limited to the leader's tab: `get_crew_status` lists that tab's crew, `launch_seat` accepts one of its slots, `send_request` sends from that tab to another existing tab, and `list_requests` returns only requests addressed to that tab; a declined request is listed with an empty `body`, so Decline is a real gate. Request tools share the client validation and persistence path. Leader-launched runs use the same validation and launch-safety checks as client-launched runs.
+
+## HTTP paste-image endpoint
+
+`POST /api/paste-image` accepts `image/png`, `image/jpeg`, or `image/webp` with a body up to 12 MiB and requires a valid `X-Request-Id`; there is no legacy route that accepts a missing id. The id is echoed in the response, and the upload status is in `state.settings.uploads` (at most 32 entries). A request refused for its Host or Origin records no status. Before writing, the server resolves the real scratch directory and data root and refuses a directory outside that root. The file is written through the resolved directory under `<data root>/scratch/`.
+
+`POST /api/avatar` uses the same image formats, 12 MiB cap, request id, and Host/Origin checks. It applies the same real-directory containment check before writing, stores files under `<data root>/avatars/`, and returns a generated `/api/avatar/<filename>` path. `GET /api/avatar/<filename>` serves only a generated image contained in that directory. `updateSeat.pic` accepts the generated route.
+
+`POST /api/paste-file` accepts up to 20 MiB, a valid `X-Request-Id`, and a percent-encoded `X-File-Name`. Allowed extensions: `.txt`, `.md`, `.markdown`, `.pdf`, `.csv`, `.json`, `.jsonc`, `.yaml`, `.yml`, `.toml`, `.xml`, `.html`, `.htm`, `.css`, `.scss`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.py`, `.rs`, `.go`, `.java`, `.c`, `.h`, `.cc`, `.cpp`, `.cs`, `.swift`, `.kt`, `.sql`, `.sh`, `.ps1`, `.bat`, `.log`, `.diff`, and `.patch`. The server resolves scratch and the data root before writing and refuses a scratch directory outside that root. Files are stored through the resolved scratch directory with generated names; the response is `{ "path", "name", "requestId" }`. Chat accepts only generated paths contained in scratch, and the leader prompt names files it may read.
+
+All upload routes enforce the same Host and Origin checks. `GET /api/paste-image?path=<encoded path>` serves only generated image files inside scratch. The server serves static files with `GET` and `HEAD`.
+
+Settings, the changes panel and the agent status calls use one injected `runCli(bin, args, { timeoutMs })` runner (CLI discovery of models and effort at start-up has its own bounded runner, which resolves the real CLI path first, runs it through the shell, and on a timeout ends its whole process tree with the System32 `taskkill.exe`). `runCli` spawns an argument array with `shell: false`, `windowsHide: true` and a timeout. On Windows it resolves the real launcher from PATH; a `.cmd`/`.bat` (npm, codex, opencode) runs through `%ComSpec%` (`cmd.exe /d /s /c`) with every part double-quoted and no `call`. An argument containing `%` is handed over through an environment variable that cmd expands once as plain text. An argument or launcher path containing `"`, `!`, CR, LF or NUL, or a launcher path containing `%`, is refused rather than escaped (`unsupported characters in command arguments`). When a Windows command times out, the runner invokes `taskkill.exe /pid <pid> /T /F` from the Windows System32 folder by its absolute path, with argv, and waits for the command process to close or a bounded confirmation wait before returning code 124. If Windows denies `taskkill`, it snapshots and terminates descendants, then reports whether tree exit was confirmed. MCP and plugin names must start with a letter or digit. Tests inject a fake runner and temporary HOME/USERPROFILE values; inventory tests never read the real user homes. GitHub output is reduced to connected state and account name, never a token.
+
+## Tool approvals
+
+Every tab in `state.projects[].tabs[]` carries `pendingApprovals`, an array of
+`{ approvalId, tool, summary, createdAt }`. `createdAt` is epoch milliseconds.
+The summary is the whole text the user is answering: every changed file path (one per line) for a file approval, the full command, a seat launch's `<name> (<role>)` line followed by the whole brief, or JSON for other tools. Line breaks are kept and the page shows it scrollable. A summary over 20000 characters is cut with a final line `... (N more characters not shown)`. When a Codex file approval also asks for write access to a folder (`grantRoot`), the line `Also asks for write access to: <folder>` is added. Multiple calls may wait at once. State survives browser
+refresh and reconnect, but approvals are never persisted across server restarts.
+
+`answerApproval` takes `{ requestId, tabId, approvalId, allow }`, with a required
+request ID and a boolean `allow`. Success sends `actionResult` with
+`action: "answerApproval"`, the same request ID, tab ID and approval ID. Refusal
+sends `error` with the same request ID and tab ID and a readable message. A
+missing approval, wrong tab, dead or replaced leader is refused without changes.
+Stopping a leader, aborting its tool signal, removing its tab/project or shutting
+down denies all affected approvals and removes them from state.
+
+Every leader registers a `PreToolUse` hook with `timeout: 86400`. The hook asks
+when the SDK's live `permission_mode` is `"default"` OR the tab's saved mode is
+`ask` (the server passes the saved mode in), so a subagent's own `permissionMode`
+or a mode the SDK lands in after ExitPlanMode cannot skip the question while the
+tab is saved as Ask. Then Edit, MultiEdit, Write, NotebookEdit, Bash and
+PowerShell wait for Allow or Deny. This hook fires even when user settings
+pre-allow those tools. Other tools, and other permission modes on a tab not
+saved as Ask, return an empty hook result. `canUseTool` uses the same approval flow whenever
+the SDK itself asks for permission, including commands in accept mode.
+Denials say `The user denied this.`; internal errors and aborts deny as well.
+
+`launch_seat` is pre-allowed for the leader, so the server gates it where the
+launch happens (the tool's `launch` callback), by the tab's saved mode. A seat
+that can write files is launched at once in Accept and Bypass; in Ask it first
+raises an approval with `tool: "launch:<seat name>"` and `summary: "<seat name>
+(<role>)"` on line 1 followed by the whole brief (the panel and Waiting card read
+"Atlas wants to launch <seat name>"); Deny, or the leader stopping, launches nothing and
+tells Atlas `The user denied this.`; in Plan the launch is refused with a message
+saying Plan mode changes nothing. A Codex seat counts as one that can write files
+even when its role is read-only (the sandbox is not a boundary), so it asks in Ask
+and is refused in Plan like any write seat. Only a non-Codex seat whose role cannot
+write launches without asking in every mode.
+
+The selected tab shows the oldest approval in a panel directly above the composer.
+It stays visible until answered, without a scrim, focus trap or Escape dismissal.
+Its Waiting card selects the tab and focuses the panel. Allow and Deny buttons
+disable while an answer is in flight and the panel shows refusals. Pending tool
+approvals are intentional user waits, not stalled worker runs; the worker stall
+monitor only tracks crew subprocess runs. Chat and Save refuse with
+`Atlas is waiting for your answer on a change` while blocked by an approval,
+including an approval that appears while Save is waiting for a turn. Save's own
+Write in Ask mode is not refused: an approval raised by Save's own leader turn
+makes Save wait for the answer (its 30-second timeout re-arms while an approval
+is pending and resets to a full 30 seconds when that approval settles). After
+Allow the handover is written and the chat is marked saved;
+after Deny Save fails with `leader could not save the handover`. An approval that
+was already pending before Save started refuses Save at once.
+In the panel, every new approval starts a 400 ms settle period, including first
+appearance, an idle gap and a tab switch. Same-ID broadcasts do not restart it.
+Pointer-down or non-repeated key-down must start after settle on the same ID
+still displayed at activation. Pointer captures belong to the pointer that
+began them; another pointer cannot activate or erase them. Multi-clicks and held
+keys cannot answer a replacement.

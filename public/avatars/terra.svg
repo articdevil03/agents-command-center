@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Terra, final reviewer: terracotta pebble with a green check badge -->
+  <defs><radialGradient id="b" cx=".38" cy=".3" r=".8"><stop offset="0" stop-color="#e9a387"/><stop offset=".65" stop-color="#e07b53"/><stop offset="1" stop-color="#c56c49"/></radialGradient></defs>
+  <path fill="url(#b)" d="M9 40C7 26 19 15 33 16C47 17 57 28 55 42C53 54 42 59 30 58C18 57 10 51 9 40Z"/>
+  <circle cx="25" cy="35" r="3.1" fill="#26262b"/>
+  <circle cx="39" cy="35" r="3.1" fill="#26262b"/>
+  <path d="M28.5 41.5q3 2.6 6 0" fill="none" stroke="#26262b" stroke-width="2.2" stroke-linecap="round"/>
+  <circle cx="15" cy="24" r="9.5" fill="#2fb36b"/>
+  <path d="M10.5 24.3l3 3l5.5-6" fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
