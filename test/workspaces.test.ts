@@ -9,13 +9,18 @@ import { importWithTempDataRoot } from "./temp-root.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 
 // config.ts reads its data root at import: it is loaded on a fresh temp folder, never on the repo's own (live) config/.
-const { modules: { config: { CLAUDE_MODEL_INFO, EFFORT_OPTIONS, MODEL_OPTIONS, migrateWorkspaces, readWorkspaces, writeWorkspaces } } } = await importWithTempDataRoot(async () => ({ config: await import("../server/config.ts") }));
+const { modules: { config: { CLAUDE_MODEL_INFO, EFFORT_OPTIONS, MODEL_OPTIONS, migrateWorkspaces, readWorkspaces, writeWorkspaces, templateCopy } } } = await importWithTempDataRoot(async () => ({ config: await import("../server/config.ts") }));
 
 function tempDir(): string { return mkdtempSync(join(tmpdir(), "cc-workspaces-test-")); }
 function defaults(kind: "dev" | "design" | "mkt", process: "main" | "duo" | "solo") {
   return getProcessDefinition(kind, process).seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort }));
 }
-function fixture(): Workspaces {
+// The fixtures below are files in the OLD shape (a process id, no steps): reading one migrates it, and that is the shape a write takes.
+function modern(value: unknown): Workspaces {
+  const dir = tempDir();
+  try { const path = join(dir, "old.json"); writeFileSync(path, JSON.stringify(value)); return readWorkspaces(path); } finally { removeWithRetry(dir); }
+}
+function fixture(): any {
   return { projects: [{ id: "alpha", name: "Alpha", folder: "C:/work/alpha", tabs: [
     { id: "alpha-development", name: "Development", kind: "dev", process: "main", folder: "C:/work/alpha", crew: defaults("dev", "main") },
   ] }] };
@@ -63,6 +68,10 @@ test("workspace loader names unknown kind/process and rejects invalid models, ef
     value.projects[0].tabs[0].kind = "unknown" as any;
     writeFileSync(path, JSON.stringify(value));
     assert.throws(() => readWorkspaces(path), /unknown kind\/process/);
+    const unknownProcess = fixture();
+    unknownProcess.projects[0].tabs[0].process = "bad";
+    writeFileSync(path, JSON.stringify(unknownProcess));
+    assert.throws(() => readWorkspaces(path), /unknown kind\/process "dev\/bad"/);
     const badModel = fixture();
     badModel.projects[0].tabs[0].crew.find((seat) => seat.slot === "coder")!.model = "gpt-6-luna & injected";
     writeFileSync(path, JSON.stringify(badModel));
@@ -75,7 +84,7 @@ test("workspace loader names unknown kind/process and rejects invalid models, ef
     badEffort.projects[0].tabs[0].crew.find((seat) => seat.slot === "coder")!.effort = "turbo";
     writeFileSync(path, JSON.stringify(badEffort));
     assert.equal(readWorkspaces(path).projects[0].tabs[0].crew.find((seat) => seat.slot === "coder")!.effort, "turbo");
-    assert.throws(() => writeWorkspaces(badEffort, path), /invalid slot\/model\/effort/);
+    assert.throws(() => writeWorkspaces(modern(badEffort), path), /invalid slot\/model\/effort/);
     const unsafeTab = fixture();
     unsafeTab.projects[0].tabs[0].id = "bad.tab";
     writeFileSync(path, JSON.stringify(unsafeTab));
@@ -92,8 +101,9 @@ test("workspace loader names unknown kind/process and rejects invalid models, ef
 });
 
 test("fallback model lists contain only the probed Codex IDs and the Claude 5.5 1M option", () => {
-  assert.deepEqual(MODEL_OPTIONS.codex, ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra"]);
+  assert.deepEqual(MODEL_OPTIONS.codex, ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol"]);
   assert.ok(MODEL_OPTIONS.claude?.includes("claude-opus-5-5[1m]"));
+  assert.ok(MODEL_OPTIONS.claude?.includes("claude-sonnet-5-5[1m]") && MODEL_OPTIONS.claude?.includes("claude-fable-5-1"), "the models Our process uses are in the built-in list");
   assert.ok(CLAUDE_MODEL_INFO.some((model) => model.value === "claude-opus-5-5[1m]" && model.supportsEffort));
   assert.ok(EFFORT_OPTIONS.codex.includes("max"));
 });
@@ -116,8 +126,10 @@ test("migration creates one default Development tab per project and ignores old 
     for (const project of migrated.projects) {
       assert.equal(project.tabs.length, 1);
       assert.equal(project.tabs[0].kind, "dev");
-      assert.equal(project.tabs[0].process, "main");
-      assert.deepEqual(project.tabs[0].crew, defaults("dev", "main"));
+      assert.equal("process" in project.tabs[0], false);
+      assert.equal(project.tabs[0].setupName, "Our process");
+      assert.deepEqual(project.tabs[0].crew, templateCopy("our-process").crew);
+      assert.deepEqual(project.tabs[0].steps, templateCopy("our-process").steps);
     }
     assert.equal(readFileSync(seatsPath, "utf8"), oldSeats);
     assert.equal(readFileSync(undergroundPath, "utf8"), oldUnderground);
@@ -130,7 +142,7 @@ test("migration is a write: a generated default that is safe-shaped but not in i
   try {
     const projectsPath = join(dir, "projects.json"), destination = join(dir, "workspaces.json");
     writeFileSync(projectsPath, JSON.stringify([{ id: "alpha", name: "Alpha", dir: "C:/work/alpha" }]));
-    const claudeDefaults = new Set(defaults("dev", "main").filter((seat) => seat.cli === "claude").map((seat) => seat.model));
+    const claudeDefaults = new Set(templateCopy("our-process").crew.filter((seat) => seat.cli === "claude").map((seat) => seat.model));
     assert.ok(claudeDefaults.size > 0, "control: the default crew has Claude models");
     MODEL_OPTIONS.claude = live!.filter((model) => !claudeDefaults.has(model));
     assert.throws(() => migrateWorkspaces(projectsPath, destination), /invalid slot\/model\/effort/);
@@ -154,9 +166,9 @@ test("workspace writes validate before publishing any invalid shape", () => {
   const dir = tempDir();
   try {
     const path = join(dir, "workspaces.json");
-    const value = fixture();
+    const value = modern(fixture());
     writeWorkspaces(value, path);
-    const invalid = fixture();
+    const invalid = modern(fixture());
     invalid.projects[0].tabs[0].crew[0].cli = "opencode" as any;
     invalid.projects[0].tabs[0].crew[0].model = "no-slash-model";
     invalid.projects[0].tabs[0].crew[0].effort = "max";
@@ -169,7 +181,7 @@ test("a seat moved to another CLI is a valid saved workspace, and its model must
   const dir = tempDir();
   try {
     const path = join(dir, "workspaces.json");
-    const moved = fixture();
+    const moved = modern(fixture());
     const seat = moved.projects[0].tabs[0].crew[0];
     seat.cli = seat.cli === "codex" ? "opencode" as any : "codex" as any;
     seat.model = seat.cli === "codex" ? "gpt-6-sol" : "vendor/model-v1";

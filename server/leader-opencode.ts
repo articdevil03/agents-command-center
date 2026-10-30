@@ -5,79 +5,19 @@ import { IMAGE_EXT_TO_MIME } from "./config.ts";
 import { permissionModeForSdk, type PermissionMode } from "./settings.ts";
 import {
   createActivityTracker, createParagraphs, deadline, killProcessTree, leaderChildEnv, leaderProcessState, spawnLeaderChild, toolActivity, trackLeaderChild, watchesLeaderChild, LEADER_START_TIMEOUT_MS,
-  type AskApproval, type LeaderCallbacks, type LeaderHandle, type LeaderSeat, type LeaderSpawn,
+  type LeaderCallbacks, type LeaderHandle, type LeaderSeat, type LeaderSpawn,
 } from "./leader-common.ts";
-
-export const OPENCODE_CREW_SERVER = "tab-crew";
+import { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, decideByRules, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
+import { createSecretStream } from "./leader-opencode/secret-stream.ts";
+import { trimOldest } from "./leader-opencode/maps.ts";
+import type { OpencodeLeaderDeps } from "./leader-opencode/types.ts";
+export { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, decideByRules, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
 const HOST = "127.0.0.1";
 const KILL_GRACE_MS = 200;
 
-// OpenCode 1.18's own list of permissions that only look (checked in its binary: new Set(["read","glob","grep","list"])).
-const READ_ONLY_PERMISSIONS = ["read", "glob", "grep", "list"];
-type Rule = { permission: string; pattern: string; action: "allow" | "deny" | "ask" };
-// OpenCode evaluates the LAST matching rule, so the broad rule comes first and the specific ones override it.
-export function opencodeRules(mode: PermissionMode): Rule[] {
-  const crew: Rule = { permission: `${OPENCODE_CREW_SERVER}_*`, pattern: "*", action: "allow" };
-  if (mode === "bypass") return [{ permission: "*", pattern: "*", action: "allow" }, crew];
-  const rules: Rule[] = [{ permission: "*", pattern: "*", action: "ask" }];
-  // Looking is free, as in Claude's default mode and in Codex; secrets files still ask. Anything else, outside folders included, asks.
-  for (const permission of READ_ONLY_PERMISSIONS) rules.push({ permission, pattern: "*", action: "allow" });
-  for (const pattern of ["*.env", "*.env.*"]) rules.push({ permission: "read", pattern, action: "ask" });
-  if (mode === "accept") rules.push({ permission: "edit", pattern: "*", action: "allow" });
-  if (mode === "plan") rules.push({ permission: "edit", pattern: "*", action: "deny" });
-  rules.push(crew);
-  return rules;
-}
-
-// OpenCode's wildcard: * matches any run of characters.
-function wildcard(pattern: string, text: string): boolean {
-  return new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\?]/g, "\\$&").replace(/\*/g, ".*")}$`, "s").test(text);
-}
-// The last matching rule wins (as in OpenCode); no match asks.
-export function decideByRules(rules: Rule[], permission: string, patterns: string[]): "allow" | "deny" | "ask" {
-  const actions = (patterns.length ? patterns : ["*"]).map((pattern) => rules.filter((rule) => wildcard(rule.permission, permission) && wildcard(rule.pattern, pattern)).at(-1)?.action ?? "ask");
-  return actions.includes("deny") ? "deny" : actions.every((action) => action === "allow") ? "allow" : "ask";
-}
-// A sub-agent session inherits only its parent's deny rules (checked in OpenCode 1.18's task tool), so left alone it runs on OpenCode's permissive defaults.
-// This baseline makes every sub-agent request ask; the leader then answers each one by the tab's mode (see onPermission).
-export const OPENCODE_CONFIG_CONTENT = JSON.stringify({
-  $schema: "https://opencode.ai/config.json",
-  permission: { "*": "ask", read: { "*": "allow", "*.env": "ask", "*.env.*": "ask" }, glob: "allow", grep: "allow", list: "allow", [`${OPENCODE_CREW_SERVER}_*`]: "allow" },
-});
-
-// bash -> Bash, edit/write/patch -> Edit, anything else keeps its own name so the approval card says what it is.
-export function opencodeApprovalRequest(permission: string, patterns: string[], metadata: Record<string, unknown>): { tool: string; input: Record<string, unknown> } {
-  if (permission === "bash") return { tool: "Bash", input: { command: patterns.join("\n"), ...metadata } };
-  if (permission === "edit" || permission === "write" || permission === "patch") {
-    const path = typeof metadata.filepath === "string" ? metadata.filepath : patterns[0];
-    return { tool: "Edit", input: { file_path: path, patterns, ...metadata } };
-  }
-  return { tool: permission, input: { patterns, ...metadata } };
-}
-
-export function splitOpencodeModel(model: string): { providerID: string; modelID: string } {
-  const slash = model.indexOf("/");
-  return { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
-}
-
-export type OpencodeLeaderDeps = {
-  bridge: { url: string; token: string };
-  mode: PermissionMode;
-  ask: AskApproval;
-  savedAsks?: () => boolean;
-  spawnFn?: LeaderSpawn;
-  startTimeoutMs?: number;
-  // Tests only: a fixed port for a fake server. Otherwise OpenCode binds a port itself and says which (no probe-then-reuse race for another process to win).
-  pickPort?: () => Promise<number>;
-};
+export type { OpencodeLeaderDeps } from "./leader-opencode/types.ts";
 
 type Json = Record<string, any>;
-
-// Per-session maps grow with every message; the oldest entries go first (a duplicate event only ever arrives close to the original).
-const MAP_LIMIT = 4000;
-function trimOldest(collection: Map<string, unknown> | Set<string>): void {
-  while (collection.size > MAP_LIMIT) collection.delete(collection.keys().next().value as string);
-}
 
 export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: LeaderCallbacks, deps: OpencodeLeaderDeps): LeaderHandle {
   let model = seat.model;
@@ -121,61 +61,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
   // The bridge token and the server password must never reach chat errors (they are stored in the chat log).
   const secrets = [password, deps.bridge.token, Buffer.from(`opencode:${password}`).toString("base64")];
   const redact = (text: string): string => secrets.reduce((out, secret) => (secret ? out.split(secret).join("[hidden]") : out), text);
-  // Streamed text is redacted too (a command the leader runs can print its own environment). A secret can be split across two deltas,
-  // so the last few characters wait for the next delta and are released when the turn ends.
-  // Redaction always sees the text exactly as OpenCode sent it: a paragraph break between two parts is only a mark (an index into the held text, shown before that character)
-  // and becomes "\n\n" after redaction, so a secret split across two parts is still found.
-  const holdBack = Math.max(0, ...secrets.map((secret) => secret.length)) - 1;
-  const HIDDEN = "[hidden]";
-  let pendingTail = "";
-  let tailBreaks: number[] = [];
-  function redactMarked(raw: string, marks: number[]): { text: string; marks: number[] } {
-    const found: [number, number][] = [];
-    for (const secret of secrets) if (secret) for (let at = raw.indexOf(secret); at >= 0; at = raw.indexOf(secret, at + secret.length)) found.push([at, at + secret.length]);
-    const ranges: [number, number][] = [];
-    for (const range of found.sort((a, b) => a[0] - b[0])) { const last = ranges.at(-1); if (last && range[0] < last[1]) last[1] = Math.max(last[1], range[1]); else ranges.push([...range]); }
-    let text = "", from = 0;
-    for (const [start, end] of ranges) { text += raw.slice(from, start) + HIDDEN; from = end; }
-    // A mark inside a hidden secret moves to the start of its [hidden].
-    return { text: text + raw.slice(from), marks: marks.map((mark) => { let shift = 0; for (const [start, end] of ranges) { if (mark <= start) break; if (mark < end) { mark = start; break; } shift += HIDDEN.length - (end - start); } return mark + shift; }) };
-  }
-  // The text up to `end` with the paragraph breaks put in (a break at `end` itself only when `atEnd`).
-  function withBreaks(text: string, marks: number[], end: number, atEnd: boolean): string {
-    let out = "", from = 0;
-    for (const mark of marks) { if (mark > end || (mark === end && !atEnd)) break; out += `${text.slice(from, mark)}\n\n`; from = mark; }
-    return out + text.slice(from, end);
-  }
-  // Shows everything before `cut` and keeps the rest (and its breaks) held back.
-  function release(held: { text: string; marks: number[] }, cut: number): void {
-    const out = withBreaks(held.text, held.marks, cut, false);
-    pendingTail = held.text.slice(cut);
-    tailBreaks = held.marks.filter((mark) => mark >= cut).map((mark) => mark - cut);
-    if (out) cb.onDelta(out);
-  }
-  function emitDelta(text: string, breakBefore = false): void {
-    const joined = redactMarked(pendingTail + text, breakBefore ? [...tailBreaks, pendingTail.length] : tailBreaks);
-    release(joined, joined.text.length - Math.min(holdBack, joined.text.length));
-  }
-  // How many characters at the end of `text` could be the start of a secret whose rest has not arrived.
-  function secretPrefixLength(text: string): number {
-    let keep = 0;
-    for (const secret of secrets) for (let n = Math.min(secret.length - 1, text.length); n > keep; n--) if (secret.startsWith(text.slice(text.length - n))) { keep = n; break; }
-    return keep;
-  }
-  // The end of the text (a stop, a death, the turn's end): nothing more arrives, so an end that is the start of a secret is never shown. From 4 characters on it is
-  // shown as [hidden]; a shorter match is ordinary text.
-  function flushTail(): void {
-    const held = redactMarked(pendingTail, tailBreaks);
-    pendingTail = ""; tailBreaks = [];
-    const cut = secretPrefixLength(held.text);
-    const out = cut >= 4 ? `${withBreaks(held.text, held.marks, held.text.length - cut, true)}${HIDDEN}` : withBreaks(held.text, held.marks, held.text.length, false);
-    if (out) cb.onDelta(out);
-  }
-  // At a steer: everything held back is released through the same redaction, except an end that could still be the start of a secret (its rest has not arrived), which keeps waiting.
-  function flushSafeTail(): void {
-    const held = redactMarked(pendingTail, tailBreaks);
-    release(held, held.text.length - secretPrefixLength(held.text));
-  }
+  const { emitDelta, flushTail, flushSafeTail } = createSecretStream(secrets, cb);
 
   const url = (path: string): string => `${base}${path}${path.includes("?") ? "&" : "?"}directory=${encodeURIComponent(tabFolder)}`;
   async function api(method: string, path: string, body?: unknown, ms = 10_000): Promise<any> {
@@ -425,7 +311,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     const events = await fetch(url("/event"), { headers: { authorization: auth }, signal: ac.signal });
     if (!events.ok || !events.body) throw new Error(`OpenCode event stream returned ${events.status}`);
     void readEvents(events);
-  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, "OpenCode did not start within 20 seconds");
+  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, `OpenCode did not start within ${LEADER_START_TIMEOUT_MS / 1000} seconds`);
   ready.catch((error: Error) => die(`OpenCode leader failed to start: ${error.message}`));
 
   function prompt(text: string, images: string[]): Promise<any> {

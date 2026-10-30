@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { isTabSlug } from "./chat-store.ts";
-import { keepBadCopy, writeFileSynced } from "./safe-file.ts";
+import { keepBadCopy, writeFileSynced, replaceFile } from "./safe-file.ts";
 
 export type RequestStatus = "pending" | "accepted" | "declined" | "destinationRemoved";
 export type TabRequest = {
@@ -47,7 +47,7 @@ function atomicWrite(path: string, text: string): void {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
     writeFileSynced(temporary, text);
-    renameSync(temporary, path);
+    replaceFile(temporary, path);
   } finally {
     try { unlinkSync(temporary); } catch { /* rename already consumed the temporary file */ }
   }

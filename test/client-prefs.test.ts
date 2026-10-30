@@ -1,8 +1,8 @@
 // Pure functions (server/config.ts) backing the port-keyed-localStorage fix:
 // sidebar/panel collapse, panel width, preview URL and notifications-on/off
 // are now server-owned (client-prefs.json) instead of living in localStorage,
-// which was silently reset every launch because electron/main.js hands the
-// renderer a fresh ephemeral port -- a fresh origin -- every time.
+// which was silently reset every launch because startServer in electron/server-process.js uses getFreePort
+// to allocate a fresh ephemeral port -- a fresh origin -- every time.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";

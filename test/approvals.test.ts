@@ -5,11 +5,12 @@ import { once } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join, resolve } from "node:path";
-import { createServer } from "node:net";
 import { WebSocket } from "ws";
 import { importWithTempDataRoot, newAppKey, keyedWsUrl, stopOwnedChild } from "./temp-root.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
+import { LIST_TIMEOUT_MS } from "../server/leader-common/types.ts";
+import { SERVER_START_MS, waitForServerStart } from "./server-start.ts";
 
 // leader.ts loads config.ts, which reads its data root once at import and sweeps leftover .seed-* folders in that root's config/. So it is loaded
 // on a fresh temp data root, never on the repo's own live config/; the root stays in force as the modules keep it for their whole life.
@@ -47,7 +48,7 @@ test("the hook asks when the SDK mode is default OR the tab is saved as Ask", as
   assert.deepEqual((await run(true, "acceptEdits", "Read")).asked, []);
 });
 
-test("real leader options and WS approval lifecycle", { timeout: 30000 }, async () => {
+test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS + LIST_TIMEOUT_MS + 30000 }, async () => {
   const temp = mkdtempSync(join(tmpdir(), "cc-approvals-"));
   const home = join(temp, "home"), data = join(temp, "data");
   mkdirSync(home); mkdirSync(join(data, "config"), { recursive: true });
@@ -57,10 +58,8 @@ test("real leader options and WS approval lifecycle", { timeout: 30000 }, async 
   const spare = { id: "approval-spare", name: "approval-spare", kind: "dev", process: "main", folder: temp, crew: getProcessDefinition("dev", "main").seats.map((s) => ({ slot: s.slotId, name: s.defaultName, cli: s.cli, model: s.model, effort: s.effort })) };
   writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "approval", name: "Approval", folder: temp, tabs }, { id: "approval-two", name: "Approval Two", folder: temp, tabs: [spare] }] }));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: {} }));
-  const probe = createServer(); probe.listen(0, "127.0.0.1"); await once(probe, "listening");
-  const port = (probe.address() as any).port; await new Promise<void>((ok) => probe.close(() => ok())); assert.notEqual(port, 4317);
   const key = newAppKey();
-  const child = spawn(process.execPath, [join(resolve("."), "server", "index.ts")], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: { ...process.env, HOME: home, USERPROFILE: home, CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: String(port), CC_APP_KEY: key, CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1", CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_CHAT_TIMEOUT_MS: "600", CC_TEST_SAVE_WRITE_DELAY_MS: "200" } });
+  const child = spawn(process.execPath, [join(resolve("."), "server", "index.ts")], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: { ...process.env, HOME: home, USERPROFILE: home, CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_APP_KEY: key, CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1", CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_CHAT_TIMEOUT_MS: "600", CC_TEST_SAVE_WRITE_DELAY_MS: "200" } });
   attachCrashCatcher(child.pid, "approvals");
   const ipc: any[] = [], messages: any[] = []; let socket: WebSocket | undefined; let log = "";
   child.on("message", (m) => ipc.push(m)); child.stdout!.on("data", (d) => { log += d; }); child.stderr!.on("data", (d) => { log += d; });
@@ -75,10 +74,14 @@ test("real leader options and WS approval lifecycle", { timeout: 30000 }, async 
   const chat = (requests: any[]) => socket!.send(JSON.stringify({ type: "chat", tabId, text: JSON.stringify(requests) }));
   const write = { tool: "Write", input: { file_path: "C:/work/file.ts", content: "hello" } };
   try {
-    await wait(() => log.includes("127.0.0.1"), "server start");
+    // CC_PORT=0: the OS picks the port at the server's own listen, so no other test can take it first.
+    const port = await waitForServerStart(child, () => log);
+    assert.notEqual(port, 4317, "the test server must never use the real app's port");
     // The mutation sweep's timeout cleanup finds a hung server by its command line, so that line must carry this run's own folder.
     if (process.platform === "win32") {
-      const line = spawnSync("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${child.pid}').CommandLine`], { encoding: "utf8", windowsHide: true, timeout: 20000 }).stdout;
+      const query = spawnSync("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter 'ProcessId=${child.pid}').CommandLine`], { encoding: "utf8", windowsHide: true, timeout: LIST_TIMEOUT_MS });
+      assert.equal(query.status, 0, `the command-line query did not complete: status=${query.status} error=${query.error?.message ?? "none"}`);
+      const line = query.stdout;
       assert.ok(line.includes(resolve(".")), `the server's command line must hold this run's folder ${resolve(".")}, got: ${line.trim()}`);
     }
     socket = new WebSocket(keyedWsUrl(`ws://127.0.0.1:${port}`, key), { origin: `http://127.0.0.1:${port}` }); socket.on("message", (raw) => messages.push(JSON.parse(String(raw)))); await once(socket, "open"); socket.send(JSON.stringify({ type: "hello" })); await wait(state, "initial state");

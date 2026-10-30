@@ -1,113 +1,53 @@
-import { readFileSync, existsSync, mkdirSync, mkdtempSync, linkSync, lstatSync, readdirSync, renameSync, rmSync, rmdirSync, statSync, unlinkSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
-import { resolveDataRoot } from "./data-root.ts";
-import { keepBadCopy, writeFileSynced } from "./safe-file.ts";
+import { readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { keepBadCopy } from "./safe-file.ts";
 import { discoverClaudeEffort, discoverOpencodeModels, discoverClaudeModels, type Discovered, type ClaudeModelInfo, type DiscoveredClaudeModels } from "./cli-discovery.ts";
-import { getProcessDefinition, type ProcessKind, type ProcessId } from "./process.ts";
+import { CLI_CAPS, KINDS, TEMPLATES, findTemplate, validateSetup, isSafeSeatId, isAcpCli, cliCaps, type ProcessKind, type Seat, type Setup, type Step } from "./process.ts";
+import { dataRoot, configDir, LEGACY_LEADER, workspacesPath, projectsPath, publishConfigFile, sweepSeedTemps, readJson, isSafeShape, isObject, validSlug, validText, liveFilesProtected, liveWritePath } from "./config-files.ts";
+import { migrateOldTabs, keepConfigBackups } from "./config-migrate.ts";
+import type { SavedSetup } from "./config-setups.ts";
+import { acpKindOf, type AcpCli } from "./config-acp.ts";
 
-const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const dataRoot = resolveDataRoot(process.env, repoRoot);
-const configDir = join(dataRoot, "config");
-export const workspacesPath = join(configDir, "workspaces.json");
-export const projectsPath = join(configDir, "projects.json");
-export const clientPrefsPath = join(configDir, "client-prefs.json");
-export const launchSafetyPath = join(configDir, "launch-safety.json");
-export const acpClisPath = join(configDir, "acp-clis.json");
+export { workspacesPath, projectsPath, clientPrefsPath, launchSafetyPath, acpClisPath, setupsPath } from "./config-files.ts";
+export * from "./config-acp.ts";
+export * from "./config-prefs.ts";
+export * from "./config-setups.ts";
+
 
 export type SeatKind = "claude" | "codex" | "opencode";
-// A leader CLI added from Settings by its start command (Agent Client Protocol): "acp:<id>". Leader seat only; its model and effort are always the CLI's own default.
+// A CLI added from Settings by its start command (Agent Client Protocol): "acp:<id>". It can sit on any seat; its model and effort are always the CLI's own default.
 export type AcpKind = `acp:${string}`;
 export const ACP_DEFAULT = "default";
-export const isAcpKind = (value: unknown): value is AcpKind => typeof value === "string" && value.length <= 40 && /^acp:[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
-export type CrewMember = { slot: string; name: string; cli: SeatKind | AcpKind; model: string; effort: string; pic?: string };
-export type WorkspaceAdvisor = { model: string };
+export const isAcpKind = (value: unknown): value is AcpKind => isAcpCli(value);
+export type CrewMember = Seat;
 export type WorkspaceTab = {
   id: string;
   name: string;
   kind: ProcessKind;
-  process: ProcessId;
   folder: string;
+  setupName: string;
   crew: CrewMember[];
-  advisor?: WorkspaceAdvisor;
+  lookPause: boolean;
+  steps: Step[];
 };
 export type WorkspaceProject = { id: string; name: string; folder: string; tabs: WorkspaceTab[] };
 export type Workspaces = { projects: WorkspaceProject[] };
 
-// Atomic publication means a racing server never observes a partial seed. A
-// hard link publishes without replacing a winner; ordinary preference writes
-// use an atomic same-volume rename.
-function publishConfigFile(contents: string | Buffer, dest: string, replace = false): boolean {
-  mkdirSync(dirname(dest), { recursive: true });
-  const temporaryDir = mkdtempSync(join(dirname(dest), ".seed-"));
-  const temporaryPath = join(temporaryDir, "config.json");
-  try {
-    writeFileSynced(temporaryPath, contents);
-    try {
-      if (replace) renameSync(temporaryPath, dest);
-      else linkSync(temporaryPath, dest);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (!replace && code === "EEXIST") {
-        if (!statSync(dest).isFile()) throw err;
-        return false;
-      }
-      throw new Error(`${replace ? "config write" : "config seeding"}: could not ${replace ? "write" : "publish"} "${dest}": ${(err as Error).message}`, { cause: err });
-    }
-    return true;
-  } finally {
-    try { rmSync(temporaryDir, { recursive: true, force: true }); } catch { /* the published file is already complete */ }
-  }
-}
 
-// A crash between mkdtemp and the final rename leaves a ".seed-XXXXXX" folder holding one config.json. Only such a folder,
-// a minute or more old (a racing server's live publish is younger), is removed: its one file, then the empty folder.
-function sweepSeedTemps(dir: string): void {
-  let names: string[];
-  try { names = readdirSync(dir); } catch { return; }
-  for (const name of names.filter((item) => /^\.seed-[A-Za-z0-9]{6}$/.test(item))) {
-    const folder = join(dir, name);
-    try {
-      const info = lstatSync(folder);
-      if (!info.isDirectory() || info.isSymbolicLink() || Date.now() - info.mtimeMs < 60_000) continue;
-      try { unlinkSync(join(folder, "config.json")); } catch { /* already gone */ }
-      rmdirSync(folder);
-    } catch { /* not ours to clean, or busy: leave it */ }
-  }
-}
-
-function readJson(path: string): unknown {
-  let raw: string;
-  try { raw = readFileSync(path, "utf8"); }
-  catch (err) { throw new Error(`config file missing or unreadable: ${path} (${(err as Error).message})`); }
-  try { return JSON.parse(raw); }
-  catch (err) { throw new Error(`config file is not valid JSON: ${path} (${(err as Error).message})`); }
-}
-
-const WINDOWS_RESERVED_CHARS = ["<", ">", ":", '"', "/", "\\", "|", "?", "*"];
-const LOG_TS_DIGITS = 13;
-const MAX_SEAT_ID_LENGTH = 255 - (1 + LOG_TS_DIGITS + ".brief.txt".length);
-
-export function isSafeSeatId(id: string): boolean {
-  if (id.trim().length === 0 || id.length > MAX_SEAT_ID_LENGTH) return false;
-  if (WINDOWS_RESERVED_CHARS.some((ch) => id.includes(ch))) return false;
-  for (let i = 0; i < id.length; i++) {
-    const code = id.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) return false;
-  }
-  return !id.endsWith(".") && !id.endsWith(" ");
-}
+export { isSafeSeatId };
 
 const FALLBACK_CLAUDE_MODELS: ClaudeModelInfo[] = [
   { value: "claude-opus-5-5[1m]", displayName: "Opus 5.5 (1M context)", supportsEffort: true },
+  { value: "claude-sonnet-5-5[1m]", displayName: "Sonnet 5.5 (1M context)", supportsEffort: true },
   { value: "claude-opus-5", displayName: "Opus", supportsEffort: true },
   { value: "claude-opus-5[1m]", displayName: "Opus (1M context)", supportsEffort: true },
   { value: "claude-fable-5-1[1m]", displayName: "Fable", supportsEffort: false },
+  { value: "claude-fable-5-1", displayName: "Fable 5.1", supportsEffort: false },
   { value: "sonnet", displayName: "Sonnet", supportsEffort: true },
   { value: "claude-haiku-4-5-20251001", displayName: "Haiku", supportsEffort: false },
 ];
 export let CLAUDE_MODEL_INFO: ClaudeModelInfo[] = [...FALLBACK_CLAUDE_MODELS];
-const CODEX_BASELINE_MODELS = ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra"];
+const CODEX_BASELINE_MODELS = ["gpt-6-luna", "gpt-6-sol", "gpt-6-astra", "gpt-6.1-sol"];
 export const MODEL_OPTIONS: Record<SeatKind, string[] | null> = {
   claude: FALLBACK_CLAUDE_MODELS.map((m) => m.value),
   codex: [...CODEX_BASELINE_MODELS],
@@ -125,8 +65,8 @@ export let OPENCODE_MODEL_SUGGESTIONS: string[] = [...OPENCODE_MODEL_SUGGESTIONS
 export type DiscoveryInfo = { claudeEffort: { fallback: boolean }; opencodeModels: { fallback: boolean }; claudeModels: { fallback: boolean } };
 export const discoveryInfo: DiscoveryInfo = { claudeEffort: { fallback: true }, opencodeModels: { fallback: true }, claudeModels: { fallback: true } };
 
-const OPENCODE_MODEL_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._/-]+$/;
-const CODEX_MODEL_PATTERN = /^gpt-[A-Za-z0-9][A-Za-z0-9._-]{0,95}$/;
+const OPENCODE_MODEL_PATTERN = new RegExp(CLI_CAPS.opencode.customModel!);
+const CODEX_MODEL_PATTERN = new RegExp(CLI_CAPS.codex.customModel!);
 // Values the file already holds. Discovery only completes after the server listens, so a saved model or effort is
 // adopted at boot (adoptSavedValues) and stays valid through every later refresh; only user input is checked against
 // the live list.
@@ -146,30 +86,53 @@ export function isValidModel(kind: SeatKind | AcpKind, model: string): boolean {
 export function isValidEffort(kind: SeatKind | AcpKind, effort: string): boolean { if (isAcpKind(kind)) return effort === ACP_DEFAULT; return isSafeShape(effort) && (EFFORT_OPTIONS[kind].includes(effort) || SAVED_EFFORTS[kind]?.has(effort) === true); }
 // The one load-time rule for a saved model or effort: it can never be dangerous in argv or a path. No list is
 // consulted. Letter or digit first (never a flag), a conservative charset, a length cap, and no ".." segment.
-const SAFE_SHAPE = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*$/;
-function isSafeShape(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 100 && SAFE_SHAPE.test(value) && !value.split("/").includes("..");
-}
 // What a seat gets when its CLI changes and its old effort does not exist there.
 export function defaultEffort(kind: SeatKind | AcpKind): string { if (isAcpKind(kind)) return ACP_DEFAULT; return EFFORT_OPTIONS[kind].includes("medium") ? "medium" : EFFORT_OPTIONS[kind][0]; }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function validSlug(value: unknown): value is string {
-  return typeof value === "string" && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value) && isSafeSeatId(value);
-}
-function validText(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 
-function defaultCrew(kind: ProcessKind, process: ProcessId): CrewMember[] {
-  const definition = getProcessDefinition(kind, process);
-  return definition.seats.map((seat) => ({
-    slot: seat.slotId,
-    name: seat.defaultName,
-    cli: seat.cli as SeatKind,
-    model: seat.model,
-    effort: seat.effort,
-  }));
+export type CliCap = { id: string; label: string; advisor: boolean; readOnlyEnforced: boolean; crewTools: boolean; customModel: string | null; installed: boolean | null; models: string[] | null; efforts: string[] };
+export type SetupTemplate = { id: string; name: string; kind: ProcessKind; desc: string; crew: CrewMember[]; lookPause: boolean; steps: Step[] };
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+// A mutable copy of a template (a visible one, or the hidden old Main Crew), ready to put on a tab.
+export function templateCopy(id: string): SetupTemplate {
+  const template = findTemplate(id);
+  if (!template) throw new Error(`unknown template: ${String(id)}`);
+  return clone(template) as SetupTemplate;
+}
+export function visibleTemplates(): SetupTemplate[] { return TEMPLATES.map((template) => templateCopy(template.id)); }
+export const DEFAULT_SETUP_ID = "our-process";
+
+// What the page shows for each CLI: the capability table (process.ts) plus whether it is installed and what it offers.
+export function buildClis(installed: (cli: SeatKind) => boolean | null, acp: AcpCli[]): CliCap[] {
+  const builtIn = (Object.keys(CLI_CAPS) as SeatKind[]).map((id): CliCap => ({ ...CLI_CAPS[id], installed: installed(id), models: MODEL_OPTIONS[id] ? [...MODEL_OPTIONS[id]!] : null, efforts: [...EFFORT_OPTIONS[id]] }));
+  const added = acp.map((cli): CliCap => ({ ...cliCaps(acpKindOf(cli))!, label: cli.name, installed: true, models: [ACP_DEFAULT], efforts: [ACP_DEFAULT] }));
+  return [...builtIn, ...added];
+}
+
+// The values a seat carries must be ones the CLI accepts. strict = a write: they must be in the live lists. A read only checks shape (see isSafeShape).
+export function validateSetupValues(setup: Setup, strict = true): void {
+  for (const seat of setup.crew) {
+    if (!(strict ? isValidModel(seat.cli, seat.model) && isValidEffort(seat.cli, seat.effort) : isSafeShape(seat.model) && isSafeShape(seat.effort))) throw new Error(`invalid model or effort for ${seat.slot}`);
+    if (seat.advisor !== undefined && !(strict ? isValidModel("claude", seat.advisor) : isSafeShape(seat.advisor))) throw new Error(`invalid advisor model for ${seat.slot}`);
+  }
+}
+
+
+// The values and pictures of every seat, with the messages a damaged file has always got.
+export function checkSeatValues(tabKey: string, crew: CrewMember[], strict: boolean, path: string): void {
+  for (const member of crew) {
+    if (!(strict ? isValidModel(member.cli, member.model) && isValidEffort(member.cli, member.effort) : isSafeShape(member.model) && isSafeShape(member.effort))) {
+      throw new Error(`config file malformed, invalid slot/model/effort for "${tabKey}.${member.slot}": ${path}`);
+    }
+    if (!isSafeSeatId(`${tabKey}.${member.slot}`)) throw new Error(`config file malformed, unsafe seat key "${tabKey}.${member.slot}": ${path}`);
+    if (member.pic !== undefined && (typeof member.pic !== "string" || member.pic.length > 512 || /[\u0000-\u001f\u007f]/.test(member.pic))) {
+      throw new Error(`config file malformed, invalid pic for "${tabKey}.${member.slot}": ${path}`);
+    }
+    if (member.advisor !== undefined && !(strict ? isValidModel("claude", member.advisor) : isSafeShape(member.advisor))) {
+      throw new Error(`config file malformed, invalid advisor for "${tabKey}.${member.slot}": ${path}`);
+    }
+  }
 }
 
 // strict = a write: values must be in the live lists. A read only checks shape (see isSafeShape).
@@ -190,31 +153,23 @@ function validateWorkspaces(data: unknown, path: string, strict = false): Worksp
       }
       if (tabIds.has(tab.id.toLowerCase())) throw new Error(`config file malformed, duplicate tab id "${tab.id}": ${path}`);
       tabIds.add(tab.id.toLowerCase());
-      let definition;
-      try { definition = getProcessDefinition(tab.kind as ProcessKind, tab.process as ProcessId); }
-      catch { throw new Error(`config file malformed, unknown kind/process "${String(tab.kind)}/${String(tab.process)}" in tab "${tab.id}": ${path}`); }
-      const expectedSlots = new Map(definition.seats.map((seat) => [seat.slotId, seat]));
-      if (tab.crew.length !== expectedSlots.size) throw new Error(`config file malformed, crew slot count does not match process for tab "${tab.id}": ${path}`);
-      const seenSlots = new Set<string>();
-      for (const member of tab.crew) {
-        if (!isObject(member) || typeof member.slot !== "string" || !expectedSlots.has(member.slot) || !validText(member.name) || !(["claude", "codex", "opencode"].includes(String(member.cli)) || (isAcpKind(member.cli) && expectedSlots.get(member.slot)!.isLeader)) || typeof member.model !== "string" || typeof member.effort !== "string") {
-          throw new Error(`config file malformed, invalid crew member in tab "${tab.id}": ${path}`);
-        }
-        if (seenSlots.has(member.slot) || !(strict ? isValidModel(member.cli as SeatKind, member.model) && isValidEffort(member.cli as SeatKind, member.effort) : isSafeShape(member.model) && isSafeShape(member.effort))) {
-          throw new Error(`config file malformed, invalid slot/model/effort for "${tab.id}.${member.slot}": ${path}`);
-        }
-        seenSlots.add(member.slot);
-        if (!isSafeSeatId(`${tab.id}.${member.slot}`)) throw new Error(`config file malformed, unsafe seat key "${tab.id}.${member.slot}": ${path}`);
-        if (member.pic !== undefined && (typeof member.pic !== "string" || member.pic.length > 512 || /[\u0000-\u001f\u007f]/.test(member.pic))) {
-          throw new Error(`config file malformed, invalid pic for "${tab.id}.${member.slot}": ${path}`);
-        }
-      }
-      if (tab.advisor !== undefined && (!isObject(tab.advisor) || typeof tab.advisor.model !== "string" || !(strict ? isValidModel("claude", tab.advisor.model) : isSafeShape(tab.advisor.model)))) {
-        throw new Error(`config file malformed, invalid advisor for tab "${tab.id}": ${path}`);
-      }
+      if (typeof tab.kind !== "string" || !Object.hasOwn(KINDS, tab.kind)) throw new Error(`config file malformed, unknown kind "${String(tab.kind)}" in tab "${tab.id}": ${path}`);
+      if (typeof tab.setupName !== "string" || tab.setupName.length > 80) throw new Error(`config file malformed, invalid setup name in tab "${tab.id}": ${path}`);
+      let setup: Setup;
+      try { setup = validateSetup({ crew: tab.crew, lookPause: tab.lookPause }); }
+      catch (err) { throw new Error(`config file malformed, invalid crew or steps in tab "${tab.id}" (${(err as Error).message}): ${path}`, { cause: err }); }
+      // The steps and the look switch are the crew's: whatever the file or the caller held is replaced by what the roles derive.
+      tab.steps = setup.steps; tab.lookPause = setup.lookPause;
+      checkSeatValues(tab.id, setup.crew, strict, path);
     }
   }
   return data as unknown as Workspaces;
+}
+
+// A new Development tab starts on Our process.
+function defaultTab(id: string, folder: string): WorkspaceTab {
+  const template = templateCopy(DEFAULT_SETUP_ID);
+  return { id, name: "Development", kind: template.kind, folder, setupName: template.name, crew: template.crew, lookPause: template.lookPause, steps: template.steps };
 }
 
 // A missing workspaces file is an upcast from projects.json only. Legacy
@@ -235,7 +190,7 @@ export function migrateWorkspaces(projectsFile: string, destination: string): bo
         id: entry.id,
         name: entry.name,
         folder: entry.dir,
-        tabs: [{ id: `${entry.id}-development`, name: "Development", kind: "dev", process: "main", folder: entry.dir, crew: defaultCrew("dev", "main") }],
+        tabs: [defaultTab(`${entry.id}-development`, entry.dir)],
       };
     }),
   };
@@ -246,18 +201,9 @@ export function migrateWorkspaces(projectsFile: string, destination: string): bo
 // A fresh install starts with one empty example project and tab, never the repo owner's own projects. Its folder is a
 // new empty one in the data root, so no seat starts with write access to a real project or the home folder.
 export function defaultWorkspaces(folder: string = join(dataRoot, "example-project")): Workspaces {
-  return { projects: [{ id: "example", name: "Example project", folder, tabs: [{ id: "example-development", name: "Development", kind: "dev", process: "main", folder, crew: defaultCrew("dev", "main") }] }] };
+  return { projects: [{ id: "example", name: "Example project", folder, tabs: [defaultTab("example-development", folder)] }] };
 }
 
-// Under node --test whenever the resolved data root is the repo itself (no CC_DATA_DIR, or one the resolver ignores), its live files must not be written.
-function liveFilesProtected(): boolean {
-  return !!process.env.NODE_TEST_CONTEXT && resolve(dataRoot).toLowerCase() === resolve(repoRoot).toLowerCase();
-}
-function liveWritePath(path: string | undefined, live: string): string {
-  if (path !== undefined) return path;
-  if (liveFilesProtected()) throw new Error(`refusing to write the live config file under a test, pass a temp path or set CC_DATA_DIR: ${live}`);
-  return live;
-}
 
 function publishDefaultWorkspaces(replace: boolean): void {
   const defaults = defaultWorkspaces();
@@ -283,8 +229,6 @@ function seedAndMigrate(): void {
 }
 seedAndMigrate();
 
-// The leader's earlier default name, still found in saved seats, pictures and launch notices. Split so the word never appears whole in the source.
-const LEGACY_LEADER = "boo" + "gie";
 
 // Old photo presets "avatars/<name>.jpg|png": the five that have a flat SVG move to it, every other one is
 // dropped so the seat falls back to its default picture. The leader's earlier preset (photo or flat) is now "atlas".
@@ -301,52 +245,15 @@ function migrateOldPresetPics(workspaces: Workspaces): Workspaces {
   }
   return workspaces;
 }
-export function readWorkspaces(path: string = workspacesPath): Workspaces { return migrateOldPresetPics(validateWorkspaces(readJson(path), path)); }
+export function readWorkspaces(path: string = workspacesPath): Workspaces { return migrateOldPresetPics(validateWorkspaces(migrateOldTabs(readJson(path), path), path)); }
 export function writeWorkspaces(workspaces: Workspaces, path?: string): void {
   const target = liveWritePath(path, workspacesPath);
   const validated = validateWorkspaces(workspaces, target, true);
+  keepConfigBackups(target);
   publishConfigFile(JSON.stringify(validated, null, 2) + "\n", target, true);
   if (target === workspacesPath) adoptSavedValues(validated);
 }
 
-// ---- ACP CLIs: leader CLIs the user added from Settings by their start command (config/acp-clis.json). No shell ever: the program is a bare name resolved on PATH, the arguments are a list of plain tokens. ----
-export type AcpCli = { id: string; name: string; program: string; args: string[]; lastModel?: string };
-export const ACP_MAX_CLIS = 12;
-const ACP_PROGRAM = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-const ACP_ARG = /^[A-Za-z0-9._:=/@+,-]{1,120}$/;
-export const acpIdFromName = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 30).replace(/-+$/, "");
-export const acpKindOf = (cli: AcpCli): AcpKind => `acp:${cli.id}`;
-export function validateAcpCli(value: unknown): AcpCli {
-  if (!isObject(value)) throw new Error("An ACP CLI needs a name and a start command");
-  const name = typeof value.name === "string" ? value.name.trim() : "";
-  if (!name || name.length > 40 || /[\u0000-\u001f\u007f<>]/.test(name)) throw new Error("The CLI name must be 1 to 40 characters, with no control characters or < >");
-  const id = acpIdFromName(name);
-  if (!id || (typeof value.id === "string" && value.id !== id)) throw new Error("The CLI name needs at least one letter or digit");
-  if (typeof value.program !== "string" || !ACP_PROGRAM.test(value.program)) throw new Error("The program must be a plain command name (like gemini), not a path or anything that needs a shell");
-  if (!Array.isArray(value.args) || value.args.length > 16 || !value.args.every((arg) => typeof arg === "string" && ACP_ARG.test(arg))) throw new Error("The arguments must be plain words (letters, digits and . _ : = / @ + , -), 16 at most");
-  const lastModel = typeof value.lastModel === "string" && /^[ -~]{1,100}$/.test(value.lastModel) ? value.lastModel : undefined;
-  return { id, name, program: value.program, args: [...value.args] as string[], ...(lastModel ? { lastModel } : {}) };
-}
-// "gemini --acp" -> { program: "gemini", args: ["--acp"] }. Quotes, pipes, redirects or variables are refused (there is no shell to run them).
-export function parseAcpStartCommand(text: unknown): { program: string; args: string[] } {
-  const words = typeof text === "string" ? text.trim().split(/\s+/).filter(Boolean) : [];
-  if (!words.length) throw new Error("The start command is required (for example: gemini --acp)");
-  return { program: words[0], args: words.slice(1) };
-}
-export function readAcpClis(path: string = acpClisPath): AcpCli[] {
-  let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (err) { if ((err as NodeJS.ErrnoException).code === "ENOENT") return []; throw new Error(`ACP CLI list is unreadable: ${path} (${(err as Error).message}); fix or delete it`); }
-  if (!isObject(raw) || !Array.isArray(raw.clis)) throw new Error(`ACP CLI list is malformed, expected { clis: [] }: ${path}`);
-  const list = raw.clis.map(validateAcpCli);
-  if (new Set(list.map((cli) => cli.id)).size !== list.length) throw new Error(`ACP CLI list has a duplicate name: ${path}`);
-  return list;
-}
-export function writeAcpClis(clis: AcpCli[], path?: string): void {
-  const checked = clis.map(validateAcpCli);
-  if (new Set(checked.map((cli) => cli.id)).size !== checked.length) throw new Error("that name is already used by another ACP CLI");
-  if (checked.length > ACP_MAX_CLIS) throw new Error(`at most ${ACP_MAX_CLIS} ACP CLIs`);
-  publishConfigFile(JSON.stringify({ clis: checked }, null, 2) + "\n", liveWritePath(path, acpClisPath), true);
-}
 
 // The saved sets always mirror the CURRENT workspace (never a union over time); each catalogue is its
 // discovery/baseline part plus the saved values.
@@ -356,21 +263,37 @@ const BASE: { claudeModels: ClaudeModelInfo[]; codexModels: string[]; opencodeMo
   opencodeModels: [...OPENCODE_MODEL_SUGGESTIONS_FALLBACK],
   efforts: { claude: [...EFFORT_OPTIONS.claude], codex: [...EFFORT_OPTIONS.codex], opencode: [...EFFORT_OPTIONS.opencode] },
 };
+// Every template's own models and efforts stay valid whatever a live list says: a new tab on a template must always be writable.
+function templateValues(): { models: Record<SeatKind, Set<string>>; efforts: Record<SeatKind, Set<string>> } {
+  const found = { models: { claude: new Set<string>(), codex: new Set<string>(), opencode: new Set<string>() }, efforts: { claude: new Set<string>(), codex: new Set<string>(), opencode: new Set<string>() } };
+  for (const template of TEMPLATES) for (const seat of template.crew) {
+    if (!isAcpKind(seat.cli)) { found.models[seat.cli].add(seat.model); found.efforts[seat.cli].add(seat.effort); }
+    if (seat.advisor) found.models.claude.add(seat.advisor);
+  }
+  return found;
+}
 function rebuildCatalogues(): void {
-  for (const kind of Object.keys(SAVED_EFFORTS) as SeatKind[]) EFFORT_OPTIONS[kind] = [...BASE.efforts[kind], ...[...SAVED_EFFORTS[kind]].filter((effort) => !BASE.efforts[kind].includes(effort))];
-  MODEL_OPTIONS.codex = [...BASE.codexModels, ...[...SAVED_MODELS.codex].filter((model) => !BASE.codexModels.includes(model))];
+  const fromTemplates = templateValues();
+  const models = (kind: SeatKind) => [...SAVED_MODELS[kind], ...fromTemplates.models[kind]];
+  for (const kind of Object.keys(SAVED_EFFORTS) as SeatKind[]) EFFORT_OPTIONS[kind] = [...BASE.efforts[kind], ...[...SAVED_EFFORTS[kind], ...fromTemplates.efforts[kind]].filter((effort, at, all) => !BASE.efforts[kind].includes(effort) && all.indexOf(effort) === at)];
+  MODEL_OPTIONS.codex = [...BASE.codexModels, ...models("codex").filter((model, at, all) => !BASE.codexModels.includes(model) && all.indexOf(model) === at)];
   OPENCODE_MODEL_SUGGESTIONS = [...BASE.opencodeModels, ...[...SAVED_MODELS.opencode].filter((model) => !BASE.opencodeModels.includes(model))];
-  CLAUDE_MODEL_INFO = mergeClaudeModelInfo(BASE.claudeModels, [...SAVED_MODELS.claude]);
+  CLAUDE_MODEL_INFO = mergeClaudeModelInfo(BASE.claudeModels, models("claude"));
   MODEL_OPTIONS.claude = CLAUDE_MODEL_INFO.map((item) => item.value);
 }
-export function adoptSavedValues(workspaces: Workspaces): void {
+// The saved setups (config/setups.json) as last read or written: their models stay valid like a tab's.
+let adoptedSetups: SavedSetup[] = [];
+export function adoptSavedValues(workspaces: Workspaces, setups: SavedSetup[] = adoptedSetups): void {
+  adoptedSetups = setups;
   for (const kind of Object.keys(SAVED_MODELS) as SeatKind[]) { SAVED_MODELS[kind].clear(); SAVED_EFFORTS[kind].clear(); }
-  for (const tab of workspaces.projects.flatMap((project) => project.tabs)) {
-    for (const seat of tab.crew) if (!isAcpKind(seat.cli)) { SAVED_MODELS[seat.cli].add(seat.model); SAVED_EFFORTS[seat.cli].add(seat.effort); }
-    if (tab.advisor) SAVED_MODELS.claude.add(tab.advisor.model);
+  const crews = [...workspaces.projects.flatMap((project) => project.tabs.map((tab) => tab.crew)), ...setups.map((setup) => setup.crew)];
+  for (const seat of crews.flat()) {
+    if (!isAcpKind(seat.cli)) { SAVED_MODELS[seat.cli].add(seat.model); SAVED_EFFORTS[seat.cli].add(seat.effort); }
+    if (seat.advisor) SAVED_MODELS.claude.add(seat.advisor);
   }
   rebuildCatalogues();
 }
+
 function mergeClaudeModelInfo(discovered: ClaudeModelInfo[], preserve: string[]): ClaudeModelInfo[] {
   const merged = [...discovered];
   for (const value of preserve) if (!merged.some((item) => item.value === value)) merged.push({ value, displayName: value, supportsEffort: true });
@@ -411,127 +334,3 @@ export async function refreshDiscovery(
 export const IMAGE_EXT_TO_MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };
 export const IMAGE_MIME_TO_EXT: Record<string, string> = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
 
-export type LaunchNotice = { type: "leaderLaunch"; id: number; seatId: string; seatName: string; brief: string; source: string; pending?: boolean; headsUp?: string };
-export type LaunchSafety = {
-  blocked: string[];
-  timestamps: number[];
-  notices: LaunchNotice[];
-  nextNoticeId: number;
-  released: { seatId: string; pid: number; runId?: string }[];
-  uncertain: { seatId: string; pid: number; runId?: string }[];
-  // Runs started and not yet seen to end. After a hard crash these are what nobody tracks any more: the next start blocks their seats.
-  live: { seatId: string; runId: string }[];
-};
-export function readLaunchSafety(path: string = launchSafetyPath): LaunchSafety {
-  let raw: any;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); }
-  catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: [], uncertain: [], live: [] };
-    throw new Error(`launch safety file is unreadable: ${path} (${(err as Error).message}); fix or delete it`, { cause: err });
-  }
-  // A file from an older version lacks the newer lists: those start empty. A list that is there but damaged is still refused.
-  // Its notices may carry the leader's earlier message type; they are read as the current one.
-  if (raw && Array.isArray(raw.notices)) for (const n of raw.notices) if (n && n.type === `${LEGACY_LEADER}Launch`) n.type = "leaderLaunch";
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    for (const key of ["timestamps", "notices", "released", "uncertain", "live"]) if (raw[key] === undefined) raw[key] = [];
-    if (raw.nextNoticeId === undefined && Array.isArray(raw.notices)) raw.nextNoticeId = 1 + Math.max(0, ...raw.notices.map((n: any) => (Number.isSafeInteger(n?.id) ? n.id : 0)));
-  }
-  const validPidRows = (rows: any) => Array.isArray(rows) && rows.every((item: any) => item && typeof item.seatId === "string" && isSafeSeatId(item.seatId) && Number.isSafeInteger(item.pid) && item.pid > 0 && (item.runId === undefined || (typeof item.runId === "string" && isSafeSeatId(item.runId))));
-  if (!raw || !Array.isArray(raw.blocked) || !raw.blocked.every((id: unknown) => typeof id === "string" && isSafeSeatId(id))
-    || !Array.isArray(raw.timestamps) || !raw.timestamps.every((n: unknown) => typeof n === "number" && Number.isFinite(n) && n >= 0)
-    || !Number.isSafeInteger(raw.nextNoticeId) || raw.nextNoticeId < 1
-    || !Array.isArray(raw.notices) || !raw.notices.every((n: LaunchNotice) => n && n.type === "leaderLaunch" && Number.isSafeInteger(n.id) && n.id > 0 && n.id < raw.nextNoticeId && typeof n.seatId === "string" && isSafeSeatId(n.seatId) && typeof n.seatName === "string" && typeof n.brief === "string" && typeof n.source === "string")
-    || !validPidRows(raw.released)) throw new Error(`invalid launch safety state in ${path}; refusing to reset the brakes (fix or delete the file to start with none)`);
-  if (!validPidRows(raw.uncertain)) throw new Error(`invalid unconfirmed process state in ${path}`);
-  if (!Array.isArray(raw.live) || !raw.live.every((item: any) => item && typeof item.seatId === "string" && isSafeSeatId(item.seatId) && typeof item.runId === "string" && isSafeSeatId(item.runId))) throw new Error(`invalid running-process state in ${path}`);
-  return raw;
-}
-export function writeLaunchSafety(state: LaunchSafety, path?: string): void { publishConfigFile(JSON.stringify(state, null, 2) + "\n", liveWritePath(path, launchSafetyPath), true); }
-
-export type ClientPrefs = {
-  sidebarCollapsed: boolean; notificationsEnabled: boolean; bellEnabled: boolean; bellVolume: number; previewUrl: string;
-  rightPanelCollapsed: boolean; rightPanelWidth: number;
-  theme: "light" | "dark" | "system"; avatar: string; dismissedRuns: string[];
-  crewRailOpen: boolean; detailsOpen: boolean;
-};
-export const DEFAULT_CLIENT_PREFS: ClientPrefs = {
-  sidebarCollapsed: false, notificationsEnabled: true, bellEnabled: false, bellVolume: 100, previewUrl: "http://localhost:8081",
-  rightPanelCollapsed: false, rightPanelWidth: 320,
-  theme: "light", avatar: "ash.svg", dismissedRuns: [],
-  crewRailOpen: true, detailsOpen: false,
-};
-// The app window opens on a new random port every launch, so the page cannot keep these in its own localStorage (a new port
-// is a new, empty one): the server keeps them, including whether the crew rail and the details panel are open. An uploaded picture is a data URL that rides in every state message, so it is
-// capped at 512 KiB (the picture dialog says so too); a preset is a short name.
-export const AVATAR_MAX_CHARS = 512 * 1024;
-// A tab keeps 50 finished runs (MAX_FINISHED_RUNS), so this holds every dismissal of 40 tabs; the page trims to the same number (public/app.js).
-export const DISMISSED_RUNS_MAX = 2000;
-function isTheme(value: unknown): value is ClientPrefs["theme"] { return value === "light" || value === "dark" || value === "system"; }
-// The completion sound's volume, a whole percent: 0 is silent, 100 is the bell at full level.
-function isBellVolume(value: unknown): value is number { return Number.isInteger(value) && (value as number) >= 0 && (value as number) <= 100; }
-function isAvatar(value: unknown): value is string {
-  return typeof value === "string" && (/^[a-z]+\.svg$/.test(value) || (/^data:image\//.test(value) && value.length <= AVATAR_MAX_CHARS));
-}
-function isDismissedRuns(value: unknown): value is string[] {
-  return Array.isArray(value) && value.length <= DISMISSED_RUNS_MAX && value.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200);
-}
-function isValidPreviewUrlValue(value: unknown): value is string {
-  if (typeof value !== "string" || value.trim() === "") return false;
-  try { const parsed = new URL(value.trim()); return parsed.protocol === "http:" || parsed.protocol === "https:"; }
-  catch { return false; }
-}
-export function readClientPrefs(path: string = clientPrefsPath): ClientPrefs {
-  let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch { return { ...DEFAULT_CLIENT_PREFS }; }
-  if (!isObject(raw)) return { ...DEFAULT_CLIENT_PREFS };
-  if (raw.avatar === `${LEGACY_LEADER}.svg`) raw.avatar = "atlas.svg"; // the leader's earlier preset name
-  return {
-    sidebarCollapsed: typeof raw.sidebarCollapsed === "boolean" ? raw.sidebarCollapsed : DEFAULT_CLIENT_PREFS.sidebarCollapsed,
-    notificationsEnabled: typeof raw.notificationsEnabled === "boolean" ? raw.notificationsEnabled : DEFAULT_CLIENT_PREFS.notificationsEnabled,
-    // The completion sound is its own switch (the top bar's sound button): it plays with desktop notices on or off.
-    bellEnabled: typeof raw.bellEnabled === "boolean" ? raw.bellEnabled : DEFAULT_CLIENT_PREFS.bellEnabled,
-    bellVolume: isBellVolume(raw.bellVolume) ? raw.bellVolume : DEFAULT_CLIENT_PREFS.bellVolume,
-    previewUrl: isValidPreviewUrlValue(raw.previewUrl) ? raw.previewUrl : DEFAULT_CLIENT_PREFS.previewUrl,
-    rightPanelCollapsed: typeof raw.rightPanelCollapsed === "boolean" ? raw.rightPanelCollapsed : DEFAULT_CLIENT_PREFS.rightPanelCollapsed,
-    rightPanelWidth: typeof raw.rightPanelWidth === "number" && Number.isFinite(raw.rightPanelWidth) && raw.rightPanelWidth > 0 ? raw.rightPanelWidth : DEFAULT_CLIENT_PREFS.rightPanelWidth,
-    theme: isTheme(raw.theme) ? raw.theme : DEFAULT_CLIENT_PREFS.theme,
-    avatar: isAvatar(raw.avatar) ? raw.avatar : DEFAULT_CLIENT_PREFS.avatar,
-    dismissedRuns: isDismissedRuns(raw.dismissedRuns) ? [...raw.dismissedRuns] : [],
-    crewRailOpen: typeof raw.crewRailOpen === "boolean" ? raw.crewRailOpen : DEFAULT_CLIENT_PREFS.crewRailOpen,
-    detailsOpen: typeof raw.detailsOpen === "boolean" ? raw.detailsOpen : DEFAULT_CLIENT_PREFS.detailsOpen,
-  };
-}
-export function writeClientPrefs(prefs: ClientPrefs, path?: string, onlyIfMissing = false): boolean {
-  return publishConfigFile(JSON.stringify(prefs, null, 2) + "\n", liveWritePath(path, clientPrefsPath), !onlyIfMissing);
-}
-export function applyClientPrefUpdate(prefs: ClientPrefs, key: unknown, value: unknown): { ok: true; prefs: ClientPrefs } | { ok: false; error: string } {
-  if (key === "sidebarCollapsed" || key === "rightPanelCollapsed" || key === "notificationsEnabled" || key === "bellEnabled" || key === "crewRailOpen" || key === "detailsOpen") {
-    if (typeof value !== "boolean") return { ok: false, error: `invalid value for client pref "${key}": expected boolean` };
-    return { ok: true, prefs: { ...prefs, [key]: value } };
-  }
-  if (key === "rightPanelWidth") {
-    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return { ok: false, error: `invalid value for client pref "${key}": expected a positive number` };
-    return { ok: true, prefs: { ...prefs, rightPanelWidth: value } };
-  }
-  if (key === "bellVolume") {
-    if (!isBellVolume(value)) return { ok: false, error: 'invalid value for client pref "bellVolume": expected a whole number from 0 to 100' };
-    return { ok: true, prefs: { ...prefs, bellVolume: value } };
-  }
-  if (key === "theme") {
-    if (!isTheme(value)) return { ok: false, error: 'invalid value for client pref "theme": expected light, dark or system' };
-    return { ok: true, prefs: { ...prefs, theme: value } };
-  }
-  if (key === "avatar") {
-    if (!isAvatar(value)) return { ok: false, error: typeof value === "string" && value.startsWith("data:image/") ? `That picture is too large to keep (limit ${AVATAR_MAX_CHARS / 1024} KB). Pick a smaller one.` : 'invalid value for client pref "avatar": expected a preset name or an image' };
-    return { ok: true, prefs: { ...prefs, avatar: value } };
-  }
-  if (key === "dismissedRuns") {
-    if (!isDismissedRuns(value)) return { ok: false, error: `invalid value for client pref "dismissedRuns": expected up to ${DISMISSED_RUNS_MAX} run ids` };
-    return { ok: true, prefs: { ...prefs, dismissedRuns: [...value] } };
-  }
-  if (key === "previewUrl") {
-    if (!isValidPreviewUrlValue(value)) return { ok: false, error: "invalid value for client pref \"previewUrl\": expected an http(s) URL" };
-    return { ok: true, prefs: { ...prefs, previewUrl: value } };
-  }
-  return { ok: false, error: `unknown client pref: ${String(key)}` };
-}

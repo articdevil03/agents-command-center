@@ -26,6 +26,8 @@ export type CodexLeaderDeps = {
   savedAsks?: () => boolean;
   spawnFn?: LeaderSpawn;
   startTimeoutMs?: number;
+  // The turn/start deadline alone (tests shorten it without shortening the start).
+  turnTimeoutMs?: number;
 };
 
 type Json = Record<string, any>;
@@ -286,7 +288,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
     threadId = started?.thread?.id ?? null;
     if (!threadId) throw new Error("Codex did not return a thread");
     cb.onSession?.(threadId);
-  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, "Codex did not start within 20 seconds");
+  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, `Codex did not start within ${LEADER_START_TIMEOUT_MS / 1000} seconds`);
   ready.catch((error: Error) => die(`Codex leader failed to start: ${error.message}`));
 
   const inputOf = (text: string, images: string[]): Json[] => [{ type: "text", text, text_elements: [] }, ...images.map((path) => ({ type: "localImage", path }))];
@@ -301,7 +303,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
       const started = await deadline(request("turn/start", {
         threadId, model, effort: seat.effort, approvalPolicy: policy.approvalPolicy, sandboxPolicy: policy.sandboxPolicy,
         input: inputOf(text, images),
-      }), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, "Codex did not answer the turn request");
+      }), deps.turnTimeoutMs ?? LEADER_START_TIMEOUT_MS, "Codex did not answer the turn request");
       if (!turnOpen || stopped || dead) return;
       if (typeof started?.turn?.id === "string" && started.turn.id) setTurnId(started.turn.id);
       else die("leader turn failed: Codex did not identify the turn");

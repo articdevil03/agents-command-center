@@ -1,0 +1,277 @@
+/* Command Center, simple look (approved mockup design/simple, 2026-10-10). Light and dark share one layout; only the tokens change. */
+/* Geist ships with the app (public/fonts, SIL OFL): nothing is fetched from Google at run time. */
+@font-face{font-family:"Geist";font-style:normal;font-weight:400;font-display:swap;src:url("/fonts/geist-latin-400-normal.woff2") format("woff2")}
+@font-face{font-family:"Geist";font-style:normal;font-weight:500;font-display:swap;src:url("/fonts/geist-latin-500-normal.woff2") format("woff2")}
+@font-face{font-family:"Geist";font-style:normal;font-weight:600;font-display:swap;src:url("/fonts/geist-latin-600-normal.woff2") format("woff2")}
+@font-face{font-family:"Geist";font-style:normal;font-weight:700;font-display:swap;src:url("/fonts/geist-latin-700-normal.woff2") format("woff2")}
+@font-face{font-family:"Geist Mono";font-style:normal;font-weight:400;font-display:swap;src:url("/fonts/geist-mono-latin-400-normal.woff2") format("woff2")}
+@font-face{font-family:"Geist Mono";font-style:normal;font-weight:500;font-display:swap;src:url("/fonts/geist-mono-latin-500-normal.woff2") format("woff2")}
+:root{--sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;--mono:"Geist Mono",ui-monospace,"Cascadia Code",Consolas,monospace;--ease:cubic-bezier(.4,0,.2,1);
+  --dialog-close-inset:20px;
+  --close-hv:#e5484d; /* the window Close button's hover, both themes: white on it is 4.6:1 */
+}
+body.light{
+  color-scheme:light;
+  --cv:#f0f0f0; --sf:#ffffff; --sf2:#f7f7f7; --tb:#f0f0f0; --hv:#e6e6e6; --hv-sf:#f5f5f5; --sel:#e0e0e0;
+  --line:#ebebeb; --line-3:#d4d4d4;
+  --text:#171717; --text-2:#5c5c5c; --text-3:#6b6b6b; --msg:#2b2b2b;
+  --accent:#1667d9; --working:#18c669; --waiting:#ffa100; --failed:#ef4444; --idle:#c7c7c7; --done:#2d90ff;
+  --working-text:#0f7a4a; --warn-text:#8a5600; --danger-text:#b42318; --count-text:#3d2600; --adv:#4b4fcf;
+  --card:0 1px 2px 0 #28282814,0 0 0 1px #ececec;
+  --panel:0 2px 4px 0 #23232308,0 1px 2px 0 #2323230a,0 0 0 1px #e9e5e2;
+  --lift:0 16px 40px -8px #1717171f,0 0 0 1px #e9e5e2;
+  --field:0 1px 2px #28282814,0 0 0 1px #e9e5e2;
+  --pri:linear-gradient(to bottom,#312f37,#18171c); --pri-hv:linear-gradient(to bottom,#3a3841,#201f25); --pri-fg:#ffffff; --pri-bd:#27262b;
+  --pri-sh:0 4px 4px -3px rgba(180,178,189,.8),0 2px 4px rgba(1,1,1,.12),inset 0 4px 4px #ffffff1f;
+  --danger-sh:0 1px 2px #28282814,0 0 0 1px #f4c7c3; --focus-glow:rgba(22,103,217,.12);
+  --t-green:#e4fcef; --t-orange:#fff4e0; --t-blue:#e0efff; --t-red:#fef0ef; --adv-soft:rgba(101,108,232,.08);
+  --term:#18171c; --toast:#18171c; --scrim:rgba(23,23,23,.22); --bubble:#f0f0f0; --logo-ink:#171717;
+}
+body:not(.light){
+  color-scheme:dark;
+  --cv:#0f0f11; --sf:#19191c; --sf2:#212125; --tb:#242428; --hv:#1f1f23; --hv-sf:#222226; --sel:#28282d;
+  --line:#2a2a2f; --line-3:#45454b;
+  --text:#ededef; --text-2:#b4b4ba; --text-3:#9b9ba2; --msg:#dcdce0;
+  --accent:#6aa8ff; --working:#2fd27f; --waiting:#ffb020; --failed:#f26b6b; --idle:#55555c; --done:#6aa8ff;
+  --working-text:#4ade94; --warn-text:#ffc35c; --danger-text:#ff8f8f; --count-text:#2a1a00; --adv:#a9acff;
+  --card:0 1px 2px 0 #00000066,0 0 0 1px #ffffff12;
+  --panel:0 2px 6px 0 #00000059,0 0 0 1px #ffffff14;
+  --lift:0 18px 44px -8px #000000b3,0 0 0 1px #ffffff1a;
+  --field:0 1px 2px #00000066,0 0 0 1px #ffffff17;
+  --pri:linear-gradient(to bottom,#fafafa,#e2e2e6); --pri-hv:linear-gradient(to bottom,#ffffff,#ececf0); --pri-fg:#141416; --pri-bd:#ffffff;
+  --pri-sh:0 4px 4px -3px rgba(0,0,0,.6),0 2px 4px rgba(0,0,0,.4),inset 0 -2px 3px #00000014;
+  --danger-sh:0 1px 2px #00000066,0 0 0 1px rgba(242,107,107,.38); --focus-glow:rgba(106,168,255,.18);
+  --t-green:rgba(47,210,127,.12); --t-orange:rgba(255,176,32,.12); --t-blue:rgba(106,168,255,.12); --t-red:rgba(242,107,107,.12); --adv-soft:rgba(169,172,255,.12);
+  --term:#0b0b0d; --toast:#2e2e33; --scrim:rgba(0,0,0,.5); --bubble:#26262b; --logo-ink:#ededef;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+/* Until the first state tells the theme the app is not painted, so a dark-theme launch never flashes the light look first (the window itself is dark meanwhile). */
+body.boot{background:#0a0a0c}
+body.boot #app{visibility:hidden}
+body{margin:0;background:var(--cv);color:var(--text);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:0}
+button:disabled{cursor:default}
+button[aria-disabled="true"]{cursor:default;opacity:.6}
+input,textarea,select{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+.modal:focus,.pop:focus,.apv:focus{outline:none}
+.apv:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.spacer{flex:1}
+.muted{color:var(--text-2)} .faint{color:var(--text-3)} .mono{font-family:var(--mono);font-size:12px}
+.lbl{font-size:12px;font-weight:500;color:var(--text-3)}
+svg{flex:none}
+.spin{display:inline-block;width:11px;height:11px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.lg{display:inline-grid;place-items:center;vertical-align:middle;flex:none}
+.lg svg{display:block}
+
+/* ---------- top bar: project tabs ---------- */
+#app{height:100%;display:grid;grid-template-rows:58px minmax(0,1fr)}
+/* The app window has no title bar: this bar drags it, and everything clickable on or over it is not a drag area. */
+#top{display:flex;align-items:flex-end;gap:8px;padding:0 14px 0 18px;position:relative;z-index:3;min-width:0;-webkit-app-region:drag}
+#top :is(button,input,a,[role=tab]),#ptabs,.pop,.modal,.scrim,.toast,#undo,#conn,#winBtns{-webkit-app-region:no-drag}
+#top > .c{align-self:center}
+.mark{width:30px;height:30px;display:block;flex:none}
+#ptabs{display:flex;align-items:flex-end;gap:2px;min-width:0;margin:0 0 -2px 8px;padding:0 14px;align-self:stretch;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+#ptabs::-webkit-scrollbar{display:none}
+/* A project tab is a wrapper holding the tab and, beside it (never inside a role=tab), its ⋯ button laid over the tab's right end. */
+.ptabw{position:relative;flex:0 1 auto;min-width:64px;max-width:240px;display:grid;grid-template-columns:minmax(0,1fr);height:36px;margin-bottom:10px}
+.ptabw.sel{height:48px;margin-bottom:0;max-width:300px;z-index:2}
+.ptab{position:relative;min-width:0;display:flex;align-items:center;gap:8px;padding:0 14px;border-radius:10px;color:var(--text-2);font-weight:500;font-size:14px;white-space:nowrap;cursor:pointer;transition:background .15s var(--ease),color .15s}
+.ptabw:not(.sel):hover>.ptab{background:var(--hv);color:var(--text)}
+.ptab .pn{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pdot{width:7px;height:7px;border-radius:50%;background:var(--waiting);flex:none;box-shadow:0 0 0 3px rgba(255,161,0,.18)}
+.pdot.bad{background:var(--failed);box-shadow:0 0 0 3px rgba(239,68,68,.18)}
+.pdot.unread{background:var(--accent);box-shadow:0 0 0 3px var(--focus-glow)}
+.ptab[aria-selected="true"]{padding:0 42px 2px 18px;background:var(--sf);color:var(--text);font-weight:600;border-radius:14px 14px 0 0;cursor:default}
+.ptab[aria-selected="true"]::before,.ptab[aria-selected="true"]::after{content:"";position:absolute;bottom:2px;width:14px;height:14px;pointer-events:none}
+.ptab[aria-selected="true"]::before{left:-14px;background:radial-gradient(circle at 0 0,transparent 13.5px,var(--sf) 14px)}
+.ptab[aria-selected="true"]::after{right:-14px;background:radial-gradient(circle at 100% 0,transparent 13.5px,var(--sf) 14px)}
+.dots{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;color:var(--text-3);flex:none}
+.dots:hover{background:var(--hv-sf);color:var(--text)}
+#addProj,#pmore{width:32px;height:32px;margin:0 0 10px 0;border-radius:10px;display:grid;place-items:center;color:var(--text-3);flex:none}
+#addProj:hover,#pmore:hover{background:var(--hv);color:var(--text)}
+.ibtn{height:36px;min-width:36px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:0 10px;background:var(--sf);box-shadow:var(--card);color:var(--text-2);flex:none;font-weight:500;font-size:13.5px;white-space:nowrap}
+.ibtn:hover{background:var(--hv-sf);color:var(--text)}
+.ibtn.ico{padding:0}
+.themetg{display:flex;gap:2px;padding:3px;border-radius:11px;background:var(--sf);box-shadow:var(--card);flex:none}
+.themetg button{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:var(--text-3)}
+.themetg button:hover{color:var(--text)}
+.themetg button[aria-checked="true"]{background:var(--tb);color:var(--text)}
+body:not(.light) .themetg button[aria-checked="true"]{background:var(--sel)}
+/* the speaker shows muted when the sound is off or its volume is 0 */
+#soundBtn[data-muted="false"] .snd-off,#soundBtn[data-muted="true"] .snd-on{display:none}
+#soundBtn[data-muted="true"]:not(:hover):not([aria-expanded="true"]){color:var(--text-3)}
+#soundBtn[aria-expanded="true"]{background:var(--hv-sf);color:var(--text)}
+#inboxBtn.has{background:var(--t-orange);box-shadow:none;color:var(--warn-text)}
+#inboxBtn.bad{background:var(--t-red);box-shadow:none;color:var(--danger-text)}
+#inboxBtn .n{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--waiting);color:var(--count-text);font-size:11.5px;font-weight:700;display:grid;place-items:center}
+#inboxBtn.bad .n{background:var(--failed);color:#fff}
+.me{width:36px;height:36px;border-radius:10px;overflow:hidden;box-shadow:var(--card);flex:none;background:var(--sf)}
+.me img{width:100%;height:100%;object-fit:cover;display:block}
+/* The app window's own minimize, maximize/restore and close buttons: the settings button's family, set a little apart from the avatar. */
+.winbtns{display:flex;gap:6px;margin-left:8px;flex:none}
+#winMax[data-maximized="true"] .wmax,#winMax:not([data-maximized="true"]) .wrestore{display:none}
+#winClose:hover{background:var(--close-hv);box-shadow:none;color:#fff}
+#conn{position:fixed;top:68px;left:50%;transform:translateX(-50%);z-index:30;padding:8px 14px;border-radius:12px;background:var(--sf);color:var(--warn-text);font-size:13px;font-weight:500;display:flex;gap:10px;align-items:center;box-shadow:var(--lift);white-space:nowrap}
+#conn.off{color:var(--danger-text)}
+#conn button{font-weight:600;text-decoration:underline}
+
+/* ---------- the project panel ---------- */
+#main{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;padding:0 8px 8px;min-height:0;min-width:0;position:relative}
+#main.side{grid-template-columns:minmax(0,1fr) var(--sidew,320px)}
+#stage{position:relative;z-index:1;background:var(--sf);border-radius:20px;box-shadow:var(--panel);display:grid;grid-template-columns:60px minmax(0,1fr);min-height:0;min-width:0;transition:grid-template-columns .22s var(--ease)}
+#stage.wide{grid-template-columns:224px minmax(0,1fr)}
+.col{display:flex;flex-direction:column;min-height:0;min-width:0}
+.shead{display:flex;align-items:center;gap:10px;padding:14px 16px 12px 18px;min-width:0}
+/* many tabs: the strip scrolls sideways and each name keeps an ellipsis and a full-name title */
+.seg{display:flex;gap:2px;padding:3px;background:var(--tb);border-radius:11px;min-width:0;flex:0 1 auto;overflow-x:auto;scrollbar-width:none}
+.seg::-webkit-scrollbar{display:none}
+.tabw{position:relative;display:grid;grid-template-columns:minmax(0,1fr);height:32px;min-width:0;max-width:220px;flex:none}
+.tab{display:flex;align-items:center;gap:7px;padding:0 13px;border-radius:8px;color:var(--text-2);font-weight:500;font-size:13.5px;white-space:nowrap;cursor:pointer;min-width:0;transition:background .15s,color .15s}
+.tab .tl{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.tabw:hover>.tab{color:var(--text)}
+.tab[aria-selected="true"]{background:var(--sf);color:var(--text);box-shadow:var(--card);padding-right:34px}
+/* The ⋯ button sits beside its tab, laid over the tab's right end: shown on the open tab, and on a background tab only on hover or focus, so tabs never change width. */
+.tabw>.dots,.ptabw>.dots{position:absolute}
+.tabw>.dots{width:22px;height:22px;opacity:.55;right:5px;top:50%;transform:translateY(-50%)}
+.ptabw>.dots{right:10px;top:calc(50% - 1px);transform:translateY(-50%)}
+.tabw:not(.sel)>.dots,.ptabw:not(.sel)>.dots{right:4px;opacity:0;pointer-events:none;background:var(--hv-sf);transition:opacity .12s}
+.ptabw:not(.sel)>.dots{top:calc(50% - 5px)}
+.tabw:not(.sel):hover>.dots,.ptabw:not(.sel):hover>.dots,.tabw:not(.sel)>.dots:focus-visible,.ptabw:not(.sel)>.dots:focus-visible{opacity:1;pointer-events:auto}
+.tabw>.dots:hover{opacity:1}
+.mini{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--text-3);flex:none}
+.mini:hover{background:var(--hv-sf);color:var(--text)}
+.mini:disabled{opacity:.4}
+
+/* crew rail: one face per seat down the left edge, leader first. Closed (60px) = faces; open (224px) adds name, role and status */
+.rail{display:flex;flex-direction:column;align-items:center;gap:8px;min-height:0;min-width:0;overflow:hidden;padding:17px 0 12px;border-right:1px solid var(--line)}
+.rhead{display:flex;align-items:center;width:100%;padding:0 14px;flex:none;min-width:0}
+.rhead .rl{flex:1;min-width:0;margin-left:-4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;font-weight:600;color:var(--text-3);opacity:0;transition:opacity .15s;display:flex;gap:6px;align-items:center}
+.rflag{font-size:11px;font-weight:600;padding:2px 6px;border-radius:6px;background:var(--t-orange);color:var(--warn-text)}
+.rtg{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:var(--text-3);flex:none}
+.rtg:hover{background:var(--hv-sf);color:var(--text)}
+.rtg svg{transition:transform .22s var(--ease)}
+#stage.wide .rtg svg{transform:rotate(180deg)}
+#stage.wide .rhead .rl{opacity:1}
+#stage:not(.wide) .rhead{justify-content:center;padding:0}
+#stage:not(.wide) .rhead .rl{display:none}
+.crewsw{display:flex;align-items:center;gap:9px;width:calc(100% - 20px);height:34px;padding:0 9px 0 11px;border-radius:10px;background:var(--sf);box-shadow:var(--card);color:var(--text-2);flex:none;overflow:hidden;white-space:nowrap;text-align:left;transition:background .15s}
+.crewsw:hover,.crewsw[aria-expanded="true"]{background:var(--hv-sf);color:var(--text)}
+.crewsw .cn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:13px;font-weight:600;color:var(--text)}
+.crewsw .cn,.crewsw .cv{opacity:0;transition:opacity .12s}
+#stage.wide .crewsw .cn,#stage.wide .crewsw .cv{opacity:1;transition-delay:.08s}
+#stage:not(.wide) .crewsw .cn,#stage:not(.wide) .crewsw .cv{display:none}
+.crewsw .cv svg{display:block;transition:transform .2s var(--ease)}
+.crewsw[aria-expanded="true"] .cv svg{transform:rotate(180deg)}
+.crew{display:flex;flex-direction:column;align-items:stretch;gap:4px;flex:0 1 auto;min-height:0;width:100%;overflow-y:auto;overflow-x:hidden;padding:3px 0 4px;scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+.csep{height:1px;background:var(--line-3);flex:none;margin:5px 19px}
+.seat{position:relative;display:flex;align-items:center;gap:10px;margin:0 6px;padding:4px;border-radius:14px;flex:none;text-align:left;min-width:0;transition:transform .15s var(--ease),background .15s}
+.av:focus-visible,.fx:focus-visible{outline-offset:2px;border-radius:14px}
+.av{position:relative;width:40px;height:40px;flex:none;display:block;border-radius:12px}
+.av img{width:40px;height:40px;border-radius:12px;display:block;object-fit:cover;transition:box-shadow .15s}
+.seat:hover .av img{box-shadow:0 0 0 2px var(--line-3)}
+.seat.on .av img{box-shadow:0 0 0 2px var(--text)}
+.seat:active{transform:scale(.96)}
+/* the text track: a minmax(0,1fr) column so a long name or role shrinks to its ellipsis instead of widening the row */
+.fx{display:grid;grid-template-columns:minmax(0,1fr);flex:1;min-width:0;text-align:left;line-height:1.25;opacity:0;visibility:hidden;transition:opacity .12s,visibility .12s}
+.fx .fn{font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fx .fr{font-size:12px;color:var(--text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fx .sl{font-size:12px;color:var(--text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fx .sl.working{color:var(--working-text)} .fx .sl.waiting,.fx .sl.stalled{color:var(--warn-text)} .fx .sl.stopped,.fx .sl.failed{color:var(--danger-text)}
+#stage.wide .fx{opacity:1;visibility:visible;transition-delay:.08s}
+#stage:not(.wide) .fx{display:none}
+#stage.wide .seat:active{transform:scale(.98)}
+#stage.wide .seat:hover{background:var(--hv-sf)}
+#stage.wide .seat:hover .av img{box-shadow:none}
+#stage.wide .seat.on{background:var(--tb)}
+/* status dot: colour plus a shape, so the closed rail never relies on colour alone */
+.dot{position:absolute;right:-4px;bottom:-4px;width:16px;height:16px;border-radius:50%;border:2.5px solid var(--sf);background:var(--sf);box-shadow:inset 0 0 0 2px var(--text-3),0 0 0 1px var(--line-3);display:grid;place-items:center;font-size:8.5px;font-weight:800;line-height:1;font-style:normal;color:#fff}
+.dot.working{background:var(--working-text);box-shadow:0 0 0 1px var(--line-3);animation:breathe 2.4s ease-in-out infinite}
+.dot.waiting,.dot.stalled{background:var(--waiting);color:var(--count-text);box-shadow:0 0 0 1px var(--line-3)}
+.dot.done{background:var(--done);box-shadow:0 0 0 1px var(--line-3)}
+.dot.stopped,.dot.failed{background:var(--failed);box-shadow:0 0 0 1px var(--line-3)}
+.dot.waiting::after,.dot.stalled::after{content:"!"} .dot.done::after{content:"✓"} .dot.failed::after{content:"!"} .dot.stopped::after{content:"";width:5px;height:5px;border-radius:1px;background:#fff}
+@keyframes breathe{50%{box-shadow:0 0 0 4px rgba(24,198,105,.25)}}
+.seat .cnt{position:absolute;top:-6px;right:-7px;min-width:18px;height:18px;padding:0 4px;border-radius:9px;background:var(--working);color:#06281a;font-size:10.5px;font-weight:700;display:grid;place-items:center;border:2px solid var(--sf)}
+/* the leader badge shows whatever picture the seat wears, except a picture that already wears a crown */
+.seat .crown{position:absolute;top:-6px;left:-6px;width:17px;height:17px;border-radius:6px;background:var(--sf);box-shadow:var(--card);display:grid;place-items:center;color:#a87300}
+.seat.work{--k:var(--c,var(--working))}
+body.light .seat.work{--k:color-mix(in oklab,var(--c,var(--working)) 78%,#000)}
+.seat.need{--k:var(--waiting)}
+.seat.work .dot,.av.big .dot{animation:none}
+.pl{position:absolute;left:54px;right:10px;bottom:1px;height:2px;border-radius:2px;overflow:hidden;background:color-mix(in srgb,var(--k) 16%,transparent);opacity:0;visibility:hidden;transition:opacity .12s,visibility .12s;pointer-events:none}
+#stage.wide .pl{opacity:1;visibility:visible;transition-delay:.08s}
+.pl::before{content:"";position:absolute;top:0;bottom:0;left:0;width:40%;border-radius:2px;background:linear-gradient(90deg,transparent,var(--k),transparent);transform:translateX(-100%);animation:sweep 2s var(--ease) infinite}
+.seat.need .pl::before{width:100%;background:var(--k);transform:none;animation:needs 2.4s ease-in-out infinite}
+.av::before{content:"";position:absolute;inset:-4px;border-radius:15px;box-shadow:0 0 0 2px var(--k),0 0 12px var(--k);opacity:0;pointer-events:none}
+#stage:not(.wide) .seat.work .av::before{animation:ring 2s ease-in-out infinite}
+#stage:not(.wide) .seat.need .av::before{animation:ring 2.4s ease-in-out infinite}
+@keyframes sweep{to{transform:translateX(280%)}}
+@keyframes needs{0%,100%{opacity:.3}50%{opacity:1}}
+@keyframes ring{0%,100%{opacity:.15;transform:scale(.97)}50%{opacity:.7;transform:scale(1.03)}}
+/* the rail scrolls, so the hover name is one fixed tooltip placed by JS instead of a clipped ::after */
+.tip{position:fixed;z-index:75;transform:translate(-4px,-50%);background:var(--toast);color:#fff;font-size:12px;font-weight:500;line-height:1.35;padding:6px 9px;border-radius:8px;white-space:pre;opacity:0;pointer-events:none;transition:opacity .12s,transform .12s}
+.tip.on{opacity:1;transform:translate(0,-50%);transition-delay:.15s}
+.stopall{width:calc(100% - 12px);padding:7px 0 6px;border-radius:10px;display:flex;flex-direction:column;align-items:center;gap:5px;color:var(--danger-text);background:var(--t-red);font-size:11px;font-weight:600;line-height:1.1;text-align:center;flex:none;margin-top:auto;transition:box-shadow .15s}
+.stopall i{width:9px;height:9px;border-radius:2px;background:currentColor}
+.stopall:hover:not(:disabled){box-shadow:var(--danger-sh)}
+.stopall:disabled{color:var(--text-3);background:var(--tb)}
+#stage.wide .stopall{flex-direction:row;justify-content:center;gap:8px;height:39px;padding:0;font-size:12.5px}
+.soft{height:32px;padding:0 11px;border-radius:9px;display:inline-flex;align-items:center;gap:7px;background:var(--sf);box-shadow:var(--card);color:var(--text-2);font-size:13px;font-weight:500;white-space:nowrap;flex:none;position:relative;transition:background .15s}
+.soft:hover:not(:disabled){background:var(--hv-sf);color:var(--text)}
+.soft:disabled{opacity:.6}
+.soft[aria-pressed="true"],.soft[aria-expanded="true"]{background:var(--tb);box-shadow:none;color:var(--text)}
+.soft.ico{width:32px;padding:0;justify-content:center}
+.soft .udot{position:absolute;top:-2px;right:-2px;width:9px;height:9px;border-radius:50%;background:var(--waiting);border:2px solid var(--sf)}
+
+/* status line */
+.sline{display:flex;align-items:center;gap:10px;padding:0 16px 12px 18px;min-width:0;border-bottom:1px solid var(--line)}
+#statusBtn{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto;border-radius:10px;padding:2px 8px 2px 2px;text-align:left;overflow:hidden}
+.pill{position:relative;overflow:hidden;display:inline-flex;align-items:center;gap:8px;height:30px;padding:0 12px;border-radius:9px;font-weight:600;font-size:13.5px;white-space:nowrap;flex:0 1 auto;min-width:0;background:var(--tb);max-width:520px}
+.pill.work::after,.vstat.working::after{content:"";position:absolute;left:0;bottom:0;width:36%;height:2px;border-radius:2px;background:linear-gradient(90deg,transparent,currentColor,transparent);opacity:.7;transform:translateX(-100%);animation:sweep 2s var(--ease) infinite}
+.pill.wait::after{content:"";position:absolute;left:10px;right:10px;bottom:0;height:2px;border-radius:2px;background:var(--waiting);animation:needs 2.4s ease-in-out infinite}
+.pill .pt{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pill i{width:8px;height:8px;border-radius:50%;background:var(--idle);flex:none}
+.pill.wait{background:var(--t-orange);color:var(--warn-text)} .pill.wait i{background:var(--waiting)}
+.pill.work{background:var(--t-green);color:var(--working-text)} .pill.work i{background:var(--working)}
+.pill.bad{background:var(--t-red);color:var(--danger-text)} .pill.bad i{background:var(--failed)}
+.pill.idle,.pill.off{color:var(--text-2)}
+#statusBtn .sub{color:var(--text-2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#statusBtn .stepn{color:var(--text-2);font-size:12.5px;font-weight:500;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;flex:none;height:26px;padding:0 9px;border-radius:8px;background:var(--tb)}
+#statusBtn:hover .stepn{color:var(--text)}
+#statusBtn .stepn svg{transition:transform .2s var(--ease)}
+#statusBtn[aria-expanded="true"] .stepn svg{transform:rotate(180deg)}
+.savest{font-size:12.5px;color:var(--text-3);white-space:nowrap;display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;flex:none;max-width:200px}
+.savest .spin{display:inline-block;margin-right:6px;vertical-align:-2px}
+.savest.warn{color:var(--warn-text)} .savest.bad{color:var(--danger-text)}
+.stepsWrap{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s var(--ease);border-bottom:1px solid transparent}
+.stepsWrap.on{grid-template-rows:1fr;border-bottom-color:var(--line)}
+.stepsWrap > div{overflow:hidden;min-height:0}
+.steps{display:flex;align-items:center;flex-wrap:wrap;row-gap:8px;padding:12px 18px}
+.step{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--text-3);padding:4px 10px 4px 5px;border-radius:999px;white-space:nowrap;max-width:100%;min-width:0}
+.step .sx{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.step .n{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--tb);color:var(--text-3);font-size:11px;font-weight:600;flex:none}
+.step.done{color:var(--text-2)} .step.done .n{background:var(--t-green);color:var(--working-text)}
+.step.now{color:var(--text);background:var(--t-orange);font-weight:500} .step.now .n{background:var(--waiting);color:var(--count-text)}
+.step.now.go{background:var(--t-green)} .step.now.go .n{background:var(--working);color:#06281a}
+.step.now.stop{background:var(--t-red)} .step.now.stop .n{background:var(--failed);color:#fff}
+.step.hot .n{box-shadow:0 0 0 2px var(--failed)}
+.link{width:12px;height:1px;background:var(--line-3);margin:0 3px;flex:none}
+.who{display:inline-flex;margin-left:2px;flex:none}
+.who img,.who .you{width:18px;height:18px;border-radius:6px;margin-left:-4px;box-shadow:0 0 0 2px var(--sf);object-fit:cover}
+.who img:first-child,.who .you:first-child{margin-left:0}
+.who .you{background:var(--text);color:var(--sf);display:grid;place-items:center;font-size:9.5px;font-weight:700}
+.stepacts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 18px 12px;font-size:13px}
+.stepacts:empty{display:none}
+.stepacts .lbl{margin-right:2px}
+.makers{display:inline-flex;gap:2px;padding:3px;background:var(--tb);border-radius:10px}
+.makers button{padding:4px 10px;border-radius:7px;font-size:12.5px;color:var(--text-2)}
+.makers button[aria-checked="true"]{background:var(--sf);color:var(--text);box-shadow:var(--card)}
+.rounds{display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 10px}
+.rounds:empty{display:none}
+.rounds span{font-size:12px;padding:3px 8px;border-radius:7px;background:var(--tb);color:var(--text-2)}
+.stepnote{padding:0 18px 12px;font-size:12.5px;color:var(--text-3)}
+

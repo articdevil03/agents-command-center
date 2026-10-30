@@ -142,3 +142,72 @@ test("launch_seat refuses a brief over the cap through the real argument validat
   assert.match(over.text, /invalid arguments for launch_seat: brief:/);
   assert.equal(calls.length, 1, "nothing was launched");
 });
+
+test("get_crew_status names each seat's role, advisor, write permission and whether it runs the process, and lists the steps with their owners", async () => {
+  const steps = [
+    { id: "brief", label: "Brief", type: "work", owners: ["planner"] },
+    { id: "review", label: "Review", type: "rounds", pairs: [{ reviewer: "reviewer1", fixers: ["coder"] }] },
+  ];
+  const d = deps({
+    crew: () => [seat("planner", { role: "Planner", cli: "claude", advisor: "claude-fable-5-1", canWrite: false, orchestrates: true }), seat("coder", { role: "Coder", canWrite: true })],
+    steps: () => steps,
+  });
+  const status = JSON.parse((await findTool(buildLeaderToolDefs(d), "get_crew_status").handler({}, {})).content[0].text);
+  assert.deepEqual(status.crew.map((item: any) => [item.slot, item.role, item.advisor, item.canWrite, item.orchestrates]), [["planner", "Planner", "claude-fable-5-1", false, true], ["coder", "Coder", null, true, false]]);
+  assert.deepEqual(status.steps, steps);
+  const description = findTool(buildLeaderToolDefs(d), "get_crew_status").description;
+  assert.match(description, /Each step names its owner seat; hand a step's work to its owner/);
+  const none = JSON.parse((await findTool(buildLeaderToolDefs(deps()), "get_crew_status").handler({}, {})).content[0].text);
+  assert.deepEqual(none.steps, [], "a caller with no steps gets an empty list, never a crash");
+});
+
+test("runnable depends on who asks: never yourself, never the leader, and only the one seat a talk-only leader may launch", async () => {
+  const crewOf = () => [seat("leader"), seat("planner"), seat("coder")];
+  const slots = async (over: object) => JSON.parse((await findTool(buildLeaderToolDefs(deps({ crew: crewOf, ...over })), "get_crew_status").handler({}, {})).content[0].text).crew.filter((item: any) => item.runnable).map((item: any) => item.slot);
+  assert.deepEqual(await slots({}), ["planner", "coder"], "the leader's view");
+  assert.deepEqual(await slots({ callerSlot: "planner" }), ["coder"], "a seat is not runnable by itself");
+  assert.deepEqual(await slots({ onlyLaunchable: () => "planner" }), ["planner"], "a leader beside a planner that runs the process");
+  assert.deepEqual(await slots({ onlyLaunchable: () => undefined }), ["planner", "coder"]);
+  assert.deepEqual(await slots({ callerSlot: "planner", leaderTakesJobs: true }), ["leader", "coder"], "the seat that runs the process may hand a job to the leader");
+});
+
+test("get_crew_status carries where the process stands, and launch_seat names the run it started", async () => {
+  const view = { stepId: "build", stepLabel: "Build", stepType: "work", phase: "review", round: 1, look: "not reached", orchestrator: "planner" };
+  const d = deps({ processView: () => view, launch: () => ({ ok: true, runId: "run-123" }) });
+  const status = JSON.parse((await findTool(buildLeaderToolDefs(d), "get_crew_status").handler({}, {})).content[0].text);
+  assert.deepEqual(status.process, view);
+  assert.equal(JSON.parse((await findTool(buildLeaderToolDefs(deps()), "get_crew_status").handler({}, {})).content[0].text).process, null);
+  const launched = await findTool(buildLeaderToolDefs(d), "launch_seat").handler({ slot: "coder", brief: "x" }, {});
+  assert.equal(launched.content[0].text, 'launched "alpha-development.coder" as run run-123');
+});
+
+test("the step tools and wait_for_runs exist only when the server hands them in, and keep their caps", async () => {
+  const { buildLeaderToolSpecs, runLeaderTool, WAIT_MAX_RUNS, WAIT_MAX_SECONDS } = await import("../server/leader-tools.ts");
+  const names = (over: object) => buildLeaderToolSpecs(deps(over) as any).map((item) => item.name);
+  assert.deepEqual(names({}), ["get_crew_status", "launch_seat", "send_request", "list_requests"], "the leader's four");
+  const bar = [{ stepId: "build", label: "Build", type: "work", state: "current", owners: ["coder"] }];
+  const calls: unknown[] = [];
+  const stepOps = {
+    advance: (id: string) => { calls.push(["advance", id]); return { changed: false, reason: "Ann still has a run working on Build", stepBar: bar }; },
+    reportRound: (round: number, outcome: string) => { calls.push(["report", round, outcome]); return { changed: true, stepBar: bar }; },
+    finishFix: (round: number) => { calls.push(["fix", round]); return { changed: true, stepBar: bar }; },
+  };
+  const waited: unknown[] = [];
+  const waitForRuns = async (runIds: string[], seconds: number) => { waited.push([runIds, seconds]); return runIds.map((runId) => ({ runId, seatKey: "k", status: "done", outcome: "done", logPath: "p", tail: "" })); };
+  assert.deepEqual(names({ stepOps }), ["get_crew_status", "launch_seat", "send_request", "list_requests", "advance_step", "report_round", "finish_fix"]);
+  assert.deepEqual(names({ waitForRuns }), ["get_crew_status", "launch_seat", "send_request", "list_requests", "wait_for_runs"]);
+  const specs = buildLeaderToolSpecs(deps({ stepOps, waitForRuns }) as any);
+  const refused = await runLeaderTool(specs, "advance_step", { fromStepId: "build" });
+  assert.equal(refused.isError, true, "nothing changed is an error result");
+  assert.deepEqual(JSON.parse(refused.text), { changed: false, reason: "Ann still has a run working on Build", stepBar: bar });
+  assert.equal((await runLeaderTool(specs, "report_round", { round: 2, outcome: "findings" })).isError, false);
+  assert.equal((await runLeaderTool(specs, "report_round", { round: 2, outcome: "maybe" })).isError, true, "only findings or clean");
+  assert.equal((await runLeaderTool(specs, "finish_fix", { round: 2 })).isError, false);
+  assert.deepEqual(calls, [["advance", "build"], ["report", 2, "findings"], ["fix", 2]]);
+  const ok = await runLeaderTool(specs, "wait_for_runs", { runIds: ["a", "b"] });
+  assert.equal(JSON.parse(ok.text).allEnded, true);
+  assert.deepEqual(waited, [[["a", "b"], 60]], "the default wait is a minute");
+  assert.equal((await runLeaderTool(specs, "wait_for_runs", { runIds: Array.from({ length: WAIT_MAX_RUNS + 1 }, (_, i) => `r${i}`) })).isError, true, "at most eight runs");
+  assert.equal((await runLeaderTool(specs, "wait_for_runs", { runIds: ["a"], maxWaitSeconds: WAIT_MAX_SECONDS + 1 })).isError, true, "at most 120 seconds");
+  assert.equal(waited.length, 1, "a refused call never waited");
+});

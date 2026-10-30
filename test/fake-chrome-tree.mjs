@@ -1,4 +1,4 @@
-// A stand-in for a Chrome that never ends, for test/browser.test.ts: it starts one helper process (as Chrome starts renderers) and waits for ever.
+// A stand-in for a Chrome that never ends, for test/browser-guards.test.ts: it starts one helper process (as Chrome starts renderers) and waits for ever.
 // The helper's command line carries the marker (argv[2]) and its pid goes to the file (argv[3]), so a test finds that helper and nothing else.
 // detached: Node on Windows otherwise puts a child in a job object that dies with its parent, which real Chrome helpers are not in.
 // A kill of this process alone leaves the helper running; only a kill of the whole tree ends it.

@@ -6,14 +6,17 @@ import { keepBadCopy } from "./safe-file.ts";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
-export type ChatMessage = { tabId: string; revision: number; role: "user" | "assistant" | "notice"; text: string; images?: string[]; files?: string[]; requestId?: string; at: number };
+// A job a Planner handed the leader: the full brief the leader was sent (the notice text shows it cut).
+export type JobNotice = { from: string; brief: string };
+export type ChatMessage = { tabId: string; revision: number; role: "user" | "assistant" | "notice"; text: string; images?: string[]; files?: string[]; requestId?: string; job?: JobNotice; at: number };
 type ChatLine =
   | ({ type: "message" } & ChatMessage)
   | { type: "clear"; tabId: string; revision: number; at: number }
   | { type: "restore"; tabId: string; messages: ChatMessage[]; revision: number; savedRevision: number; at: number }
   | { type: "saved"; tabId: string; savedRevision: number; at: number };
-// "notice" is a quiet line from Command Center itself (a heads-up): shown in the chat, never part of what the leader is told.
+// "notice" is a quiet line from Command Center itself (a heads-up): shown in the chat, never part of what the leader is told. The one exception is a notice carrying `job`: the leader's own brief.
 const ROLES = new Set(["user", "assistant", "notice"]);
+const isJobNotice = (value: unknown): value is JobNotice => typeof value === "object" && value !== null && typeof (value as JobNotice).from === "string" && typeof (value as JobNotice).brief === "string";
 export type ChatSnapshot = { messages: ChatMessage[]; revision: number; savedRevision: number };
 
 export function isTabSlug(value: unknown): value is string {
@@ -81,7 +84,7 @@ export class ChatStore {
       // A line from a newer version with a role this one does not know is skipped like a torn line, so it never makes the chat unreadable.
       if (entry.type === "message" && typeof entry.role === "string" && !ROLES.has(entry.role)) { torn.push(index + 1); continue; }
       if (entry.type === "message") {
-        if (!ROLES.has(entry.role) || typeof entry.text !== "string" || !Array.isArray(entry.images ?? []) || (entry.images ?? []).some((image) => typeof image !== "string") || !Array.isArray(entry.files ?? []) || (entry.files ?? []).some((file) => typeof file !== "string") || (entry.requestId !== undefined && !isSafeRequestId(entry.requestId))) {
+        if (!ROLES.has(entry.role) || typeof entry.text !== "string" || !Array.isArray(entry.images ?? []) || (entry.images ?? []).some((image) => typeof image !== "string") || !Array.isArray(entry.files ?? []) || (entry.files ?? []).some((file) => typeof file !== "string") || (entry.requestId !== undefined && !isSafeRequestId(entry.requestId)) || (entry.job !== undefined && !isJobNotice(entry.job))) {
           throw new Error(`invalid chat message ${tabId}.jsonl at line ${index + 1}`);
         }
         current.revision = Math.max(current.revision, entry.revision);
@@ -93,6 +96,7 @@ export class ChatStore {
           ...(entry.images?.length ? { images: [...entry.images] } : {}),
           ...(entry.files?.length ? { files: [...entry.files] } : {}),
           ...(entry.requestId !== undefined ? { requestId: entry.requestId } : {}),
+          ...(entry.job !== undefined ? { job: { from: entry.job.from, brief: entry.job.brief } } : {}),
           at: entry.at,
         });
       } else if (entry.type === "clear") {
@@ -108,7 +112,8 @@ export class ChatStore {
           && ROLES.has(message.role) && typeof message.text === "string"
           && Array.isArray(message.images ?? []) && (message.images ?? []).every((image) => typeof image === "string")
           && Array.isArray(message.files ?? []) && (message.files ?? []).every((file) => typeof file === "string")
-          && (message.requestId === undefined || isSafeRequestId(message.requestId)),
+          && (message.requestId === undefined || isSafeRequestId(message.requestId))
+          && (message.job === undefined || isJobNotice(message.job)),
         );
         if (!validMessages || !Number.isSafeInteger(entry.savedRevision) || entry.savedRevision < 0 || entry.savedRevision > entry.revision || (entry.revision > current.revision && !torn.length)) {
           throw new Error(`invalid transcript restore in ${tabId}.jsonl at line ${index + 1}`);
@@ -169,8 +174,18 @@ export class ChatStore {
     if (typeof text !== "string") throw new Error("chat text must be a string");
     if (requestId !== undefined && !isSafeRequestId(requestId)) throw new Error("invalid request id");
     if (!Array.isArray(files) || files.some((file) => typeof file !== "string")) throw new Error("chat files must be paths");
+    return this.add(tabId, { role, text, ...(images.length ? { images: [...images] } : {}), ...(files.length ? { files: [...files] } : {}), ...(requestId !== undefined ? { requestId } : {}), at });
+  }
+
+  // A job handed to the leader: a notice in the chat that also carries the full brief, so the leader's rebuilt context and Save's history can tell it.
+  appendJobNotice(tabId: string, text: string, job: JobNotice): ChatMessage {
+    if (typeof text !== "string" || !isJobNotice(job)) throw new Error("invalid job notice");
+    return this.add(tabId, { role: "notice", text, job: { from: job.from, brief: job.brief }, at: Date.now() });
+  }
+
+  private add(tabId: string, fields: Omit<ChatMessage, "tabId" | "revision">): ChatMessage {
     const current = this.load(tabId);
-    const message: ChatMessage = { tabId, revision: current.revision + 1, role, text, ...(images.length ? { images: [...images] } : {}), ...(files.length ? { files: [...files] } : {}), ...(requestId !== undefined ? { requestId } : {}), at };
+    const message: ChatMessage = { tabId, revision: current.revision + 1, ...fields };
     this.append({ type: "message", ...message });
     current.revision = message.revision;
     current.messages.push(message);
@@ -194,7 +209,8 @@ export class ChatStore {
       && ROLES.has(message.role) && typeof message.text === "string"
       && Array.isArray(message.images ?? []) && (message.images ?? []).every((image) => typeof image === "string")
       && Array.isArray(message.files ?? []) && (message.files ?? []).every((file) => typeof file === "string")
-      && (message.requestId === undefined || isSafeRequestId(message.requestId)),
+      && (message.requestId === undefined || isSafeRequestId(message.requestId))
+      && (message.job === undefined || isJobNotice(message.job)),
     );
     if (!validMessages || !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0 || snapshot.revision > current.revision
       || !Number.isSafeInteger(snapshot.savedRevision) || snapshot.savedRevision < 0 || snapshot.savedRevision > snapshot.revision) {

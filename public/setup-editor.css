@@ -1,0 +1,134 @@
+/* Pack 18: the crew editor (public/setup-editor*.js) in Settings > Crew and models, and its Save bar in the strip under the Settings body.
+   Only the page's own tokens, type and radii (public/styles/*.css): lists 16px, controls 8-10px, badges 6px. Nothing here has a fixed width: everything
+   wraps or shortens to the width Settings gives it, so nothing in Settings scrolls sideways. container-type lets the narrow rules key off it. */
+.se{display:grid;gap:14px;min-width:0;container-type:inline-size}
+.se-head{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap;min-width:0}
+.se-title{display:grid;gap:1px;min-width:0;flex:1 1 200px}
+.se-title h4{margin:0;font-size:14px;font-weight:600}
+.se-title small{font-size:12.5px;color:var(--text-3);overflow-wrap:anywhere}
+.se-hacts{display:flex;gap:6px;flex-wrap:wrap}
+.se-hint{font-size:12px;color:var(--text-3);overflow-wrap:anywhere}
+.se-ph{color:var(--text-3)}
+.se-lock{display:flex;gap:10px;align-items:center;margin:0;padding:9px 12px;border-radius:11px;background:var(--t-orange);color:var(--warn-text);font-size:13px}
+.se-lock svg{flex:none}
+.se-rowb{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}
+.se-rowb .settings-input{flex:1 1 180px;width:auto}
+.se-err{margin:0;padding:8px 11px;border-radius:10px;background:var(--t-red);color:var(--danger-text);font-size:12.5px;overflow-wrap:anywhere}
+
+/* switch to / save as */
+.se-menu{display:grid;gap:2px;padding:6px;border-radius:14px;background:var(--sf2);min-width:0}
+.se-mg{padding:8px 8px 4px;font-size:12px;font-weight:500;color:var(--text-3)}
+.se-opt{display:flex;align-items:center;gap:4px;min-width:0}
+.se-use{flex:1;display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;text-align:left;min-width:0;transition:background .15s}
+.se-use:hover:not(:disabled){background:var(--sf)}
+.se-use[aria-pressed="true"]{background:var(--sf);box-shadow:var(--card)}
+.se-on{display:grid;min-width:0}
+.se-on b{font-weight:500;font-size:13.5px;overflow-wrap:anywhere}
+.se-on small{font-size:12px;color:var(--text-3);overflow-wrap:anywhere}
+.se-none{margin:0;font-size:13px;color:var(--text-2)}
+.se-menu .se-none{padding:4px 10px 8px;font-size:12.5px;color:var(--text-3)}
+.se-ask{margin:0;padding:6px 6px 4px;font-size:13px;color:var(--text);overflow-wrap:anywhere}
+.se-menu .se-rowb{padding:4px 6px 6px}
+.se-form{gap:6px;padding:10px}
+.se-form .lbl,.se-form .se-hint{padding:0 2px}
+.se-x{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:var(--text-3);flex:none;margin-right:2px}
+.se-x:hover:not(:disabled){background:var(--t-red);color:var(--danger-text)}
+
+.se-badge{display:inline-flex;align-items:center;font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px;background:var(--tb);color:var(--text-2);white-space:nowrap;flex:none;line-height:1.35}
+.se-b-run{background:var(--t-blue);color:var(--text)}
+.se-b-new{background:var(--t-orange);color:var(--warn-text)}
+
+/* who runs the process, and the look switch */
+.se-runs{margin:0;font-size:13px;color:var(--text-2);overflow-wrap:anywhere}
+.se-runs b{font-weight:600;color:var(--text)}
+.se-look{display:flex;align-items:center;gap:14px;padding:11px 14px;border-radius:14px;background:var(--sf2);min-width:0}
+.se-lt{display:grid;gap:1px;min-width:0;flex:1}
+.se-lt span{font-size:13.5px;font-weight:500}
+.se-lt small{font-size:12px;color:var(--text-3);overflow-wrap:anywhere}
+
+/* the crew: one row per seat; a seat's card opens under its row */
+.se-list{list-style:none;margin:0;padding:0;border-radius:16px;background:var(--sf);box-shadow:var(--card);min-width:0}
+.se-list > li + li{border-top:1px solid var(--line)}
+.se-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto 12px;align-items:center;gap:12px;width:100%;padding:11px 14px;text-align:left;min-width:0;transition:background .15s}
+.se-list > li:first-child > .se-row{border-radius:16px 16px 0 0}
+.se-row:hover:not(:disabled){background:var(--hv-sf)}
+.se-row:focus-visible,.se-add:focus-visible,.se-ropt:focus-visible{outline-offset:-2px}
+.se-seat.open > .se-row{background:var(--sf2)}
+.se-row img{width:34px;height:34px;border-radius:10px;object-fit:cover}
+.se-who{display:grid;min-width:0;line-height:1.3}
+.se-who b{font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.se-who small{font-size:12.5px;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.se-tags{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+.se-chev{color:var(--text-3);flex:none;transition:transform .2s var(--ease)}
+.se-row[aria-expanded="true"] .se-chev,.se-rolebtn[aria-expanded="true"] .se-chev{transform:rotate(180deg)}
+.se-addrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0}
+.se-addrow .se-hint{padding-right:14px}
+.se-add{flex:1;display:flex;align-items:center;gap:8px;padding:12px 14px;border-radius:0 0 16px 16px;color:var(--text-2);font-size:13.5px;font-weight:500;text-align:left;transition:background .15s,color .15s}
+.se-add:hover:not(:disabled){background:var(--hv-sf);color:var(--text)}
+.se-add:disabled{opacity:.5}
+
+/* the open seat: its fields under its name, then one line per setting */
+.se-card{display:grid;gap:12px;padding:6px 14px 14px 60px;background:var(--sf2);min-width:0}
+.se-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;min-width:0}
+.se-field{display:grid;gap:4px;align-content:start;min-width:0}
+.se-static{padding:9px 0;font-size:14px}
+.se-dd{position:relative;min-width:0}
+.se-rolebtn{display:flex;align-items:center;justify-content:space-between;gap:8px;text-align:left;cursor:pointer}
+.se-rolebtn > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.se-rolemenu{position:absolute;z-index:4;top:calc(100% + 6px);left:0;right:0;display:grid;gap:1px;padding:6px;border-radius:14px;background:var(--sf);box-shadow:var(--lift);max-height:372px;overflow-y:auto;overscroll-behavior:contain}
+.se-rolemenu.up{top:auto;bottom:calc(100% + 6px)}
+.se-ropt{display:grid;gap:1px;width:100%;padding:7px 10px;border-radius:10px;text-align:left;min-width:0}
+.se-ropt:hover:not(:disabled),.se-ropt:focus-visible{background:var(--sf2)}
+.se-ropt[aria-selected="true"]{background:var(--tb)}
+.se-ropt:disabled{opacity:.5;cursor:default}
+.se-rn{display:flex;align-items:baseline;justify-content:space-between;gap:10px;min-width:0}
+.se-rn b{font-size:13.5px;font-weight:500}
+.se-ropt small{font-size:12px;color:var(--text-3);overflow-wrap:anywhere}
+.se-ra{font-size:11.5px;color:var(--text-3);white-space:nowrap;flex:none}
+.se-rows{display:grid;min-width:0}
+.se-r{display:grid;grid-template-columns:minmax(96px,132px) minmax(0,1fr);gap:4px 12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);min-width:0}
+.se-rl{font-size:12.5px;color:var(--text-3)}
+.se-rv{display:flex;align-items:center;gap:8px 10px;flex-wrap:wrap;min-width:0}
+.se-rh{grid-column:2;margin-top:-2px}
+.se-rv .chipb{max-width:100%}
+.se-cli{color:var(--text-3)}
+.se-adv{color:var(--adv)}
+.se-swl{font-size:13px;color:var(--text-2)}
+.se-cf{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+
+/* after a save: a short note under the list, gone after a few seconds */
+.se-done{margin:-4px 0 0;font-size:13px;font-weight:500;color:var(--working-text);animation:se-fade 5s linear forwards}
+@keyframes se-fade{0%,84%{opacity:1}100%{opacity:0}}
+
+/* who does what: the server's steps for this tab, one plain line */
+.se-wdw{display:grid;gap:6px;min-width:0}
+.se-wh{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.se-wh h5{margin:0;font-size:13.5px;font-weight:600}
+.se-flow{list-style:none;margin:0;padding:0;display:grid;gap:4px;font-size:13px;color:var(--text);min-width:0}
+.se-flow li{padding-left:108px;text-indent:-108px;overflow-wrap:anywhere;min-width:0}
+.se-wk{display:inline-block;width:108px;text-indent:0;color:var(--text-3)}
+.se-wdw.stale .se-flow,.se-wdw.stale > .se-none{opacity:.45}
+
+/* the Save bar: the strip under the Settings body, the width of the Settings content. Settings gives up that strip's height while it shows,
+   so the bar never sits over the crew. Its sides follow the Settings body's own padding (public/styles/*.css .sbody: 28px, 16px from 1180px down). */
+.setm{grid-template-rows:auto minmax(0,1fr) auto}
+.setm > nav{grid-row:1/4}
+.se-dock{grid-column:2;grid-row:3;display:grid;gap:8px;padding:12px 28px;background:var(--sf);border-top:1px solid var(--line);min-width:0}
+.se-dock:empty{display:none}
+.se-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.se-status{margin:0 auto 0 0;font-size:13px;font-weight:500;color:var(--warn-text);min-width:0;overflow-wrap:anywhere}
+.se [aria-disabled="true"],.se-dock [aria-disabled="true"]{cursor:default}
+.se-dock .btn[aria-disabled="true"]:active{transform:none}
+.se-dock .btn[aria-disabled="true"]:hover{background:var(--sf)}
+.se-dock .btn.primary[aria-disabled="true"]:hover{background:var(--pri)}
+.se-live{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@media (max-width:1180px){.se-dock{padding:12px 16px}}
+
+/* a narrow editor (a small window or a large font): a row's badges go under its name, a card loses its indent */
+@container (max-width:460px){
+  .se-row{grid-template-columns:34px minmax(0,1fr) 12px}
+  .se-row img{grid-row:1/3}
+  .se-tags{grid-column:2;grid-row:2;justify-content:flex-start}
+  .se-row .se-chev{grid-column:3;grid-row:1/3}
+  .se-card{padding-left:14px}
+}

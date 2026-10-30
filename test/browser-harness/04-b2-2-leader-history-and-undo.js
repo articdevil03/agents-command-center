@@ -1,0 +1,104 @@
+(() => {
+  const { check, waitFor, text, $, requireElement, toastVisible, waitToastVisible, openChatMenu, pressEscape } = window.__ccHarness;
+  // Leader History, context meter, Save, Clear and Undo (including busy Undo).
+  const b2LeaderHistoryAndUndo = async (ctx) => {
+    const { tabOf, entry, holdClock } = ctx;
+    const leader = entry.crew.find((seat) => seat.isLeader || seat.slot === "leader");
+    const leaderKey = leader.seatKey ?? "alpha-dev.leader";
+    requireElement('[data-session-action="history"]', openChatMenu()).click();
+    const leaderHistory = window.__sent.filter((message) => message.type === "historyList").at(-1);
+    const leaderHistoryView = document.querySelector("#view .runs") !== null;
+    requireElement('#view [data-session-action="chat"]').click();
+    check("leader History requests saved files for the leader seat and returns to chat", leaderHistory?.seatKey === leaderKey && leaderHistoryView && Boolean(document.querySelector("#view .thread")), { requested: leaderHistory, expectedSeatKey: leaderKey, historyView: leaderHistoryView, returnedToChat: Boolean(document.querySelector("#view .thread")) });
+
+    // The context meter lives in the chat's ⋯ menu; each reading opens it fresh after the state arrives.
+    const contextReading = () => { const value = text("[data-context-meter]", openChatMenu()); pressEscape(); return value; };
+    const noContext = structuredClone(window.__latestState); delete tabOf("alpha-dev", noContext).leaderUsage;
+    window.__ccDeliver({ ...noContext, type: "state" });
+    const unmeasured = contextReading();
+    const hiddenContext = unmeasured.endsWith("not reported yet") && !unmeasured.includes("%");
+    const measuredContext = structuredClone(noContext); tabOf("alpha-dev", measuredContext).leaderUsage = { contextTokens: 250, contextWindow: 1000 };
+    window.__ccDeliver({ ...measuredContext, type: "state" });
+    const context25 = contextReading();
+    const clampedContext = structuredClone(measuredContext); tabOf("alpha-dev", clampedContext).leaderUsage = { contextTokens: 2000, contextWindow: 1000 };
+    window.__ccDeliver({ ...clampedContext, type: "state" });
+    const context100 = contextReading();
+    const invalidContext = structuredClone(measuredContext); tabOf("alpha-dev", invalidContext).leaderUsage = { contextTokens: null, contextWindow: null };
+    window.__ccDeliver({ ...invalidContext, type: "state" });
+    const invalidReading = contextReading();
+    const invalidContextHidden = invalidReading.endsWith("not reported yet") && !invalidReading.includes("NaN") && !invalidReading.includes("%");
+    const at = Date.now();
+    window.__ccDeliver({ type: "chatHistory", tabId: "alpha-dev", messages: [{ id: "saved-state-message", role: "user", text: "Unsaved message", at, revision: 10 }], revision: 10, savedRevision: 8 });
+    const savedState = text("#sline [data-saved-state]");
+    check("session row hides unmeasured or invalid context and shows a clamped one-decimal meter and saved time", hiddenContext && context25.endsWith("25.0% of 1k (estimate from the last turn)") && context100.endsWith("100.0% of 1k (estimate from the last turn)") && invalidContextHidden && /^Not saved since \d{1,2}:\d{2}$/.test(savedState), { unmeasured, hiddenContext, context25, context100, invalidReading, invalidContextHidden, savedState, sourceAt: at });
+
+    window.__ccSaveDeferred = true;
+    requireElement('#sline [data-session-action="save"]').click();
+    const saveRequest = window.__sent.filter((message) => message.type === "save").at(-1);
+    const progressShown = requireElement('#sline [data-session-action="save"]').disabled && text("#sline [data-saved-state]") === "Saving…";
+    window.__socket.sendMessage({ type: "saved", tabId: "alpha-dev", revision: 10, savedRevision: 10 });
+    const saveSuccess = text('#sline [data-saved-state]') === "Saved" && !requireElement('#sline [data-session-action="save"]').disabled;
+    window.__ccSaveDeferred = false; window.__ccSaveError = true;
+    requireElement('#sline [data-session-action="save"]').click();
+    const saveFailureVisible = await waitToastVisible();
+    const saveFailure = $("toast").textContent === "Save failed in the harness" && saveFailureVisible && !requireElement('#sline [data-session-action="save"]').disabled && text("#sline [data-saved-state]") === "Save failed";
+    check("Save sends the tab, shows progress, handles success, and reports the matching error", saveRequest?.tabId === "alpha-dev" && progressShown && saveSuccess && saveFailure, { saveRequest, progressShown, saveSuccess, saveFailure, saveFailureVisible, errorToast: $("toast").textContent, errorMetadataExpected: { action: "save", tabId: "alpha-dev" } });
+    window.__ccSaveError = false;
+
+    const sentBeforeClear = window.__sent.filter((message) => message.type === "clear").length;
+    let confirmAnswer = false; const confirms = [];
+    // Clear asks in its own menu: "Clear chat" there sends, "Cancel" sends nothing.
+    const clearChat = () => {
+      requireElement('[data-session-action="clear"]', openChatMenu()).click();
+      const asked = requireElement('#ctxPop[aria-hidden="false"]');
+      if (asked.querySelector("[data-clear-confirm]")) confirms.push(text(".hint", asked));
+      requireElement(confirmAnswer ? "[data-clear-confirm]" : "[data-clear-cancel]", asked).click();
+    };
+    clearChat();
+    const cancelledClear = window.__sent.filter((message) => message.type === "clear").length === sentBeforeClear;
+    confirmAnswer = true;
+    clearChat();
+    const clearRequest = window.__sent.filter((message) => message.type === "clear").at(-1);
+    const clearedTranscript = document.querySelector("#view .empty-chat") !== null;
+    const clearUndoVisibleImmediately = await waitToastVisible($("undo")) && Boolean($("undo").querySelector("[data-undo-clear]"));
+    await holdClock.advance(9_999);
+    const clearUndoVisibleBeforeDeadline = Boolean($("undo").querySelector("[data-undo-clear]") && toastVisible($("undo")));
+    requireElement("#undo [data-undo-clear]").click();
+    const undoRequest = window.__sent.filter((message) => message.type === "undoClear").at(-1);
+    const chatRestoredClearsToast = $("undo").hidden && $("undo").inert && $("undo").getAttribute("aria-hidden") === "true" && !$("undo").classList.contains("on");
+    const restoredMessages = [...document.querySelectorAll('#view [data-message-id="3"]')];
+    const restoredExactlyOnce = restoredMessages.length === 1 && restoredMessages[0].textContent.includes("Before Clear");
+    clearChat();
+    const expiredUndoVisible = await waitToastVisible($("undo")) && Boolean($("undo").querySelector("[data-undo-clear]"));
+    const clearTimerBeforeAdvance = holdClock.snapshot();
+    await holdClock.advance(9_999);
+    const expiredUndoAvailableBeforeDeadline = Boolean($("undo").querySelector("[data-undo-clear]") && toastVisible($("undo")));
+    const clearTimerBeforeDeadline = holdClock.snapshot();
+    await holdClock.advance(1);
+    const expiredUndoGoneAtDeadline = !$("undo").querySelector("[data-undo-clear]");
+    const clearTimerAfterDeadline = holdClock.snapshot();
+    window.__ccUndoReject = "expired";
+    clearChat();
+    requireElement("#undo [data-undo-clear]").click();
+    const rejectedUndoVisible = await waitToastVisible();
+    const rejectedUndo = $("toast").textContent === "Undo expired" && rejectedUndoVisible;
+    window.__ccDeliver({ type: "chatUndoRejected", tabId: "alpha-dev", reason: "unavailable" });
+    const unavailableUndoVisible = await waitToastVisible();
+    const unavailableUndo = $("toast").textContent === "This cleared chat is no longer available" && unavailableUndoVisible;
+    check("Clear always confirms, clears the transcript, restores once within 10 seconds, and reports rejected Undo", confirms.length === 4 && cancelledClear && clearRequest?.tabId === "alpha-dev" && clearedTranscript && undoRequest?.tabId === "alpha-dev" && clearUndoVisibleImmediately && clearUndoVisibleBeforeDeadline && chatRestoredClearsToast && restoredExactlyOnce && expiredUndoVisible && expiredUndoAvailableBeforeDeadline && expiredUndoGoneAtDeadline && rejectedUndo && unavailableUndo, { confirmCalls: confirms, cancelledClear, clearRequest, clearedTranscript, undoRequest, clearUndoVisibleImmediately, clearUndoVisibleBeforeDeadline, chatRestoredClearsToast, restoredMessageCount: restoredMessages.length, restoredExactlyOnce, expiredUndoVisible, expiredUndoAvailableBeforeDeadline, expiredUndoGoneAtDeadline, remainingClearUndoTabs: [...document.querySelectorAll("#undo [data-undo-clear]")].map((button) => button.dataset.undoClear), undoTextAtDeadline: $("undo").textContent, clearTimerBeforeAdvance, clearTimerBeforeDeadline, clearTimerAfterDeadline, rejectedUndo, rejectedUndoVisible, unavailableUndo, unavailableUndoVisible, rejectionToast: $("toast").textContent });
+    window.__ccUndoReject = "busy";
+    clearChat();
+    requireElement("#undo [data-undo-clear]").click();
+    const busyToastVisible = await waitToastVisible();
+    await waitFor(() => /try again when it is done/.test($("toast").textContent), "busy Undo refusal shown");
+    const busyButtonBack = Boolean($("undo").querySelector("[data-undo-clear]")) && !$("undo").textContent.includes("Restoring chat");
+    const busyToastText = $("toast").textContent;
+    const undoSentBeforeRetry = window.__sent.filter((message) => message.type === "undoClear").length;
+    window.__ccUndoReject = "";
+    requireElement("#undo [data-undo-clear]").click();
+    const busyRetrySent = window.__sent.filter((message) => message.type === "undoClear").length === undoSentBeforeRetry + 1;
+    check("A busy Undo refusal puts the Undo button back with the reason, and Undo can be pressed again", busyToastVisible && busyButtonBack && /try again when it is done/.test(busyToastText) && busyRetrySent, { busyToastVisible, busyButtonBack, busyToastText, busyRetrySent });
+    window.__ccUndoReject = "";
+  };
+  Object.assign(window.__ccHarness, { b2LeaderHistoryAndUndo });
+})();

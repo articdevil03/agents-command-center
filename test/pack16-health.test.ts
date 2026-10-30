@@ -14,6 +14,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { attachCrashCatcher, crashCatcherDisabled, crashDumpPaths, crashFactsAfterDeath, waitCatcherMonitoring, watchCatcher } from "./crash-catcher.ts";
 import { scratchDir } from "./temp-root.ts";
+import { LIST_TIMEOUT_MS } from "../server/leader-common/types.ts";
 
 const testDir = resolve("test");
 const files = readdirSync(testDir).filter((name) => /\.(ts|mjs|js)$/.test(name) && name !== "pack16-health.test.ts").sort();
@@ -25,7 +26,7 @@ const source = (name: string): string => readFileSync(join(testDir, name), "utf8
 const ALLOWED_BARE_RMSYNC: Array<{ file: string; contains: string; reason: string }> = [
   { file: "pack1-skip.test.ts", contains: "cleanupAtExit", reason: "process-exit handler, already inside try/catch: it cannot fail a test and must not sleep at exit" },
   { file: "temp-root.ts", contains: "!isAbsolute(rel)", reason: "the unsafe-root path: a folder mkdtempSync just made, removed before the failure is raised; its exact text is pinned by guard-temp-root-leak-cleanup" },
-  { file: "http.test.ts", contains: "isLink ?", reason: "removes a link itself with force only, or a plain folder; a retry loop must never follow a link" },
+  { file: "http-helpers.ts", contains: "isLink ?", reason: "removes a link itself with force only, or a plain folder; a retry loop must never follow a link" },
 ];
 
 test("pack 16 inventory: no teardown deletes a temp folder with a bare rmSync that fails once (every site listed)", () => {
@@ -55,7 +56,7 @@ test("pack 16 inventory: no teardown deletes a temp folder with a bare rmSync th
 
 // Where a spawn of the node binary starts a Command Center server but the catcher is hooked somewhere else, or cannot be (reason required).
 const ALLOWED_UNHOOKED_SERVERS: Array<{ file: string; contains: string; reason: string; alsoIn?: RegExp }> = [
-  { file: "http.test.ts", contains: "return spawn(process.execPath", reason: "the function body is executed alone by a capture guard; its caller hooks the pid", alsoIn: /spawnPackagedServer\(dataDir\);\s*attachCrashCatcher\(proc\.pid/ },
+  { file: "http-requests-packaged.test.ts", contains: "return spawn(process.execPath", reason: "the function body is executed alone by a capture guard; its caller hooks the pid", alsoIn: /spawnPackagedServer\(dataDir\);\s*attachCrashCatcher\(proc\.pid/ },
   { file: "pack1-server.test.ts", contains: "spawnSync(process.execPath", reason: "synchronous run to completion: no pid exists while it runs, nothing to attach to" },
 ];
 
@@ -86,10 +87,11 @@ test("pack 16 inventory: every spawn of a Command Center server in test/ hooks t
 });
 
 // Control: a child that crashes on purpose; the catcher must report the exception AND leave a dump (deleted here, by exact file).
+const PROBE_MS = 20_000;
 const procdumpMissing = (): string | null => {
   const off = crashCatcherDisabled();
   if (off) return off;
-  return spawnSync("procdump", ["-accepteula", "-?"], { windowsHide: true, timeout: 20000 }).error ? "procdump not found" : null;
+  return spawnSync("procdump", ["-accepteula", "-?"], { windowsHide: true, timeout: PROBE_MS }).error ? "procdump not found" : null;
 };
 const crashes: Array<{ name: string; command: string; args: string[] }> = [
   { name: "fast-fail", command: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", "[Console]::In.ReadLine() | Out-Null; Add-Type -Name K -Namespace W -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern void RaiseFailFastException(System.IntPtr a, System.IntPtr b, uint c);'; [W.K]::RaiseFailFastException([IntPtr]::Zero,[IntPtr]::Zero,0)"] },
@@ -176,21 +178,22 @@ test("pack 16 catcher: attaching keeps the 10 newest dumps and deletes only olde
   assert.ok(left.includes("notes.txt") && left.includes("old.dmp"), `a non-dump file or a folder was touched: ${left.join(",")}`);
 });
 
-test("pack 16 catcher: a test process that imports temp-root.ts is attached to by procdump (self-attach is wired)", { timeout: 90000 }, async (t) => {
+test("pack 16 catcher: a test process that imports temp-root.ts is attached to by procdump (self-attach is wired)", { timeout: PROBE_MS + 3 * LIST_TIMEOUT_MS + 30_000 }, async (t) => {
   const missing = procdumpMissing();
   if (missing) return t.skip(`self-attach check skipped: ${missing}`);
   const url = new URL("./temp-root.ts", import.meta.url).href;
   // The child stays alive until this test has its answer (it ends on stdin close), however slow the process queries are.
-  const child = spawn(process.execPath, ["--input-type=module", "-e", `import ${JSON.stringify(url)}; process.stdin.resume(); setTimeout(() => process.exit(0), 80000);`], { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] });
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `import ${JSON.stringify(url)}; process.stdin.resume(); setTimeout(() => process.exit(0), ${4 * LIST_TIMEOUT_MS});`], { windowsHide: true, stdio: ["pipe", "ignore", "ignore"] });
   try {
-    let seen = "";
-    for (const end = Date.now() + 60000; Date.now() < end && !seen; ) {
+    let seen = "", lastQuery = "no query ran";
+    for (const end = Date.now() + 2 * LIST_TIMEOUT_MS; Date.now() < end && !seen; ) {
       await new Promise((r) => setTimeout(r, 500));
-      const ps = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process -Filter \"Name like 'procdump%'\" | ForEach-Object { $_.CommandLine }"], { windowsHide: true, encoding: "utf8", timeout: 20000 });
+      const ps = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Get-CimInstance Win32_Process -Filter \"Name like 'procdump%'\" | ForEach-Object { $_.CommandLine }"], { windowsHide: true, encoding: "utf8", timeout: LIST_TIMEOUT_MS });
+      lastQuery = ps.status === 0 ? "completed" : `did not complete: status=${ps.status} error=${ps.error?.message ?? "none"}`;
       seen = (ps.stdout ?? "").split(/\r?\n/).find((l) => new RegExp(`\\b${child.pid}\\b`).test(l)) ?? "";
     }
     console.log(`pack16 self-attach: matched procdump command line: ${seen.trim()}`);
-    assert.ok(seen, `no procdump process names pid ${child.pid} within 60 s: importing temp-root.ts no longer attaches the catcher to the test process`);
+    assert.ok(seen, `no procdump process names pid ${child.pid} within ${2 * LIST_TIMEOUT_MS / 1000} s (the last process query ${lastQuery}): importing temp-root.ts no longer attaches the catcher to the test process`);
   } finally { child.kill(); }
 });
 

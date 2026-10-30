@@ -1,7 +1,7 @@
 // Packaged builds (electron-builder's portable target) extract the app to a
 // fresh temp directory on every launch, so anything that resolves its state
 // from the app's own install directory -- config, logs, scratch -- would be
-// silently wiped on every relaunch. electron/main.js passes CC_DATA_DIR
+// silently wiped on every relaunch. startServer in electron/server-process.js passes CC_DATA_DIR
 // (Electron's per-user app data directory) to the spawned server, but only
 // when packaged; running from source (npm run app, npm run start, npm test)
 // never sets it, so every caller here falls back to the repo root exactly as
@@ -14,7 +14,7 @@ import { resolve } from "node:path";
 //
 // CC_TEST_FORCE_PACKAGED is a narrow, test-only escape hatch: a suite proving
 // the real packaged-data-root path through an actual spawned server child
-// (see http.test.ts's packagedDataRootChildEnv) needs CC_DATA_DIR honoured
+// (see http-requests-packaged.test.ts's packagedDataRootChildEnv) needs CC_DATA_DIR honoured
 // there while keeping NODE_TEST_CONTEXT itself intact so the test exercises
 // the override path. The override is inert outside node --test by
 // construction: the test-context gate returns before reading it. Any non-empty

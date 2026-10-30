@@ -16,7 +16,7 @@ const ruleAction = (permission, target) => {
   const match = (pattern, text) => new RegExp("^" + pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*") + "$").test(text);
   return rules.filter((r) => match(r.permission, permission) && match(r.pattern, target)).at(-1)?.action ?? "ask";
 };
-let bridge = null, nextMessage = 0, permissionCount = 0, questionCount = 0, providersFailedOnce = false, activeRun = null, steerMessages = 0;
+let bridge = null, nextMessage = 0, permissionCount = 0, questionCount = 0, providersFailedOnce = false, activeRun = null, steerMessages = 0, promptsSeen = 0, steerGatedDupSent = false;
 const refusedOnce = new Set();
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 const mcp = async (method, params, id = 1) => {
@@ -76,6 +76,7 @@ const server = createServer(async (req, res) => {
   if (/\/question\/[^/]+\/reject$/.test(url.pathname)) return json(res, 200, true);
   if (/\/abort$/.test(url.pathname)) return json(res, 200, true);
   if (/\/prompt_async$/.test(url.pathname)) {
+    promptsSeen++;
     // PROMPT_LEAK: 180 ordinary characters, then the password, so a 200 character cut lands inside it.
     if (process.env.FAKE_OPENCODE_PROMPT_FAILS === "1") return json(res, 500, { name: "UnknownError", data: { message: process.env.FAKE_OPENCODE_PROMPT_LEAK === "1" ? "x".repeat(180) + password : "prompt refused by fake" } });
     // A prompt whose text holds REFUSE-ONCE is refused the first time it arrives (REFUSE-ONCE-SLOW: after 1200 ms) and accepted when it is sent again.
@@ -255,6 +256,17 @@ async function endRun(run) {
   const info = { id: assistantId, sessionID, role: "assistant", time: { created: 2, completed: 3 }, modelID: prompt.model.modelID, providerID: prompt.model.providerID, tokens: run.noTokens ? undefined : { input: 900 + (nextMessage - 1) * 1000, output: 50, reasoning: 0, cache: { read: 100, write: 0 } }, cost: 0.25 };
   emit("message.updated", { sessionID, info }); emit("message.updated", { sessionID, info });
   emit("session.idle", { sessionID });
+  const promptsAtIdle = promptsSeen;
   // A duplicate idle for the same turn (FAKE_OPENCODE_DUP_IDLE=1): 50 ms after the first, or FAKE_OPENCODE_DUP_IDLE_MS later. The log line says when it went out.
-  if (process.env.FAKE_OPENCODE_DUP_IDLE === "1") { await sleep(Number(process.env.FAKE_OPENCODE_DUP_IDLE_MS) || 50); log({ dupIdle: true }); emit("session.idle", { sessionID }); }
+  // FAKE_OPENCODE_DUP_IDLE_AFTER_STEER=1: it goes out only once a later /prompt_async (the steer) has arrived, so the order does not depend on timing (gives up after 15 s and says so).
+  if (process.env.FAKE_OPENCODE_DUP_IDLE === "1") {
+    if (process.env.FAKE_OPENCODE_DUP_IDLE_AFTER_STEER === "1" && !steerGatedDupSent) { // only the first turn's duplicate is gated; the steer's own run ends with a plain one
+      steerGatedDupSent = true;
+      const end = Date.now() + 15_000;
+      while (promptsSeen <= promptsAtIdle && Date.now() < end) await sleep(10);
+      if (promptsSeen <= promptsAtIdle) { log({ dupIdleGaveUp: true }); return; }
+      log({ dupIdleAfterSteer: true });
+    } else await sleep(Number(process.env.FAKE_OPENCODE_DUP_IDLE_MS) || 50);
+    log({ dupIdle: true }); emit("session.idle", { sessionID });
+  }
 }

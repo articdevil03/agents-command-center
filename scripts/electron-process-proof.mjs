@@ -154,7 +154,7 @@ try {
     }, 200).unref();`);
   const debugPort = await freePort();
   // CC_DATA_DIR is honoured by the server (Electron passes it on unchanged when not packaged); CC_TEST_FORCE_PACKAGED is stripped by
-  // electron/main.js and only matters if this script is ever run inside node --test, which NODE_TEST_CONTEXT would otherwise reveal.
+  // startServer in electron/server-process.js and only matters if this script is ever run inside node --test, which NODE_TEST_CONTEXT would otherwise reveal.
   const env = { ...process.env, CC_SKIP_LEADER_CHECK: "1", CC_DATA_DIR: dataDir, CC_TEST_FORCE_PACKAGED: "1", HOME: dir, USERPROFILE: dir, TEMP: dir, TMP: dir };
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path");
   env[pathKey] = `${join(dir, "bin")};${env[pathKey]}`;
@@ -211,8 +211,8 @@ try {
     if (message.type === "runAccepted") accepted = message;
     if (message.type === "error") serverError = message.message;
   });
-  // First-run example workspace: tab "example-development", Fixer slot (Claude, writable, so the real acceptEdits command is built).
-  agentSocket.send(JSON.stringify({ type: "run", tabId: "example-development", slot: "fixer", prompt: "Harmless process-lifecycle proof only." }));
+  // First-run example workspace: tab "example-development" (Our process), the fixer2 slot (Fixer 2: Claude, writable, so the real acceptEdits command is built).
+  agentSocket.send(JSON.stringify({ type: "run", tabId: "example-development", slot: "fixer2", prompt: "Harmless process-lifecycle proof only." }));
   const worker = await until(() => {
     const match = output.match(/CC_PROOF_WORKER (\{[^\n]+\})/);
     return match && JSON.parse(match[1]);

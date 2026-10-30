@@ -1,4 +1,5 @@
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "node:fs";
+import { replaceFile } from "./safe-file.ts";
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, watch, writeFileSync, type FSWatcher } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -46,7 +47,7 @@ const withDash = (text: string): string => (text.endsWith("-") ? text : `${text}
 // ponytail: the slug turns every symbol into "-", so "a\b-c" and "a\b\c" look alike; an ambiguous lookalike warns (and can be dismissed). Read cwd from the file if that ever bites.
 function slugRelated(a: string, b: string): boolean { return a === b || b.startsWith(withDash(a)) || a.startsWith(withDash(b)); }
 
-// Where the tools keep their records. Under the test runner this is read ONLY from the test variable (stripped by electron/main.js), and never the real home.
+// Where the tools keep their records. Under the test runner this is read ONLY from the test variable (stripped by startServer in electron/server-process.js), and never the real home.
 export function activityHome(env: NodeJS.ProcessEnv = process.env): string | null {
   if (env.CC_TEST_FAKE_CLI === "1") return env.CC_TEST_FAKE_CLI_ACTIVITY_HOME || null;
   try { return homedir(); } catch { return null; }
@@ -233,7 +234,7 @@ export function createFolderActivity(options: { env: NodeJS.ProcessEnv; dataRoot
     const at = clock();
     const data = { ids: Object.fromEntries(own.ids), windows: [...own.windows.values()].map((window) => ({ ...window, end: window.end ?? at })) };
     const temp = `${file}.tmp`;
-    try { mkdirSync(dirname(file), { recursive: true }); writeFileSync(temp, JSON.stringify(data)); renameSync(temp, file); }
+    try { mkdirSync(dirname(file), { recursive: true }); writeFileSync(temp, JSON.stringify(data)); replaceFile(temp, file); }
     catch { try { unlinkSync(temp); } catch { /* nothing to remove */ } }
   }
   // An unreadable file is treated as empty: the worst case is one warning against our own session.

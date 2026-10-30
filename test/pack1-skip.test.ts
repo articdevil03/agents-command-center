@@ -1,3 +1,4 @@
+import { waitForServerStart } from "./server-start.ts";
 // Call-site guard for server/index.ts setCliSkipFolders(...): a real server start, a codex.cmd planted in a workspace
 // folder that is on PATH but is NOT the leader's own folder. Deleting the registration makes the server run it.
 import test from "node:test";
@@ -7,7 +8,6 @@ import { once } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { createServer } from "node:net";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
 import { getProcessDefinition } from "../server/process.ts";
@@ -39,30 +39,19 @@ test("the server registers every workspace folder: a codex.cmd inside another ta
     writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p1", name: "P1", folder: work, tabs }] }));
     const key = randomBytes(32).toString("hex");
     const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
-    // The port is picked free and bound a moment later by the server; if another process takes it in between, the server says EADDRINUSE or exits: pick again.
-    let started = false;
-    for (let attempt = 1; attempt <= 3 && !started; attempt++) {
-      if (child) { child.kill(); await sleep(200); }
-      log = "";
-      const probe = createServer(); probe.listen(0, "127.0.0.1"); await once(probe, "listening");
-      port = (probe.address() as { port: number }).port; await new Promise<void>((ok) => probe.close(() => ok()));
-      const env = {
-        ...process.env, HOME: home, USERPROFILE: home, PATH: [dirname(process.execPath), system32, other].join(";"),
-        CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: String(port), CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1", CC_APP_KEY: key,
-      } as NodeJS.ProcessEnv;
-      delete env.CC_TEST_FAKE_CLI; // the real spawn path (withResolvedCli) must run
-      const spawned = spawn(process.execPath, ["server/index.ts"], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env });
-      attachCrashCatcher(spawned.pid, "pack1-skip");
-      child = spawned;
-      spawned.on("error", (error) => { log += `
+    // CC_PORT=0: the OS picks the port at the server's own listen, so no other test can take it first.
+    const env = {
+      ...process.env, HOME: home, USERPROFILE: home, PATH: [dirname(process.execPath), system32, other].join(";"),
+      CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1", CC_APP_KEY: key,
+    } as NodeJS.ProcessEnv;
+    delete env.CC_TEST_FAKE_CLI; // the real spawn path (withResolvedCli) must run
+    const spawned = spawn(process.execPath, ["server/index.ts"], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env });
+    attachCrashCatcher(spawned.pid, "pack1-skip");
+    child = spawned;
+    spawned.on("error", (error) => { log += `
 spawn error: ${error.message}`; });
-      spawned.stdout!.on("data", (d) => { log += d; }); spawned.stderr!.on("data", (d) => { log += d; });
-      const startLine = `Command Center running at http://127.0.0.1:${port}`;
-      const end = Date.now() + 20000;
-      while (!log.includes(startLine) && !/EADDRINUSE/.test(log) && spawned.exitCode === null && Date.now() < end) await sleep(10);
-      started = log.includes(startLine) && !/EADDRINUSE/.test(log);
-    }
-    assert.ok(started, `server did not start on port ${port}: ${log}`);
+    spawned.stdout!.on("data", (d) => { log += d; }); spawned.stderr!.on("data", (d) => { log += d; });
+    port = await waitForServerStart(spawned, () => log);
     socket = new WebSocket(`ws://127.0.0.1:${port}/?key=${key}`, { origin: `http://127.0.0.1:${port}` });
     socket.on("message", (raw) => messages.push(JSON.parse(String(raw))));
     socket.on("error", (error) => messages.push({ type: "socketError", message: error.message }));

@@ -1,224 +1,21 @@
 import { app, BrowserWindow, Menu, shell, screen, ipcMain, dialog, session } from "electron";
-import { randomBytes } from "node:crypto";
-import { spawn } from "node:child_process";
-import { createServer } from "node:net";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { root, smokeReadyFile, smokeStopFile } from "./config.js";
+import { serverProcess, appKey, serverStopping, startServer, stopServer } from "./server-process.js";
+import { MIN_WIDTH, MIN_HEIGHT, readWindowBounds, writeWindowBounds } from "./window-state.js";
+import { classifyNavigation, isAllowedObsidianUrl, wireNavigationPolicy } from "./navigation.js";
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const READY_TIMEOUT_MS = 15_000;
-const KILL_GRACE_MS = 3_000;
 const SMOKE_STOP_TIMEOUT_MS = 30_000;
 const BG_COLOR = "#0a0a0c";
 const ICON_PATH = join(root, "build", "icon.ico");
-const smokeReadyFile = process.env.CC_SMOKE_READY_FILE;
-const smokeStopFile = process.env.CC_SMOKE_STOP_FILE;
 
 if (smokeReadyFile) {
   if (!smokeStopFile) throw new Error("CC_SMOKE_STOP_FILE is required with CC_SMOKE_READY_FILE");
   if (process.env.CC_DATA_DIR) app.setPath("userData", process.env.CC_DATA_DIR);
 }
 
-// ---- pure, unit-tested logic (see test/electron.test.ts) -------------------
-
-// Reads the accumulated stdout text from the spawned server, not a single
-// chunk: a line can arrive split across two `data` events, and the caller
-// re-runs this against the whole buffer on every chunk rather than trying to
-// reassemble lines itself.
-export function parseServerPort(text) {
-  const match = /(?:^|\n)Command Center running at http:\/\/[^:\s]+:(\d+)\r?\n/.exec(text);
-  if (!match) return null;
-  const port = Number(match[1]);
-  return port > 0 ? port : null;
-}
-
-export const DEFAULT_WINDOW_BOUNDS = { width: 1400, height: 900 };
-const MIN_WIDTH = 900;
-const MIN_HEIGHT = 600;
-
-// `displays` is injected (Electron's screen.getAllDisplays().map(d => d.workArea))
-// so this stays a plain function callers can unit-test with fake geometry.
-export function sanitizeWindowBounds(bounds, displays) {
-  if (!bounds || typeof bounds !== "object") return { ...DEFAULT_WINDOW_BOUNDS };
-  const { width, height, x, y } = bounds;
-  if (typeof width !== "number" || typeof height !== "number") return { ...DEFAULT_WINDOW_BOUNDS };
-  if (width < MIN_WIDTH || height < MIN_HEIGHT || width > 10000 || height > 10000) return { ...DEFAULT_WINDOW_BOUNDS };
-  if (typeof x !== "number" || typeof y !== "number") return { width, height };
-  // Leave a draggable strip, excluding the system menu and caption buttons.
-  const onScreen = displays.some((d) => Math.min(x + width - 160, d.x + d.width) - Math.max(x + 40, d.x) >= 100 && y >= d.y && y + 32 <= d.y + d.height);
-  return onScreen ? { width, height, x, y } : { ...DEFAULT_WINDOW_BOUNDS };
-}
-
-// A window that was maximized when it closed comes back maximized: `maximized` is only present (true) when it was.
-export function readWindowBounds(readFileFn, path, displays) {
-  try {
-    const saved = JSON.parse(readFileFn(path, "utf8"));
-    return { ...sanitizeWindowBounds(saved, displays), ...(saved?.maximized === true ? { maximized: true } : {}) };
-  } catch {
-    return { ...DEFAULT_WINDOW_BOUNDS };
-  }
-}
-
-export function writeWindowBounds(writeFileFn, path, bounds) {
-  try {
-    writeFileFn(path, JSON.stringify({ width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y, ...(bounds.maximized === true ? { maximized: true } : {}) }));
-  } catch {
-    // best-effort: losing the saved window position is not worth crashing over
-  }
-}
-
-// `serverOrigin` is this run's own server (a fresh ephemeral port each
-// launch), so only an exact match stays in-window; every other URL, local or
-// remote, is treated as external.
-export function classifyNavigation(url, serverOrigin) {
-  return typeof url === "string" && (url === serverOrigin || url.startsWith(`${serverOrigin}/`)) ? "in-window" : "external";
-}
-
-// Only the "open" action: obsidian:// also has new, daily-note and other actions that write into a vault.
-export function isAllowedObsidianUrl(value) {
-  if (typeof value !== "string") return false;
-  try { const url = new URL(value); return url.protocol === "obsidian:" && url.hostname === "open"; }
-  catch { return false; }
-}
-
-// What may be handed to the operating system's shell. file:, javascript:, custom app schemes and anything unparseable never are.
-export function isSafeExternalUrl(value) {
-  if (typeof value !== "string") return false;
-  try { return ["http:", "https:", "mailto:"].includes(new URL(value).protocol); }
-  catch { return false; }
-}
-
-// ---- server lifecycle -------------------------------------------------
-
-function getFreePort() {
-  return new Promise((resolvePort, reject) => {
-    const probe = createServer();
-    probe.on("error", reject);
-    probe.listen(0, "127.0.0.1", () => {
-      const port = probe.address().port;
-      probe.close(() => resolvePort(port));
-    });
-  });
-}
-
-let serverProcess = null;
-// This run's secret: made fresh for every server start, handed to the server in its env and to the app page through the
-// "cc:app-key" IPC (the page then sends it on its WebSocket and every POST). Never in a URL, a log or a file.
-let appKey = null;
-let serverStopping = false;
-let serverStopPromise = null;
-
-// ponytail: a probe-then-release free-port check has a tiny theoretical race
-// (another process grabs the port between our close() and the child's
-// listen()). Accepted for a local single-user desktop tool; the alternative
-// (threading an OS-assigned port back through server/security.ts's
-// module-load-time allow-list) is a materially bigger, riskier diff for a
-// race that has never been observed on loopback.
-async function startServer(onFailure = () => {}) {
-  const port = await getFreePort();
-  if (serverStopping) return { ok: false, reason: "Application is closing." };
-  const serverEntry = join(root, "server", "index.ts");
-  // Only set when packaged: a portable build re-extracts to a fresh temp
-  // "root" on every launch, so config and logs must live in a stable
-  // per-user directory instead (see server/data-root.ts). Running from
-  // source (npm run app) never sets this, so the server falls back to the
-  // repo root exactly as before.
-  const dataDirEnv = app.isPackaged ? { CC_DATA_DIR: app.getPath("userData") } : {};
-  const passDiscoverySkip = Boolean(smokeReadyFile) && process.env.CC_SKIP_DISCOVERY === "1";
-  appKey = randomBytes(32).toString("hex");
-  const { CC_TEST_FORCE_PACKAGED: _ccTestForcePackaged, ...serverEnv } = process.env;
-  for (const key of Object.keys(serverEnv)) {
-    if (key.startsWith("CC_SMOKE_") || key.startsWith("CC_TEST_FAKE_CLI")) delete serverEnv[key];
-  }
-  if (!passDiscoverySkip) delete serverEnv.CC_SKIP_DISCOVERY;
-  serverProcess = spawn("node", buildServerCommandArgs(serverEntry, passDiscoverySkip), {
-    cwd: root,
-    env: { ...serverEnv, CC_PORT: String(port), CC_APP_KEY: appKey, ...dataDirEnv },
-    windowsHide: true,
-    // Give Node its own lifetime on Windows so parent death reaches its IPC
-    // disconnect handler instead of terminating it with Electron's console.
-    detached: true,
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-  });
-  // Before the server reports ready, a failure comes back through the returned reason (one error page, with its output); only a
-  // server that was running and then stopped is reported through onFailure.
-  let serverReady = false;
-  serverProcess.on("error", (error) => {
-    if (!serverStopping && serverReady) onFailure(error.message);
-  });
-  serverProcess.on("exit", (code) => {
-    if (!serverStopping && serverReady) onFailure(`Server stopped (code ${code}). Close and reopen Command Center.`);
-  });
-
-  return new Promise((resolveReady) => {
-    let settled = false;
-    let buffered = "";
-    let stderr = "";
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      serverProcess.stdout.off("data", onData);
-      serverProcess.stderr.off("data", onStderr);
-      serverProcess.off("exit", onExit);
-      serverProcess.off("error", onError);
-      serverReady = result.ok === true;
-      resolveReady(result);
-    };
-    const onData = (chunk) => {
-      buffered += chunk.toString("utf8");
-      const readyPort = parseServerPort(buffered);
-      if (readyPort !== null) finish({ ok: true, origin: `http://127.0.0.1:${readyPort}`, port: readyPort });
-    };
-    const onStderr = (chunk) => { stderr += chunk.toString("utf8"); };
-    const onExit = (code) => finish({ ok: false, reason: `server exited with code ${code} before it was ready.\n\n${buffered}\n${stderr}` });
-    // A missing Node never starts, so it emits "error" and no "exit": without this the clear reason waits out the 15 s timer and is
-    // then replaced by a vaguer one.
-    const onError = (error) => finish({ ok: false, reason: `the server could not be started: ${error.message}\n\nCommand Center needs Node.js 24 or newer installed and on the PATH.\n\n${buffered}\n${stderr}` });
-    const timer = setTimeout(
-      () => finish({ ok: false, reason: `server did not report ready within ${READY_TIMEOUT_MS}ms.\n\n${buffered}\n${stderr}` }),
-      READY_TIMEOUT_MS
-    );
-    serverProcess.stdout.on("data", onData);
-    serverProcess.stderr.on("data", onStderr);
-    serverProcess.on("exit", onExit);
-    serverProcess.on("error", onError);
-  });
-}
-
-function stopServer() {
-  if (serverStopPromise) return serverStopPromise;
-  serverStopping = true;
-  if (!serverProcess) return Promise.resolve();
-  const proc = serverProcess;
-  serverStopPromise = new Promise((resolveStopped) => {
-    // The server stops its own workers on "shutdown", so a server that is gone is done at once: taskkill on a dead pid finds nothing (or
-    // hits a new process that reused it), and always waiting the grace would hold the quit, and a relaunch, for 3 s every time.
-    if (proc.exitCode != null || proc.signalCode != null) { resolveStopped(); return; }
-    let backstop = 0;
-    const gone = () => { clearTimeout(backstop); resolveStopped(); };
-    proc.once("exit", gone);
-    backstop = setTimeout(() => {
-      proc.off("exit", gone);
-      const killer = spawn(join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true });
-      killer.once("close", resolveStopped);
-      killer.once("error", resolveStopped);
-    }, KILL_GRACE_MS);
-    if (proc.connected) proc.send("shutdown", () => {});
-  });
-  return serverStopPromise;
-}
-
-export function buildServerCommandArgs(serverEntry, passDiscoverySkip) {
-  if (!passDiscoverySkip) return [serverEntry];
-  // Direct `node <entry>` cannot clear this startup-only flag after the entry
-  // imports but before the server launches agents. The bootstrap keeps it in
-  // the server during discovery and removes it before agent children spawn.
-  const entryUrl = pathToFileURL(serverEntry).href;
-  const bootstrap = "im" + "port(" + JSON.stringify(entryUrl) + ").then(() => { delete process.env.CC_SKIP_DISCOVERY; });";
-  return ["--input-type=module", "--eval", bootstrap];
-}
+// The pure, unit-tested logic lives in server-process.js, window-state.js and navigation.js (see test/electron-*.test.ts).
 
 // ---- window ---------------------------------------------------------------
 
@@ -356,31 +153,6 @@ function closeNow(win) {
   if (!win.isDestroyed()) win.close();
 }
 
-// will-navigate and will-redirect also fire for sub-frames; the event's `isMainFrame` flag (see node_modules/electron/electron.d.ts,
-// WebContentsWillNavigateEventParams) lets onNavigate police only the MAIN frame and leave a sub-frame alone. The app page has no
-// sub-frames today. setWindowOpenHandler cannot tell which frame asked, so every window.open / target=_blank goes through
-// handleExternal and is denied: only a web or mail link is passed on to the shell.
-function wireNavigationPolicy(win, serverOrigin) {
-  // The main window never leaves the app's own page: anything else (a dropped file, a link, a redirect) is cancelled, and only a
-  // web or mail link is passed on to the shell.
-  const handleExternal = (url) => {
-    if (classifyNavigation(url, serverOrigin) === "external") {
-      if (isSafeExternalUrl(url)) Promise.resolve(shell.openExternal(url)).catch(() => {});
-      return true;
-    }
-    return false;
-  };
-  const onNavigate = (event, url) => {
-    if (!event.isMainFrame) return;
-    if (handleExternal(url)) event.preventDefault();
-  };
-  win.webContents.on("will-navigate", onNavigate);
-  win.webContents.on("will-redirect", onNavigate);
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    handleExternal(url);
-    return { action: "deny" };
-  });
-}
 
 function buildMenu() {
   Menu.setApplicationMenu(

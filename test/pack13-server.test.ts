@@ -1,3 +1,4 @@
+import { waitForServerStart } from "./server-start.ts";
 // Pack 13 (Work on this project only), the server side through a real server: addProject and addTab write an AGENTS.md into the tab's folder when projectOnly is
 // true, never overwrite or write through anything already at that path, report one outcome to the window that asked, and a failed write never undoes the project or tab.
 // The last test is the sweep: every place that gives a tab or project a folder is listed and mapped to "writes rules" or "excluded", so a new one goes red.
@@ -8,24 +9,18 @@ import { once } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, lstatSync, symlinkSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { createServer } from "node:net";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
 import { getProcessDefinition } from "../server/process.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
+import { sourceText } from "./source-text.ts";
 
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 const MAIN = getProcessDefinition("dev", "main").seats;
 const crew = MAIN.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort }));
 // The exact file the owner approved, written independently of the server's own helper (CRLF, one sentence per line).
 const expected = (name: string) => [`This folder is the ${name} project.`, "Work only on this project, inside this folder.", "Do not read or change files outside this folder unless the user names them.", "Keep this project's notes and progress in this folder.", ""].join("\r\n");
-
-async function freePort(): Promise<number> {
-  const probe = createServer(); probe.listen(0, "127.0.0.1"); await once(probe, "listening");
-  const port = (probe.address() as { port: number }).port; await new Promise<void>((ok) => probe.close(() => ok()));
-  return port;
-}
 
 type Server = { port: number; key: string; temp: string; folders: string; child: ChildProcess; log: () => string; stop: () => Promise<void> };
 async function boot(): Promise<Server> {
@@ -34,21 +29,19 @@ async function boot(): Promise<Server> {
   for (const dir of [home, work, folders, join(data, "config"), join(data, "chats"), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
   writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "base", name: "Base", folder: work, tabs: [{ id: "base-dev", name: "Dev", kind: "dev", process: "main", folder: work, crew }] }] }));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: Object.fromEntries(["claude", "codex"].map((cli) => [JSON.stringify([cli, "--version"]), { code: 0, stdout: `${cli} 1.0.0`, stderr: "" }])) }));
-  const port = await freePort();
   const key = randomBytes(32).toString("hex");
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
   const env: Record<string, string | undefined> = {
     ...process.env, HOME: home, USERPROFILE: home, PATH: [dirname(process.execPath), system32].join(";"),
-    CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: String(port), CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1",
+    CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1",
     CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_FAKE_LEADER_CLI: "1", CC_APP_KEY: key,
   };
   const child = spawn(process.execPath, ["server/index.ts"], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: env as NodeJS.ProcessEnv });
   attachCrashCatcher(child.pid, "pack13-server");
   let log = "";
   child.stdout!.on("data", (d) => { log += d; }); child.stderr!.on("data", (d) => { log += d; });
-  const end = Date.now() + 10_000;
-  while (!log.includes("127.0.0.1") && Date.now() < end) await sleep(10);
-  assert.ok(log.includes("127.0.0.1"), `server did not start: ${log}`);
+  // CC_PORT=0: the OS picks the port at the server's own listen, so no other test can take it first.
+  const port = await waitForServerStart(child, () => log);
   return {
     port, key, temp, folders, child, log: () => log,
     stop: async () => {
@@ -225,25 +218,27 @@ const SWEEP: Record<string, "writes rules" | "excluded"> = {
   "changeFolder|tab folder": "excluded", "changeProjectFolder|project folder": "excluded",
 };
 test("sweep: every validateFolderPath site in the server is listed, and 'writes rules' sites call writeProjectRules while 'excluded' ones do not", () => {
-  const source = readFileSync("server/index.ts", "utf8");
+  const source = sourceText("server/index.ts");
   const sites: string[] = [];
-  const cases = [...source.matchAll(/^ {6}case "([A-Za-z]+)": \{/gm)].map((m) => ({ name: m[1], at: m.index! }));
+  // Each message handler is the function `onXxx(ws, message)` in server/main/messages/ (named after its first message type), ending at its closing brace line.
+  const cases = [...source.matchAll(/^function on([A-Z][A-Za-z]*)\(ws: WebSocket, message: any\): void \{/gm)].map((m) => ({ name: m[1][0].toLowerCase() + m[1].slice(1), at: m.index!, end: source.indexOf("\n}\n", m.index!) }));
+  assert.ok(cases.length >= 55, `control: the scan found only ${cases.length} message handlers`);
   for (const call of source.matchAll(/validateFolderPath\((.*?), "((?:tab|project) folder)"\)/g)) {
-    const owner = cases.filter((c) => c.at < call.index!).at(-1)!;
-    sites.push(`${owner.name}|${call[2]}`);
+    const owner = cases.find((c) => c.at < call.index! && call.index! < c.end);
+    sites.push(`${owner?.name ?? "(outside every message handler)"}|${call[2]}`);
   }
   assert.equal(source.match(/validateFolderPath\(/g)!.length, sites.length + 1, "every call has a label of 'tab folder' or 'project folder' (+1 for the definition)");
   assert.deepEqual([...sites].sort(), Object.keys(SWEEP).sort(), "a new or removed folder-assignment site needs a decision in SWEEP");
   for (const [key, decision] of Object.entries(SWEEP)) {
     const name = key.split("|")[0];
-    const index = cases.findIndex((c) => c.name === name);
-    const body = source.slice(cases[index].at, cases[index + 1]?.at ?? source.length);
+    const owner = cases.find((c) => c.name === name)!;
+    const body = source.slice(owner.at, owner.end);
     assert.equal(/writeProjectRules\(/.test(body), decision === "writes rules", `${name} is ${decision}`);
     if (decision === "writes rules") assert.match(body, /message\.projectOnly === true/, `${name} only writes when projectOnly is true`);
     else assert.match(body, /Deliberately no "Work on this project only"/, `${name} says why it is excluded`);
   }
   // Seeds that set a folder without a dialog (first-run example project, legacy-file migration) are also decided: no rules file.
   const config = readFileSync("server/config.ts", "utf8");
-  assert.equal(config.match(/tabs: \[\{ id: [^\n]*folder(?:: entry\.dir)?,/g)!.length, 2, "config.ts seeds exactly two tab folders (migration, first-run example); a third needs a decision here");
+  assert.equal(config.match(/tabs: \[defaultTab\(/g)!.length, 2, "config.ts seeds exactly two tab folders (migration, first-run example); a third needs a decision here");
   assert.ok(!/writeProjectRules|AGENTS\.md/.test(config), "seeds write no rules file");
 });

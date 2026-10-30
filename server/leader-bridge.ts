@@ -2,25 +2,26 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { leaderToolJsonSchema, runLeaderTool, type LeaderToolSpec } from "./leader-tools.ts";
 
-// The crew tools for an OpenCode leader, served as a minimal MCP server over plain JSON-RPC POST.
-// One entry per tab, one fresh token per leader instance; the token dies when that leader stops or dies.
+// The crew tools for any agent that speaks MCP over HTTP, served as a minimal MCP server over plain JSON-RPC POST.
+// One entry per key (the tab id for the leader, `${tabId}.${runId}` for a seat's run), one fresh token per entry; the token dies when that leader or run ends.
 export const BRIDGE_BODY_LIMIT = 1024 * 1024;
 const PROTOCOL_VERSION = "2025-06-18";
 
-type Entry = { token: Buffer; specs: LeaderToolSpec[] };
+type Entry = { token: Buffer; specs: LeaderToolSpec[]; onCall?: () => void };
 
 export function createLeaderBridge() {
   const entries = new Map<string, Entry>();
 
-  function open(tabId: string, specs: LeaderToolSpec[]): { token: string; revoke: () => void } {
+  // onCall runs for every request that carries the right token (a seat's run counts each one as output for its stall check).
+  function open(key: string, specs: LeaderToolSpec[], onCall?: () => void): { token: string; revoke: () => void } {
     const token = randomBytes(32).toString("hex");
-    const entry: Entry = { token: Buffer.from(token, "utf8"), specs };
-    entries.set(tabId, entry);
-    return { token, revoke: () => { if (entries.get(tabId) === entry) entries.delete(tabId); } };
+    const entry: Entry = { token: Buffer.from(token, "utf8"), specs, onCall };
+    entries.set(key, entry);
+    return { token, revoke: () => { if (entries.get(key) === entry) entries.delete(key); } };
   }
 
-  function authorized(tabId: string, header: string | undefined): Entry | null {
-    const entry = entries.get(tabId);
+  function authorized(key: string, header: string | undefined): Entry | null {
+    const entry = entries.get(key);
     const match = typeof header === "string" ? /^Bearer (.+)$/.exec(header) : null;
     if (!entry || !match) return null;
     const given = Buffer.from(match[1], "utf8");
@@ -39,7 +40,7 @@ export function createLeaderBridge() {
     return Buffer.concat(chunks);
   }
 
-  async function handleRequest(req: IncomingMessage, res: ServerResponse, tabId: string): Promise<void> {
+  async function handleRequest(req: IncomingMessage, res: ServerResponse, key: string): Promise<void> {
     const send = (status: number, body?: unknown): void => {
       res.writeHead(status, body === undefined ? {} : { "Content-Type": "application/json", "Cache-Control": "no-store" });
       res.end(body === undefined ? undefined : JSON.stringify(body));
@@ -47,8 +48,9 @@ export function createLeaderBridge() {
     // A web page must never reach this: a real MCP client sends no Origin at all.
     if (req.headers.origin !== undefined) { send(403, { error: "forbidden origin" }); return; }
     if (req.method !== "POST") { res.writeHead(405, { Allow: "POST" }); res.end(); return; }
-    const entry = authorized(tabId, req.headers.authorization);
+    const entry = authorized(key, req.headers.authorization);
     if (!entry) { send(401, { error: "unauthorized" }); return; }
+    try { entry.onCall?.(); } catch { /* noting a call never changes its answer */ }
     const raw = await readBody(req);
     if (!raw) { send(413, { error: "request body too large" }); return; }
     let message: any;
@@ -66,7 +68,7 @@ export function createLeaderBridge() {
         return;
       case "tools/call": {
         // A tool the leader no longer owns after Stop cannot run: re-check the token before the handler.
-        if (!authorized(tabId, req.headers.authorization)) { send(401, { error: "unauthorized" }); return; }
+        if (!authorized(key, req.headers.authorization)) { send(401, { error: "unauthorized" }); return; }
         const result = await runLeaderTool(entry.specs, String(message.params?.name), message.params?.arguments);
         reply({ content: [{ type: "text", text: result.text }], ...(result.isError ? { isError: true } : {}) });
         return;
@@ -76,12 +78,12 @@ export function createLeaderBridge() {
   }
 
   // The route boundary: a client that drops mid-body (or any throw) ends only its own response, never the server.
-  async function handle(req: IncomingMessage, res: ServerResponse, tabId: string): Promise<void> {
-    try { await handleRequest(req, res, tabId); }
+  async function handle(req: IncomingMessage, res: ServerResponse, key: string): Promise<void> {
+    try { await handleRequest(req, res, key); }
     catch {
       try { if (!res.writableEnded) { if (!res.headersSent) res.writeHead(400); res.end(); } } catch { /* the socket is gone */ }
     }
   }
 
-  return { open, handle, isOpen: (tabId: string) => entries.has(tabId) };
+  return { open, handle, isOpen: (key: string) => entries.has(key) };
 }

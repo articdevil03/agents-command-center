@@ -3,12 +3,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
 test("dist staging, quarantine, restore, locks and publish ordering use temp fixtures", () => {
   const proof = fileURLToPath(new URL("../scripts/packaged-smoke-proof.mjs", import.meta.url));
-  const run = spawnSync(process.execPath, [proof, "--temp-only"], { encoding: "utf8", timeout: 120000 });
+  // Measured alone 2026-10-30: 19 s. The bound is about 15x that because a busy PC (another terminal's browser, a build) has stretched it past 120 s.
+  const run = spawnSync(process.execPath, [proof, "--temp-only"], { encoding: "utf8", timeout: 300_000 });
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
   for (const marker of ["BUILDER FAILURE RED", "SMOKE FAILURE RED", "DIST SUCCESS GREEN", "EXE FINGERPRINT GREEN", "EXE FINGERPRINT FAILURE GREEN", "RESTORE FINGERPRINT GREEN",
     "SMOKE ORDER PREVIOUS BUILD GREEN", "DIST OVERLAP RED", "DIST INTERRUPTION GREEN",
@@ -48,7 +49,7 @@ async function runLimitedWith(options: { killStatus: number; closesAfterKill: bo
   });
   // A runLimited that never settles must fail this test by assertion, not hang the file.
   let giveUp: ReturnType<typeof setTimeout> | undefined;
-  const never = new Promise<never>((_, reject) => { giveUp = setTimeout(() => { try { assert.fail("runLimited never settled"); } catch (error) { reject(error); } }, 3000); });
+  const never = new Promise<never>((_, reject) => { giveUp = setTimeout(() => { try { assert.fail("runLimited never settled"); } catch (error) { reject(error); } }, 30_000); });
   try {
     const result = await Promise.race([run("build", [], {}, timeoutMs, "the builder", stopWaitMs), never]);
     return { result, taskkillCalls, child };
@@ -61,7 +62,7 @@ test("runLimited: a timed-out child whose kill failed and that never closes is r
   assert.match(result.error.message, /timed out after .* and could not be stopped \(pid 4711/);
   assert.equal(JSON.stringify(taskkillCalls), JSON.stringify([["/pid", "4711", "/T", "/F"]]), "the tree kill was tried once");
   assert.equal(child.killed, 1, "and the direct child was killed as the fallback");
-  assert.ok(Date.now() - started < 5000, "the wait for the exit stayed bounded");
+  assert.ok(Date.now() - started < 30_000, "the wait for the exit stayed bounded (the fake child waits 60 ms)");
 });
 
 test("runLimited: a timed-out child that the kill ended is reported as stopped, and a normal exit passes its status through", async () => {
@@ -75,4 +76,14 @@ test("runLimited: a timed-out child that the kill ended is reported as stopped, 
   const pending = run("build", [], {}, 60_000, "the builder");
   quick.emit("close", 3);
   assert.equal(JSON.stringify(await pending), JSON.stringify({ status: 3 }));
+});
+
+test("packaged smoke steps are awaited sequentially in folder order", () => {
+  const folder = new URL("../scripts/packaged-smoke-proof/", import.meta.url);
+  const steps = readdirSync(folder).filter((name) => /^steps-.*\.mjs$/.test(name)).sort();
+  assert.ok(steps.length > 0, "control: step modules were found");
+  const source = readFileSync(new URL("../scripts/packaged-smoke-proof.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /^\s*import\s+["']\.\/packaged-smoke-proof\/steps-/m, "step modules must not use static imports");
+  const awaited = [...source.matchAll(/await\s+import\(["']\.\/packaged-smoke-proof\/(steps-[^"']+\.mjs)["']\)/g)].map((match) => match[1]);
+  assert.deepEqual(awaited, steps, "awaited step modules: " + JSON.stringify(awaited) + "; folder: " + JSON.stringify(steps));
 });

@@ -94,7 +94,7 @@ test("config.ts: first packaged launch starts a new user on one empty example pr
   assert.equal(existsSync(join(packagedUserDir, "config/projects.json")), false, "the bundled projects.json is not copied");
   assert.equal(existsSync(join(packagedUserDir, "config/seats.json")), false, "no legacy seats.json is seeded");
   assert.deepEqual(workspaces.projects.map((project: any) => project.id), ["example"]);
-  assert.ok(workspaces.projects.every((project: any) => project.tabs.length === 1 && project.tabs[0].kind === "dev" && project.tabs[0].process === "main"));
+  assert.ok(workspaces.projects.every((project: any) => project.tabs.length === 1 && project.tabs[0].kind === "dev" && project.tabs[0].setupName === "Our process" && !("process" in project.tabs[0])));
   const folder = workspaces.projects[0].folder;
   assert.equal(dirname(folder), packagedUserDir, "the example folder is inside the user's own data root");
   assert.deepEqual(readdirSync(folder), [], "the example folder starts empty");
@@ -193,7 +193,7 @@ test("data-root test-context decision is filesystem-free", () => {
   assert.equal(ignoresDataRootUnderTestRunner({ NODE_TEST_CONTEXT: "" }), false);
 });
 
-// CC_TEST_FORCE_PACKAGED is the narrow override http.test.ts uses to prove
+// CC_TEST_FORCE_PACKAGED is the narrow override http-requests-packaged.test.ts uses to prove
 // the real packaged-data-root path through a spawned server child without
 // stripping NODE_TEST_CONTEXT.
 test("data-root test-context decision: CC_TEST_FORCE_PACKAGED overrides NODE_TEST_CONTEXT, deliberately and only when set", () => {

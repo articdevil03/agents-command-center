@@ -76,7 +76,8 @@ function finishTurn(turnId, status) {
 async function runTurn(turnId, params, early = null) {
   const previousTurn = lastTurnId; lastTurnId = turnId;
   // After a CLI switch the first message carries a handover preamble; the steps are the part after it.
-  const text = params.input[0].text.split("Current message:\n").pop();
+  // A job the planner hands the leader carries its steps after "The job:".
+  const text = params.input[0].text.split("Current message:\n").pop().split("The job:\n").pop();
   let steps; try { steps = JSON.parse(text); } catch { steps = [{ say: `codex says hi to: ${text.slice(0, 40)}` }]; }
   notify("turn/started", { threadId: "thread-1", turn: { id: turnId, status: "inProgress" } });
   const turn = { id: turnId, steers: [], mode: "fold", finished: false };

@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { mutations, isRealRed, removeWithRetry } from "../scripts/mutation-proof.mjs";
 
 // Runs every guard-approval-* mutation against the test file that covers its target:
-// server code -> approvals.test.ts, public/app.js -> browser.test.ts. Optional argv[2] (comma-separated) keeps only names containing one of its parts.
+// server code -> approvals.test.ts, public/app/*.js -> browser-approval.test.ts. Optional argv[2] (comma-separated) keeps only names containing one of its parts.
 // The scratch copy lives under the repo root (like the main sweep's), so the dependencies resolve from the repo's own node_modules by walking up:
 // nothing linked to clean up. A RED is the same as the main sweep's: exit code 1 and a real AssertionError.
 const root = resolve(".");
@@ -14,7 +14,7 @@ const scratch = mkdtempSync(join(root, ".cc-test-approval-"));
 const reports = mkdtempSync(join(tmpdir(), "cc-approval-mutation-reports-"));
 // TEMP/TMP of every test process: the servers and Chrome profiles a hung run leaves behind sit in here, so they can be told from anyone else's.
 const privateTmp = mkdtempSync(join(tmpdir(), "cc-approval-mutation-tmp-"));
-const testFor = (file) => file.startsWith("public/") ? "test/browser.test.ts" : "test/approvals.test.ts";
+const testFor = (file) => file.startsWith("public/") ? "test/browser-approval.test.ts" : "test/approvals.test.ts";
 const entries = mutations.filter(([name]) => name.startsWith("guard-approval-") && (!process.argv[2] || process.argv[2].split(",").some((part) => name.includes(part))));
 // A run that hangs past its timeout only loses its direct child; servers and Chrome below it keep running. Stops only processes whose command line
 // holds this run's own scratch copy or private temp folder (unique per run), never by name or bare pid.
@@ -39,7 +39,7 @@ try {
   const run = (name, testFile, red = false) => {
     // The data root and the packaged-mode switch of a developer shell must never reach the tests (the main sweep strips them too).
     const { CC_DATA_DIR: _ccDataDir, CC_TEST_FORCE_PACKAGED: _ccTestForcePackaged, ...childEnv } = process.env;
-    const result = spawnSync(process.execPath, ["--test", ...(testFile === "test/browser.test.ts" ? ["--test-name-pattern=approval browser guards"] : []), testFile], { cwd: scratch, windowsHide: true, timeout: 300000, encoding: "utf8", env: { ...childEnv, TEMP: privateTmp, TMP: privateTmp, CC_MUTATION_PROOF: red ? "1" : "" } });
+    const result = spawnSync(process.execPath, ["--test", ...(testFile === "test/browser-approval.test.ts" ? ["--test-name-pattern=approval browser guards"] : []), testFile], { cwd: scratch, windowsHide: true, timeout: 300000, encoding: "utf8", env: { ...childEnv, TEMP: privateTmp, TMP: privateTmp, CC_MUTATION_PROOF: red ? "1" : "" } });
     if (result.error) stopOwned();
     assert.ifError(result.error);
     const output = result.stdout + result.stderr;

@@ -15,7 +15,8 @@
     "dist": "node scripts/dist.mjs",
     "dist:smoke": "node scripts/packaged-smoke.mjs",
     "dist:proof": "node scripts/packaged-smoke-proof.mjs",
-    "export:public": "node scripts/export-public.mjs"
+    "export:public": "node scripts/export-public.mjs",
+    "verify": "node scripts/line-cap.mjs && npm test"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",

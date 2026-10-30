@@ -5,15 +5,16 @@ import * as path from "node:path";
 import { stripTypeScriptTypes } from "node:module";
 import { runInNewContext } from "node:vm";
 import { resolveDataRoot } from "../server/data-root.ts";
-import { getProcessDefinition } from "../server/process.ts";
+import * as processEngine from "../server/process.ts";
+const { getProcessDefinition } = processEngine;
 import { tempRoot } from "./temp-root.ts";
 
 function launch(copy: string, data: string, overrides = {}) {
   // config.ts publishes through safe-file.ts; both are evaluated in one context so a boundary override reaches the write.
-  const source = ["server/safe-file.ts", "server/config.ts"].map((file) => stripTypeScriptTypes(fs.readFileSync(file, "utf8"))
-    .replace(/^import .*;\r?$/gm, "").replaceAll("import.meta.url", '"unused"').replaceAll("export ", "")).join("\n");
+  const source = ["safe-file", "config-files", "config-migrate", "config-acp", "config-prefs", "config-setups", "config"].map((name) => stripTypeScriptTypes(fs.readFileSync(`server/${name}.ts`, "utf8"))
+    .replace(/^(?:import .*|export (?:\{[^}]*\}|\*) from .*);\r?$/gm, "").replaceAll("import.meta.url", '"unused"').replaceAll("export ", "")).join("\n");
   return runInNewContext(`${source}; ({ workspacesPath, projectsPath, writeClientPrefs, readClientPrefs })`, {
-    ...fs, ...path, ...overrides, resolveDataRoot, getProcessDefinition, console: { error() {} },
+    ...fs, ...path, ...overrides, resolveDataRoot, ...processEngine, console: { error() {}, log() {} },
     fileURLToPath: () => path.join(copy, "server/config.ts"),
     process: { env: { CC_DATA_DIR: data } },
   });
@@ -129,7 +130,7 @@ test("config startup: publication errors and directory collisions propagate and 
 });
 
 for (const shape of ["one project", "multiple projects"]) {
-  test(`workspaces migration: ${shape} creates one dev/main tab per project from projects.json only`, () => {
+  test(`workspaces migration: ${shape} creates one Our process Development tab per project from projects.json only`, () => {
     const copy = tempRoot(["server", "config"]), data = tempRoot(["config"]);
     const projects = shape === "one project"
       ? [{ id: "alpha", name: "Alpha", dir: "C:/work/alpha" }]
@@ -150,7 +151,9 @@ for (const shape of ["one project", "multiple projects"]) {
       assert.equal(project.folder, projects[index].dir);
       assert.equal(project.tabs.length, 1);
       assert.equal(project.tabs[0].kind, "dev");
-      assert.equal(project.tabs[0].process, "main");
+      assert.equal(project.tabs[0].setupName, "Our process");
+      assert.equal("process" in project.tabs[0], false);
+      assert.equal(project.tabs[0].steps.length, 7);
       assert.equal(project.tabs[0].folder, projects[index].dir);
       assert.equal(project.tabs[0].id, `${projects[index].id}-development`);
     }

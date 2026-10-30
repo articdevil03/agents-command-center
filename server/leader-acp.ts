@@ -25,7 +25,11 @@ export const acpToolStep = (kind: unknown): ActivityStep => ({ label: (typeof ki
 
 export type AcpLeaderDeps = {
   cli: { name: string; program: string; args: string[] };
-  bridge: { url: string; token: string };
+  // The crew tools. Optional: a worker run (a crew seat) has none unless it runs the process.
+  bridge?: { url: string; token: string };
+  // Worker runs (a crew seat, not a leader): a read-only seat answers every permission request "cancelled"; needHttp fails the start, before any prompt, when the CLI cannot take the crew tools over HTTP.
+  denyPermissions?: boolean;
+  needHttp?: boolean;
   spawnFn?: AcpSpawn;
   startTimeoutMs?: number;
   maxLine?: number; // test knob; the default is MAX_LINE
@@ -50,7 +54,7 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
   const paragraphs = createParagraphs();
 
   // The bridge token is this leader's own secret: it never reaches the chat. A token split across two chunks is found because the last characters wait for the next chunk.
-  const secret = deps.bridge.token;
+  const secret = deps.bridge?.token ?? "";
   const HIDDEN = "[hidden]";
   const hold = Math.max(0, secret.length - 1);
   let held = "";
@@ -135,6 +139,7 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
 
   // The CLI asks before it does something: in Full access every request is allowed once (allow_always only when that is the one allow choice).
   function onPermission(id: unknown, params: Json): void {
+    if (deps.denyPermissions) { write({ id, result: { outcome: { outcome: "cancelled" } } }); cb.onNotice?.(`${name} asked for permission, but this seat is read-only, so the request was refused.`); return; }
     const options: Json[] = Array.isArray(params?.options) ? params.options : [];
     const pick = options.find((option) => option?.kind === "allow_once") ?? options.find((option) => option?.kind === "allow_always");
     if (pick && typeof pick.optionId === "string") { write({ id, result: { outcome: { outcome: "selected", optionId: pick.optionId } } }); return; }
@@ -219,9 +224,10 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
     const methods: Json[] = Array.isArray(init.authMethods) ? init.authMethods : [];
     authText = safe(methods.find((method) => method?.description)?.description ?? methods.find((method) => method?.name)?.name, 200);
     const http = caps.mcpCapabilities?.http === true;
+    if (deps.bridge && deps.needHttp && !http) throw Object.assign(new Error(`${name} does not take tool servers over HTTP, so it cannot run the process (the crew tools need HTTP)`), { acp: true });
     const session = await request("session/new", {
       cwd: tabFolder,
-      mcpServers: http ? [{ type: "http", name: "tab-crew", url: deps.bridge.url, headers: [{ name: "Authorization", value: `Bearer ${deps.bridge.token}` }] }] : [],
+      mcpServers: http && deps.bridge ? [{ type: "http", name: "tab-crew", url: deps.bridge.url, headers: [{ name: "Authorization", value: `Bearer ${deps.bridge.token}` }] }] : [],
     });
     if (typeof session.sessionId !== "string" || !session.sessionId) throw new Error(`${name} did not return a session`);
     if (redact(session.sessionId) !== session.sessionId) throw new Error(`${name} returned an unusable session`);
@@ -229,8 +235,8 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
     cb.onSession?.(sessionId);
     const modelOption = (Array.isArray(session.configOptions) ? session.configOptions : []).find((option: Json) => option?.category === "model" || option?.id === "model");
     if (typeof modelOption?.currentValue === "string") { modelName = safe(modelOption.currentValue, 100) || null; if (modelName) cb.onModel?.(modelName); }
-    if (!http) cb.onNotice?.(`The crew tools are not available for ${name}: it does not take tool servers over HTTP.`);
-  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, `${name} did not start within 20 seconds`);
+    if (deps.bridge && !http) cb.onNotice?.(`The crew tools are not available for ${name}: it does not take tool servers over HTTP.`);
+  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, `${name} did not start within ${LEADER_START_TIMEOUT_MS / 1000} seconds`);
   ready.catch((error: Error) => die((error as { acp?: boolean }).acp ? error.message : `${name} failed to start: ${error.message}`));
 
   function blocks(text: string, images: string[]): Json[] {

@@ -1,3 +1,4 @@
+import { waitForServerStart } from "./server-start.ts";
 // Fix pack 1, server core: app key, response headers, launch gate for Codex seats, full approval text,
 // changeFolder starting no leader, read-RESUME-first after every stop, declined request bodies, Save late finish.
 // One real server on a temp data dir (CC_TEST_FORCE_PACKAGED + CC_DATA_DIR), its own app key, a Codex leader tab
@@ -9,7 +10,6 @@ import { once } from "node:events";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
-import { createServer } from "node:net";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
 import { getProcessDefinition } from "../server/process.ts";
@@ -22,12 +22,6 @@ const CODEX_TAB = "p1-codex", CLAUDE_TAB = "p1-claude";
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 const newKey = () => randomBytes(32).toString("hex");
 const READ_FIRST = "Before replying, first read the existing handover";
-
-async function freePort(): Promise<number> {
-  const probe = createServer(); probe.listen(0, "127.0.0.1"); await once(probe, "listening");
-  const port = (probe.address() as { port: number }).port; await new Promise<void>((ok) => probe.close(() => ok()));
-  return port;
-}
 
 type Server = { port: number; key: string; temp: string; data: string; work: string; work2: string; child: ChildProcess; log: () => string; stop: () => Promise<void> };
 async function boot(options: { key?: string; withWorkspace?: boolean; env?: Record<string, string> } = {}): Promise<Server> {
@@ -42,12 +36,11 @@ async function boot(options: { key?: string; withWorkspace?: boolean; env?: Reco
     writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p1", name: "P1", folder: work, tabs }] }));
   }
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: {} }));
-  const port = await freePort();
   const key = options.key ?? newKey();
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
   const env: Record<string, string | undefined> = {
     ...process.env, HOME: home, USERPROFILE: home, PATH: [dirname(process.execPath), system32].join(";"),
-    CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: String(port), CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1",
+    CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1",
     CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_FAKE_LEADER_CLI: "1",
     FAKE_LEADER_LOG: join(temp, "fake-leader.log"), CC_TEST_CHAT_TIMEOUT_MS: "600", CC_TEST_SAVE_WRITE_DELAY_MS: "1500", ...options.env,
   };
@@ -56,9 +49,8 @@ async function boot(options: { key?: string; withWorkspace?: boolean; env?: Reco
   attachCrashCatcher(child.pid, "pack1-server");
   let log = "";
   child.stdout!.on("data", (d) => { log += d; }); child.stderr!.on("data", (d) => { log += d; });
-  const end = Date.now() + 8000;
-  while (!log.includes("127.0.0.1") && Date.now() < end) await sleep(10);
-  assert.ok(log.includes("127.0.0.1"), `server did not start: ${log}`);
+  // CC_PORT=0: the OS picks the port at the server's own listen, so no other test can take it first.
+  const port = await waitForServerStart(child, () => log);
   return {
     port, key, temp, data, work, work2, child, log: () => log,
     stop: async () => {
@@ -268,7 +260,7 @@ test("a read-only Codex seat is gated like a write seat: Ask shows the whole bri
   send({ type: "testGatedLaunch", tabId: CODEX_TAB, slot: "reviewer2", brief });
   const approval = await wait(() => pendingOf(CODEX_TAB)[0], "the launch approval appears for a read-only Codex seat");
   assert.equal(approval.tool, "launch:Sol");
-  assert.equal(approval.summary, `Sol (Reviewer 2)\n${brief}`, "the whole brief with its line breaks, not the first line");
+  assert.equal(approval.summary, `Sol (Reviewer)\n${brief}`, "the whole brief with its line breaks, not the first line");
   await action({ type: "answerApproval", tabId: CODEX_TAB, approvalId: approval.approvalId, allow: false });
   const denied = await wait(() => results()[seen], "denied result");
   assert.deepEqual([denied.ok, denied.error], [false, "The user denied this."]);
@@ -278,9 +270,9 @@ test("a read-only Codex seat is gated like a write seat: Ask shows the whole bri
   seen = results().length;
   send({ type: "testGatedLaunch", tabId: CODEX_TAB, slot: "reviewer2", brief: huge });
   const long = await wait(() => pendingOf(CODEX_TAB)[0], "the long launch approval appears");
-  const full = `Sol (Reviewer 2)\n${huge}`;
+  const full = `Sol (Reviewer)\n${huge}`;
   assert.ok(long.summary.length <= 20100, `capped: ${long.summary.length}`);
-  assert.ok(long.summary.startsWith("Sol (Reviewer 2)\nTEST ONLY: do nothing.\nyyyy"));
+  assert.ok(long.summary.startsWith("Sol (Reviewer)\nTEST ONLY: do nothing.\nyyyy"));
   assert.match(long.summary, /\n\.\.\. \((\d+) more characters not shown\)$/);
   const hidden = Number(/\((\d+) more characters not shown\)$/.exec(long.summary)![1]);
   assert.equal(long.summary.length - `\n... (${hidden} more characters not shown)`.length + hidden, full.length, "shown + hidden = the whole text");

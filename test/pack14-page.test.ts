@@ -1,8 +1,9 @@
+import { SERVER_START_MS } from "./server-start.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import { createServer } from "node:net";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { stopChromeTree, CHROME_CLOSE_GRACE_MS } from "./chrome-stop.ts";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -12,7 +13,7 @@ import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { newAppKey, keyedWsUrl } from "./temp-root.ts";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 
-// Pack 14, the page side: a real headless Chrome runs the real public/app.js against a fake socket. The Replying bubble shows what the leader is doing (and nothing once
+// Pack 14, the page side: a real headless Chrome runs the real page script (public/app/*.js) against a fake socket. The Replying bubble shows what the leader is doing (and nothing once
 // the reply ends), a line by the message box and a row under the crew show the background jobs of a Claude leader with their running time, the status bar stops saying
 // "ready when you are" while a job runs, and a reply Claude started by itself reads as a normal saved leader message.
 // With CC_PACK14_SHOTS=<folder> the rough look is saved there as PNGs. Fake CLI runner, temp data, free port, never 4317.
@@ -23,17 +24,6 @@ const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const REPO = resolve(".");
 const delay = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 const J = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
-
-async function freePort(): Promise<number> {
-  while (true) {
-    const probe = createServer();
-    await new Promise<void>((ok, bad) => { probe.once("error", bad); probe.listen(0, HOST, ok); });
-    const address = probe.address();
-    const port = typeof address === "object" && address ? address.port : 0;
-    await new Promise<void>((ok, bad) => probe.close((error) => error ? bad(error) : ok()));
-    if (port && port !== 4317) return port;
-  }
-}
 
 function backendState(port: number): Promise<any> {
   return new Promise((ok, bad) => {
@@ -98,9 +88,9 @@ async function withPage(body: (page: Page) => Promise<void>) {
   const home = join(temp, "home"); mkdirSync(home, { recursive: true });
   const script = join(temp, "fake-cli-script.json");
   writeFileSync(script, JSON.stringify({ responses: {} }));
-  const serverPort = await freePort();
-  const env = { ...process.env, HOME: home, USERPROFILE: home, CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_CLI_RECORD: join(temp, "argv.jsonl"), CC_DATA_DIR: dataDir, CC_TEST_FORCE_PACKAGED: "1", CC_PORT: String(serverPort), CC_APP_KEY: APP_KEY, CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1" };
-  assert.notEqual(Number(env.CC_PORT), 4317);
+  let serverPort = 0; // read from the server's ready line below
+  const env = { ...process.env, HOME: home, USERPROFILE: home, CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_CLI_RECORD: join(temp, "argv.jsonl"), CC_DATA_DIR: dataDir, CC_TEST_FORCE_PACKAGED: "1", CC_PORT: "0", CC_APP_KEY: APP_KEY, CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1" };
+  assert.equal(env.CC_PORT, "0"); // the OS picks the port at the server's own listen, so no other test can take it first
   const repoScratch = join(REPO, "scratch"), repoScratchCount = () => (existsSync(repoScratch) ? readdirSync(repoScratch).length : 0);
   const repoScratchBefore = repoScratchCount(), repoWorkspacesPath = join(REPO, "config", "workspaces.json");
   const readRepoWorkspaces = () => (existsSync(repoWorkspacesPath) ? readFileSync(repoWorkspacesPath, "utf8") : null), repoWorkspacesBefore = readRepoWorkspaces();
@@ -111,10 +101,11 @@ async function withPage(body: (page: Page) => Promise<void>) {
   let socket: WebSocket | null = null;
   try {
     await new Promise<void>((ok, bad) => {
-      let output = ""; const timer = setTimeout(() => bad(new Error(`server did not become ready; output=${output}`)), 15_000);
-      server.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString(); if (/running at http:\/\/127\.0\.0\.1:\d+/.test(output)) { clearTimeout(timer); ok(); } });
+      let output = ""; const timer = setTimeout(() => bad(new Error(`server did not become ready; output=${output}`)), SERVER_START_MS);
+      server.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString(); const line = /running at http:\/\/127\.0\.0\.1:(\d+)/.exec(output); if (line) { clearTimeout(timer); serverPort = Number(line[1]); ok(); } });
       server.once("exit", (code) => bad(new Error(`server exited early (${code}); output=${output}`)));
     });
+    assert.notEqual(serverPort, 4317, "the test server must never use the real app's port");
     const seed = buildSeed(await backendState(serverPort));
     const tabA = seed.projects[0].tabs[0].id, tabB = seed.projects[0].tabs[1].id;
     const html = readFileSync(join(REPO, "public", "index.html"), "utf8").replace(/<link\b[^>]*https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>\s*/gi, "")
@@ -203,16 +194,13 @@ async function withPage(body: (page: Page) => Promise<void>) {
   } finally {
     try { if (socket?.readyState === WebSocket.OPEN) await Promise.race([new Promise((ok) => { socket!.once("message", ok); socket!.send(JSON.stringify({ id: 1e9, method: "Browser.close" })); }), delay(5000)]); } catch { /* gone */ }
     socket?.close();
+    let chromeStop: Awaited<ReturnType<typeof stopChromeTree>> | null = null;
     try {
-      if (chrome && chrome.exitCode === null && chrome.signalCode === null) {
-        const exited = once(chrome, "exit");
-        await Promise.race([exited, delay(7000)]);
-        if (chrome.exitCode === null && chrome.signalCode === null) { spawnSync(join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(chrome.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", timeout: 15_000 }); await Promise.race([exited, delay(20_000)]); }
-      }
+      chromeStop = chrome ? await stopChromeTree(chrome, { graceMs: CHROME_CLOSE_GRACE_MS }) : null;
       proxy?.close();
       if (server.exitCode === null && server.signalCode === null) { const exited = once(server, "exit"); server.kill(); await Promise.race([exited, delay(7000)]); }
       assert.ok(server.exitCode !== null || server.signalCode !== null, `server PID ${server.pid} exited`);
-      assert.ok(!chrome || chrome.exitCode !== null || chrome.signalCode !== null, `Chrome PID ${chrome?.pid} exited`);
+      assert.ok(!chrome || chrome.exitCode !== null || chrome.signalCode !== null, `Chrome PID ${chrome?.pid} exited: ${chromeStop?.facts.join("; ") ?? "the stop never ran"}`);
     } finally { removeWithRetry(temp); }
   }
 }

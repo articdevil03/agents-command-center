@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { appSource } from "./source-text.ts";
 import { runInNewContext } from "node:vm";
 import assert from "node:assert/strict";
 
@@ -11,7 +11,7 @@ export function actionClient() {
       classList: { contains: () => false, toggle() {}, add() {}, remove() {} }, style: {} });
     return nodes.get(id);
   };
-  const source = readFileSync("public/app.js", "utf8");
+  const source = appSource();
   const end = source.lastIndexOf("  bindEvents();");
   assert.ok(end > 0, "client initialization boundary found");
   const api = runInNewContext(source.slice(0, end) + `
