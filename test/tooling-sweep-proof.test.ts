@@ -12,6 +12,18 @@ import { lowerOwnPriority, runTests, SWEEP_PRIORITY } from "../scripts/sweep/run
 
 // Explicit safe mappings. Ownership guards select pure cases; run guards select fake process seams.
 const PROOFS: Record<string, [string, string]> = {
+  "guard-sweep-confirm-live-flakes": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-quiet-error": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-call": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-file": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-name": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-flakes": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-pending": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-error": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-scope": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-canary": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-quiet": ["test/tooling-sweep-confirm.test.ts", "^P23"],
+  "guard-sweep-confirm-evidence": ["test/tooling-sweep-confirm.test.ts", "^P23"],
   "guard-sweep-r1-reused-root": ["test/tooling-sweep-proctree.test.ts", "^R1 watchTree registration"],
   "guard-sweep-r1-root-first-sight": ["test/tooling-sweep-proctree.test.ts", "^R1 recordTree never replaces"],
   "guard-sweep-r1-exited-root": ["test/tooling-sweep-run.test.ts", "^R1 fake runner passes root"],

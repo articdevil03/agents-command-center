@@ -31,8 +31,8 @@ test("a catching scoped run is RED: the catching file first with early stop, the
   const rec = await runRow(rowContext(world, { catchMap: { r1: "test/a.test.ts" }, targets: { r1: "src/a.js" } }), lane, row("r1"));
   assert.equal(rec.status, "RED");
   assert.deepEqual(rec.catching, { file: "test/a.test.ts", name: "t1", message: "boom" });
-  assert.deepEqual(world.calls.map((call) => [call.files, call.red, call.earlyStop]), [[["test/a.test.ts"], true, true], [["test/a.test.ts"], false, false]]);
-  assert.deepEqual(rec.runs.map((run: any) => run.kind), ["red-scoped", "restored"]);
+  assert.deepEqual(world.calls.map((call) => [call.files, call.red, call.earlyStop]), [[["test/a.test.ts"], true, true], [["test/a.test.ts"], true, true], [["test/a.test.ts"], false, false]]);
+  assert.deepEqual(rec.runs.map((run: any) => run.kind), ["red-scoped", "red-confirm", "restored"]);
   assert.equal(lane.files.get("src/a.js"), SOURCE["src/a.js"], "restored byte for byte");
   assert.deepEqual(runsLeft(world), [], "a RED row keeps no run output");
 });
@@ -55,7 +55,7 @@ test("with no candidate the whole suite runs first, and its catching file is lea
 test("a scoped run that misses falls back to the whole suite; only the whole suite can catch it then", async () => {
   const world = makeWorld(scratchDir());
   const rec = await runRow(rowContext(world, { catchMap: { r1: "test/elsewhere.test.ts" }, targets: { r1: "src/a.js" } }), newLane(world), row("r1"));
-  assert.deepEqual(rec.runs.map((run: any) => [run.kind, run.files, run.outcome]), [["red-scoped", ["test/elsewhere.test.ts"], "pass"], ["red-whole", null, "assertion"], ["restored", ["test/a.test.ts"], "pass"]]);
+  assert.deepEqual(rec.runs.map((run: any) => [run.kind, run.files, run.outcome]), [["red-scoped", ["test/elsewhere.test.ts"], "pass"], ["red-whole", null, "assertion"], ["red-confirm", ["test/a.test.ts"], "assertion"], ["restored", ["test/a.test.ts"], "pass"]]);
   assert.equal(rec.status, "RED");
 });
 
@@ -83,7 +83,7 @@ test("restored check: pass is RED; fail then a quiet pass is RED and the failing
   assert.equal(flake.rec.status, "RED");
   assert.deepEqual(flake.ctx.flakes, [flaky]);
   assert.equal(flake.world.acquired.at(-1), 12, "the re-run is quiet: it holds every slot");
-  assert.deepEqual(flake.rec.runs.map((run: any) => run.kind), ["red-whole", "restored", "restored-retry"]);
+  assert.deepEqual(flake.rec.runs.map((run: any) => run.kind), ["red-whole", "red-confirm", "restored", "restored-retry"]);
   assert.ok(flake.rec.evidence.length >= 1 && flake.rec.runs.filter((run: any) => run.log).length === 1, "the failed restored run is kept as flake evidence, the rest is not");
   const twice = await scenario([failure(), failure()]);
   assert.equal(twice.rec.status, "ERROR");
@@ -99,7 +99,7 @@ test("a leak after a passing restored run is a failure (re-run quietly); a leak 
   const once = leakOn(1);
   const rec = await runRow(rowContext(once), newLane(once), row("r1"));
   assert.equal(rec.status, "RED");
-  assert.equal(once.calls.length, 3, "the leak cost a quiet re-run");
+  assert.equal(once.calls.length, 4, "the leak cost a quiet re-run");
   assert.match(rec.notes.join("\n"), /leaked \.cc-test-x/);
   const both = leakOn(2);
   assert.equal((await runRow(rowContext(both), newLane(both), row("r1"))).status, "ERROR");
@@ -109,7 +109,7 @@ test("R1 a restored check whose run only wrote top-level app data folders (remov
   const world = makeWorld(scratchDir(), { behave: (call) => { if (isRestored(call)) call.lane.removed = ["chats", "logs"]; return undefined; } });
   const rec = await runRow(rowContext(world), newLane(world), row("r1"));
   assert.equal(rec.status, "RED");
-  assert.equal(world.calls.length, 2, "no quiet re-run: the restored check was clean");
+  assert.equal(world.calls.length, 3, "no quiet re-run: the restored check was clean");
   assert.match(rec.notes.join("\n"), /pollution: removed chats, logs/);
 });
 
@@ -169,7 +169,7 @@ async function finished(world: World, ctx: ReturnType<typeof rowContext>, lane: 
 }
 const endPhase = async (world: World, ctx: any, lane: any, state: any, flakes: any[], shouldStop = () => false) => {
   const recorded: any[] = [];
-  await runEndPhase(ctx, lane, { ...state, flakes, record: (rec: any) => recorded.push(rec), shouldStop });
+  await runEndPhase(ctx, lane, { ...state, flakes: new Map(flakes.map((f) => [`${f.file}\n${f.name}`, f])), record: (rec: any) => recorded.push(rec), shouldStop });
   return recorded;
 };
 
@@ -182,7 +182,7 @@ test("flake re-check: a RED whose catching test is on the flake list is re-run q
   const [next] = await endPhase(world, ctx, lane, state, [{ file: "test/a.test.ts", name: "t1" }]);
   assert.equal(next.status, "RED");
   assert.equal(next.endChecked, true);
-  assert.deepEqual(world.calls.map((call) => [call.files, call.earlyStop, call.slotsHeld]), [[["test/a.test.ts"], true, 12]]);
+  assert.deepEqual(world.calls.map((call) => [call.files, call.earlyStop, call.slotsHeld]), [[["test/a.test.ts"], true, 12], [["test/a.test.ts"], true, 12]]);
   assert.match(next.notes.join("\n"), /flake re-check: caught again when quiet/);
   const other = await endPhase(world, ctx, lane, state, [{ file: "test/a.test.ts", name: "another test" }]);
   assert.deepEqual(other, [], "a catching test that is not a known flake is not re-checked");
@@ -192,7 +192,7 @@ test("flake re-check: a RED whose catching test is on the flake list is re-run q
 test("flake re-check that no longer fails redoes the row from the whole suite, quietly: assertion RED, pass SURVIVED, anything else ERROR", async () => {
   for (const [whole, expected] of [[assertion("test/b.test.ts"), "RED"], [pass(), "SURVIVED"], [failure(), "ERROR"]] as const) {
     let recheck = false;
-    const world = makeWorld(scratchDir(), { behave: (call) => { if (call.files && call.mutated.length) return pass(); if (call.files === null && recheck) return whole; return undefined; } });
+    const world = makeWorld(scratchDir(), { behave: (call) => { if (call.files && call.mutated.length && !call.logPath.endsWith("-red-confirm.log")) return pass(); if (call.logPath.endsWith("-red-confirm.log") && recheck) return whole; if (call.files === null && recheck) return whole; return undefined; } });
     const ctx = rowContext(world, { catchMap: { r1: "test/a.test.ts" }, targets: { r1: "src/a.js" } });
     const lane = newLane(world);
     const state = await finished(world, ctx, lane);
@@ -201,7 +201,7 @@ test("flake re-check that no longer fails redoes the row from the whole suite, q
     const [next] = await endPhase(world, ctx, lane, state, [{ file: "test/a.test.ts", name: "t1" }]);
     assert.equal(state.rec.status, "RED", "first pass: scoped miss, whole suite catches");
     assert.equal(next.status, expected, `whole suite ${whole.outcome}`);
-    assert.deepEqual(world.calls.map((call) => [call.files, call.slotsHeld]), [[["test/a.test.ts"], 12], [null, 12]]);
+    assert.deepEqual(world.calls.map((call) => [call.files, call.slotsHeld]), (expected === "RED" ? [[["test/a.test.ts"], 12], [null, 12], [["test/b.test.ts"], 12]] : [[["test/a.test.ts"], 12], [null, 12]]));
   }
 });
 
@@ -218,7 +218,7 @@ test("survivor re-check: one quiet whole-suite run; pass stays SURVIVED, an asse
     assert.equal(next.quietOnly, quietOnly);
     assert.equal(next.endChecked, true);
     if (quietOnly) assert.match(next.notes.join("\n"), /caught only when quiet/);
-    assert.deepEqual([world.calls.at(-1)!.files, world.calls.at(-1)!.earlyStop, world.calls.at(-1)!.slotsHeld], [null, true, 12]);
+    assert.deepEqual([world.calls.at(-1)!.files, world.calls.at(-1)!.earlyStop, world.calls.at(-1)!.slotsHeld], [quietOnly ? ["test/a.test.ts"] : null, true, 12]);
     assert.equal(lane.files.get("src/a.js"), SOURCE["src/a.js"], "the mutation is taken out again");
   }
 });

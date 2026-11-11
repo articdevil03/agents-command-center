@@ -86,13 +86,39 @@ async function prepare(ctx, lane, [name, file, from, to]) {
 }
 
 // The mutation is in place only while `body` runs; the original bytes go back and the lane is re-synced whatever happens (also on an abort).
-async function withMutation(ctx, lane, file, mutated, rec, body) {
+async function withMutation(ctx, lane, file, mutated, rec, body, quiet = false) {
   ctx.sweep.writeVerified(lane, file, mutated);
-  try { return await body(); }
+  try {
+    const outcome = await body();
+    return outcome.caught ? await confirmCatch(ctx, lane, rec, outcome, quiet) : outcome;
+  }
   finally {
     ctx.sweep.writeVerified(lane, file, ctx.sweep.readPristine(lane, file));
     noteResync(rec, ctx.sweep.resyncLane(lane));
   }
+}
+
+// A catch counts only when the same assertion repeats with the mutation still applied.
+async function confirmCatch(ctx, lane, rec, outcome, quiet) {
+  const originalRun = rec.runs.at(-1);
+  const { run, result } = await execute(ctx, lane, rec, {
+    kind: "red-confirm", files: [outcome.caught.file], red: redFlag(rec.name),
+    earlyStop: true, quiet,
+  });
+  run.catching = result.catching;
+  if (result.outcome === "assertion" && testKey(result.catching) === testKey(outcome.caught)) return outcome;
+  originalRun.keep = true;
+  run.keep = true;
+  if (result.outcome !== "pass" && result.outcome !== "assertion") {
+    return { status: "ERROR", note: `${rec.name}: catch confirmation ended ${result.outcome}` };
+  }
+  const unconfirmed = [{ file: outcome.caught.file, name: outcome.caught.name }];
+  if (result.outcome === "assertion") unconfirmed.push(result.catching);
+  ctx.addFlakes(unconfirmed);
+  return {
+    status: quiet ? "ERROR" : "SURVIVED",
+    note: `${rec.name}: catch confirmation mismatch: ${testKey(outcome.caught)} then ${result.outcome === "assertion" ? testKey(result.catching) : result.outcome}`,
+  };
 }
 
 // The whole suite with the mutation in place: assertion = caught, pass = survived, anything else = error.
@@ -159,7 +185,7 @@ async function endCheck(ctx, lane, entry, prior, body) {
   try {
     const prepared = await prepare(ctx, lane, entry);
     if (prepared.note) return done("ERROR", prepared.note);
-    const outcome = await withMutation(ctx, lane, file, prepared.mutated, rec, () => body(rec, name));
+    const outcome = await withMutation(ctx, lane, file, prepared.mutated, rec, () => body(rec, name), true);
     if (outcome.quietOnly) rec.quietOnly = true;
     if (outcome.caught) { rec.catching = outcome.caught; return done("RED", outcome.note); }
     return done(outcome.status, outcome.note);
@@ -188,8 +214,8 @@ export function recheckSurvivor(ctx, lane, entry, prior) {
 
 // Every row that still needs a re-check, on one lane, one at a time (a quiet run takes every slot anyway). Stops between rows.
 export async function runEndPhase(ctx, lane, { entries, finals, flakes, record, shouldStop }) {
-  const flakeKeys = new Set(flakes.map(testKey));
   for (const [name, prior] of [...finals]) {
+    const flakeKeys = new Set(flakes.keys());
     const entry = entries.get(name);
     if (!entry || !needsEndCheck(prior, flakeKeys) || shouldStop()) continue;
     const next = await (prior.status === "SURVIVED" ? recheckSurvivor : recheckFlaky)(ctx, lane, entry, prior);

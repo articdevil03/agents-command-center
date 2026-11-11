@@ -115,7 +115,7 @@ test("resume: skips finished rows, runs its own baseline first, and reported == 
   assert.equal(await resumeAgain(world, folder), 0);
   const part2 = world.calls.slice(callsBefore);
   assert.deepEqual([part2[0].files, part2[0].mutated, part2[0].slotsHeld], [null, [], 12], "part 2 starts with its own quiet baseline");
-  assert.equal(mutatedTexts.filter((text) => text.includes("let a")).length, 1, "the canary was not run again");
+  assert.equal(mutatedTexts.filter((text) => text.includes("let a")).length, 2, "the canary ran once plus its confirmation, without rerunning on resume");
   assert.deepEqual(resultNames(world).sort(), ["control-must-survive", "guard-stale-entry", "r1", "r2", "r3"]);
   assert.match(summaryOf(outOf(world)), /PASS 2\. reported == selected \(5 of 5/);
   assert.match(summaryOf(outOf(world)), /Exit code 0 \(sweep complete\)/);

@@ -246,7 +246,7 @@ async function runSweep(session) {
   const allFinal = state.selected.every((name) => finals.has(name));
   if (allFinal && !stop.requested() && session.lanes.length) {
     const byName = new Map(entries.map((entry) => [entry[0], entry]));
-    await runEndPhase(ctx, session.lanes[0], { entries: byName, finals, flakes: [...flakes.values()], record, shouldStop: stop.requested });
+    await runEndPhase(ctx, session.lanes[0], { entries: byName, finals, flakes, record, shouldStop: stop.requested });
   }
   part.endReason = stop.reason ? `stopped: ${stop.reason}` : "finished";
 }

@@ -46,7 +46,7 @@ test("rows on a target file run the file an earlier row's catch taught, scoped; 
   const world = makeWorld(scratchDir(), { rows: [CANARY_ROW, row("r1"), row("r2")] });
   await go(world);
   const scoped = world.calls.filter((call) => call.files?.length === 1 && call.mutated.includes("src/a.js") && call.red);
-  assert.deepEqual(scoped.map((call) => call.files), [["test/a.test.ts"], ["test/a.test.ts"]], "r1 and r2 both ran the file the canary taught");
+  assert.deepEqual(scoped.map((call) => call.files), [["test/a.test.ts"], ["test/a.test.ts"], ["test/a.test.ts"], ["test/a.test.ts"]], "r1 and r2 both ran the file the canary taught");
   const whole = world.calls.filter((call) => call.files === null && call.mutated.length && call.red);
   assert.ok(whole.length >= 1 && whole.every((call) => call.mutated.includes("src/c.js")), "the whole suite ran only for the control row");
 });
