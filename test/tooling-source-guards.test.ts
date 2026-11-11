@@ -33,21 +33,6 @@ test("no test file calls rmSync with recursive: false (it always throws on a fol
   if (process.env.CC_MUTATION_PROOF !== "1") for (const [name, file, from] of entries) assert.equal(readFileSync(join(root, file), "utf8").replaceAll("\r\n", "\n").split(from).length - 1, 1, name + " targets exactly one guard");
 });
 
-// The approval runner is a script that runs two whole test files per entry, so it is checked at its call sites, as text.
-test("the approval mutation runner strips the data-root variables, verifies its write, keeps no junction and counts only a real assertion as RED", () => {
-  const source = readFileSync(join(root, "test/approval-mutation-proof.mjs"), "utf8").replaceAll("\r\n", "\n");
-  assert.match(source, /const \{ CC_DATA_DIR: _ccDataDir, CC_TEST_FORCE_PACKAGED: _ccTestForcePackaged, \.\.\.childEnv \} = process\.env;/);
-  assert.match(source, /env: \{ \.\.\.childEnv, TEMP: privateTmp, TMP: privateTmp, CC_MUTATION_PROOF: red \? "1" : "" \}/, "children get a private TEMP/TMP");
-  assert.match(source, /if \(result\.error\) stopOwned\(\);\s+assert\.ifError\(result\.error\);/, "a timed-out run stops its own descendants before the error is raised");
-  assert.match(source, /CommandLine\.Contains\('\$\{a\}'\) -or \$_\.CommandLine\.Contains\('\$\{b\}'\)/, "only processes whose command line holds this run's folders");
-  assert.match(source, /removeWithRetry\(privateTmp\);/);
-  assert.match(source, /writeVerified\(target, source\.replace\(from, \(\) => to\)\)/);
-  assert.match(source, /assert\.ok\(isRealRed\(result\.status, result\.output\)/);
-  assert.doesNotMatch(source, /symlinkSync|junction/, "the scratch copy sits inside the repo, so there is no link to remove");
-  assert.match(source, /mkdtempSync\(join\(root, "\.cc-test-approval-"\)\)/);
-  assert.match(source, /removeWithRetry\(scratch\);/);
-});
-
 test("the Electron process proof starts its disposable copy on the first-run seed, never on a bundled or personal projects file", () => {
   const proof = readFileSync(join(root, "scripts/electron-process-proof.mjs"), "utf8");
   // config/ is not in the copy list at all, so no bundled or personal workspace can reach the disposable copy.

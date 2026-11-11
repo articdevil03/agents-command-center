@@ -1,3 +1,4 @@
+import { waitForFirstRender } from "./page-first-render.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -67,7 +68,7 @@ export async function chromeAudit(port: number, profile: string, width: number, 
     await page("Page.enable"); await page("Runtime.enable"); await page("DOM.enable");
     await page("Emulation.setDeviceMetricsOverride", { width, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
     await page("Page.navigate", { url: `http://${HOST}:${port}/__audit` });
-    await waitFor(`document.querySelectorAll("#crew .seat").length>0&&document.querySelectorAll("#tabs [role=tab]").length>0&&document.querySelector("#view .thread")!==null`, "app render");
+    await waitForFirstRender(waitFor, `document.querySelectorAll("#crew .seat").length>0&&document.querySelectorAll("#tabs [role=tab]").length>0&&document.querySelector("#view .thread")!==null`, "app render");
     assert.equal(await evaluate("innerWidth"), width, `viewport is ${width}px`);
     await evaluate(AUDIT_JS);
     // Control: a socket message the page cannot read is reported only through console.error, and the page-error hook must catch that.

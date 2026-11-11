@@ -5,7 +5,7 @@ import { join } from "node:path";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { mutations, pendingMutations, COPIED_PATHS, hasDesignFolder } from "../scripts/mutation-proof.mjs";
+import { mutations, controlMutations, pendingMutations, COPIED_PATHS, hasDesignFolder } from "../scripts/mutation-proof.mjs";
 import { tempRoot } from "./temp-root.ts";
 
 const root = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
@@ -38,9 +38,32 @@ function targetProblems(entries: readonly CatalogueEntry[], read: (file: string)
 test("every mutation target exists exactly once", { skip: process.env.CC_MUTATION_PROOF === "1" }, () => {
   assert.ok(mutations.length > 500, "control: the catalogue is not empty");
   // Entries on the owner's private design/ folder are checked only where that folder exists (never because one file is missing).
-  const present = [...mutations, ...pendingMutations].filter(([, file]) => !file.startsWith("design/") || hasDesignFolder(root));
+  const present = [...mutations, ...controlMutations, ...pendingMutations].filter(([, file]) => !file.startsWith("design/") || hasDesignFolder(root));
   assert.ok(present.length > 500, "control: the checked entries are not empty");
   assert.deepEqual(targetProblems(present), []);
+});
+
+// scripts/mutations/catch-map.json is written by a finished sweep: { row name: the test file that caught it }. A stale key or a vanished file would
+// send a row to the wrong scoped run (and cost a whole-suite run on every sweep), so both are flagged here.
+type CatchMap = Record<string, unknown>;
+function catchMapProblems(map: CatchMap, rowNames: Set<string>, testFiles: Set<string>): string[] {
+  const problems: string[] = [];
+  for (const [name, file] of Object.entries(map)) {
+    if (!rowNames.has(name)) problems.push(`${name}: not a row in the catalogue`);
+    if (typeof file !== "string" || !testFiles.has(file)) problems.push(`${name}: ${String(file)} is not an existing test/*.test.ts file`);
+  }
+  return problems;
+}
+test("every catch-map key is a real row and every value an existing test file; a planted bad key and a planted missing file are both flagged", () => {
+  const rowNames = new Set([...mutations, ...controlMutations].map(([name]) => name));
+  const testFiles = new Set(readdirSync(join(root, "test")).filter((name) => /\.test\.ts$/.test(name)).map((name) => `test/${name}`));
+  assert.ok(testFiles.size > 100 && rowNames.size > 500, "control: both lists were read");
+  const map = JSON.parse(readFileSync(join(root, "scripts/mutations/catch-map.json"), "utf8")) as CatchMap;
+  assert.deepEqual(catchMapProblems(map, rowNames, testFiles), []);
+  const anyRow = [...rowNames][0];
+  assert.deepEqual(catchMapProblems({ "no-such-row": "test/tooling-catalogue.test.ts" }, rowNames, testFiles), ["no-such-row: not a row in the catalogue"]);
+  assert.deepEqual(catchMapProblems({ [anyRow]: "test/no-such-file.test.ts" }, rowNames, testFiles), [`${anyRow}: test/no-such-file.test.ts is not an existing test/*.test.ts file`]);
+  assert.equal(catchMapProblems({ [anyRow]: 7 }, rowNames, testFiles).length, 1, "a value that is not a path");
 });
 
 test("a stale entry is flagged whichever file it points at, and the guard-stale-entry canary injects exactly such an entry", () => {

@@ -1,3 +1,4 @@
+import { waitForFirstRender } from "./page-first-render.ts";
 import { SERVER_START_MS } from "./server-start.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -200,7 +201,7 @@ export async function withPage(body: (page: Page) => Promise<void>) {
     await page("Page.enable"); await page("Runtime.enable");
     await page("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
     await page("Page.navigate", { url: `http://${HOST}:${proxyPort}/__stream` });
-    await waitFor(`document.querySelectorAll("#crew .seat").length>0&&document.querySelectorAll("#tabs [role=tab]").length>1&&document.querySelector("#view .thread")!==null`, "app render");
+    await waitForFirstRender(waitFor, `document.querySelectorAll("#crew .seat").length>0&&document.querySelectorAll("#tabs [role=tab]").length>1&&document.querySelector("#view .thread")!==null`, "app render");
     await ev(PROBE_JS);
     // Control: a socket message the page cannot read is reported only through console.error, and the page-error hook must catch that.
     await ev(`window.__socket.emit("message",{data:"{not json"});true`);

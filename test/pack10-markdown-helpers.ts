@@ -1,3 +1,4 @@
+import { waitForFirstRender } from "./page-first-render.ts";
 import { SERVER_START_MS } from "./server-start.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -192,7 +193,7 @@ export async function withPage(body: (page: Page) => Promise<void>) {
     await page("Page.enable"); await page("Runtime.enable");
     await page("Emulation.setDeviceMetricsOverride", { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
     await page("Page.navigate", { url: `http://${HOST}:${proxyPort}/__stream` });
-    await waitFor(`document.querySelectorAll("#crew .seat").length>0&&document.querySelectorAll("#tabs [role=tab]").length>1&&document.querySelector("#view .thread")!==null`, "app render");
+    await waitForFirstRender(waitFor, `document.querySelectorAll("#crew .seat").length>0&&document.querySelectorAll("#tabs [role=tab]").length>1&&document.querySelector("#view .thread")!==null`, "app render");
     await body({ ev, waitFor, seed, tabA, tabB, shot });
     assert.deepEqual(await ev("window.__ccErrors"), [], "no page errors");
     assert.ok(existsSync(join(dataDir, "scratch")) && existsSync(join(dataDir, "config", "workspaces.json")), "the server created its scratch and workspaces in the temp data root");

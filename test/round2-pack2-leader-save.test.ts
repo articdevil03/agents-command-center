@@ -182,7 +182,11 @@ test("pack 2 C8: a successful Save writes one leader history entry (transcript +
   ws.message({ type: "save", tabId: "alpha-dev" });
   await waitFor(() => ws.messages.some((message: any) => message.type === "saved" && message.tabId === "alpha-dev"), "Save done");
   let entries: any[] = [];
-  await waitFor(() => { void server.listHistory("alpha-dev.leader").then((list: any[]) => { entries = list; }); return entries.length === 1; }, "the history lists the saved session");
+  const deadline = Date.now() + 2_000;
+  while ((entries = await server.listHistory("alpha-dev.leader")).length !== 1) {
+    if (Date.now() >= deadline) assert.fail("Timed out waiting for the history lists the saved session");
+    await tick(10);
+  }
   assert.equal(entries[0].seatId, "alpha-dev.leader");
   assert.deepEqual(JSON.parse(JSON.stringify(entries[0].outcome)), { status: "done", exitCode: 0 });
   assert.ok(entries[0].briefFile, "the brief file sits beside the log");

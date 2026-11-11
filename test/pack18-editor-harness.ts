@@ -1,3 +1,4 @@
+import { waitForFirstRender } from "./page-first-render.ts";
 import { SERVER_START_MS } from "./server-start.ts";
 // Pack 18 crew editor test harness: the real page in a real headless Chrome, its state taken from a real server. The server starts on a
 // temp data root and adds, through its own addTab, a Marketing tab and a "Start blank" tab next to its first (Our process) tab. The page
@@ -180,7 +181,7 @@ export async function withPage(body: (page: Page) => Promise<void>, options: { s
     await page("Page.enable"); await page("Runtime.enable");
     await page("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     await page("Page.navigate", { url: `http://${HOST}:${proxyPort}/__stream` });
-    await waitFor(`document.querySelectorAll("#crew .seat").length>0&&typeof window.CC_SETUP_EDITOR?.render==="function"`, "app render with the editor loaded");
+    await waitForFirstRender(waitFor, `document.querySelectorAll("#crew .seat").length>0&&typeof window.CC_SETUP_EDITOR?.render==="function"`, "app render with the editor loaded");
     await body({ ev, waitFor, page, seed, ours, mkt, blank });
     assert.deepEqual(await ev("window.__ccErrors"), [], "no page errors");
     assert.equal(readRepoWorkspaces(), repoWorkspacesBefore, "the repo's workspaces file is untouched");

@@ -1,6 +1,6 @@
 // Exclusive lock for scripts/mutation-proof.mjs. The sweep works in a disposable copy, but its start-up deletes every older
-// ".cc-test-mutations-*" folder and its cleanup stops processes by folder name, so a second sweep running at the same time would
-// delete the first one's live copy. This is dev tooling only, same-user, same-machine: the lock file is created exclusively
+// ".cc-test-mutations-*" folder, so a second sweep could delete the first one's live copy. Process cleanup stops only its own
+// spawned process tree, by pid and creation time. This is dev tooling only, same-user, same-machine: the lock file is created exclusively
 // ("wx"), which closes the check-then-write race, and is not a security boundary.
 import { readFileSync, writeFileSync, unlinkSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";

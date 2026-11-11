@@ -310,7 +310,11 @@ test("pack 9: a heads-up line in the chat is never part of the saved session log
   ws.message({ type: "save", tabId: "alpha-dev" });
   await waitFor(() => ws.messages.some((message: any) => message.type === "saved" && message.tabId === "alpha-dev"), "Save done");
   let entries: any[] = [];
-  await waitFor(() => { void server.listHistory("alpha-dev.leader").then((list: any[]) => { entries = list; }); return entries.length === 1; }, "the history lists the saved session");
+  const deadline = Date.now() + 2_000;
+  while ((entries = await server.listHistory("alpha-dev.leader")).length !== 1) {
+    if (Date.now() >= deadline) assert.fail("Timed out waiting for the history lists the saved session");
+    await tick(10);
+  }
   const log = readFileSync(path.join(server.testRoot, "logs", entries[0].logFile), "utf8");
   assert.match(log, /^You: decide the plan/, "the log starts with the person's words: the notice line is not in it");
   assert.equal(log.includes("Heads up"), false);
