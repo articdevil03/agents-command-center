@@ -1,7 +1,7 @@
 import { after } from "node:test";
 import type { ChildProcess } from "node:child_process";
 import assert from "node:assert/strict";
-import { cpSync as copyTree, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync as copyTree, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,12 +21,10 @@ export function tempRoot(directories: string[] = []): string {
   } catch (err) {
     // rel is "" for root itself and starts with ".." for a parent -- never remove those.
     // Anything else here is a real subdirectory mkdtempSync just created, safe to remove.
-    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) rmSync(dir, { recursive: true, force: true });
+    if (rel && !rel.startsWith("..") && !isAbsolute(rel)) removeWithRetry(dir);
     throw err;
   }
-  // A test that passed must not be failed by Windows still holding a handle
-  // inside dir afterwards -- removeWithRetry (see its own comment) retries
-  // and warns instead of throwing.
+  // A leftover makes the run unsuccessful without masking the body error.
   after(() => removeWithRetry(dir));
   for (const name of directories) cpSync(join(root, name), join(dir, name), { recursive: true });
   return dir;

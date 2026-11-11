@@ -1,3 +1,4 @@
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
@@ -58,7 +59,7 @@ function put(dir: string, name: string, text: string): string { const path = joi
 test.after(() => {
   restoreDataEnv();
   for (const file of made) try { unlinkSync(file); } catch { /* already gone */ }
-  for (const dir of madeDirs.reverse()) try { rmdirSync(dir); } catch { /* not empty: left for the OS temp cleaner */ }
+  for (const dir of madeDirs.reverse()) removeWithRetry(dir);
 });
 
 test("A5: a codex.cmd planted in the tab folder is NOT run; the one found on PATH is", windowsOnly, async () => {

@@ -3,10 +3,12 @@
 // Usage: node scripts/make-icon.mjs [previewDir]   (previewDir gets the 256 and 32 px PNGs)
 // CC_ICON_OUT overrides the output path and CHROME_PATH may be a .js/.mjs file run by Node: both exist so the test can run this script with a fake Chrome.
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { removeWithRetry } from "./mutation-proof.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SIZES = [16, 24, 32, 48, 64, 128, 256];
@@ -20,13 +22,10 @@ const [launcher, launcherArgs] = /\.[cm]?js$/.test(chrome) ? [process.execPath, 
 const out = process.env.CC_ICON_OUT ?? join(root, "build/icon.ico");
 const svg = readFileSync(join(root, "build/icon-source.svg"), "utf8").replace('viewBox="0 0 64 64"', 'viewBox="5 5 54 54" width="100%" height="100%"');
 const temp = mkdtempSync(join(tmpdir(), "cc-icon-"));
-const made = [];
 try {
   const entries = [];
   for (const size of SIZES) {
     const page = join(temp, `p${size}.html`), png = join(temp, `p${size}.png`);
-    // Registered before they are written: a failed or partial write is still cleaned up below.
-    made.push(page, png);
     writeFileSync(page, `<!doctype html><meta charset="utf-8"><style>html,body{margin:0;background:transparent;overflow:hidden}svg{display:block;width:${size}px;height:${size}px}</style>${svg}`);
     const run = spawnSync(launcher, [...launcherArgs, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--default-background-color=00000000", ...OFFLINE, `--window-size=${size},${size}`, `--screenshot=${png}`, `--user-data-dir=${join(temp, "profile")}`, pathToFileURL(page).href], { stdio: "ignore", timeout: 60_000 });
     if (!existsSync(png)) throw new Error(`Chrome produced no PNG for ${size}px (exit ${run.status})`);
@@ -49,8 +48,5 @@ try {
   if (preview) { mkdirSync(preview, { recursive: true }); for (const size of [256, 32]) copyFileSync(join(temp, `p${size}.png`), join(preview, `icon-${size}.png`)); }
   console.log(`${out} written: ${SIZES.join(", ")} px`);
 } finally {
-  // exact files, then the profile Chrome made, then the empty temp folder
-  for (const file of made) rmSync(file, { force: true });
-  rmSync(join(temp, "profile"), { recursive: true, force: true });
-  try { rmdirSync(temp); } catch { /* not empty: leave it visible */ }
+  removeWithRetry(temp);
 }

@@ -12,6 +12,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { removeWithRetry } from "./mutation-proof.mjs";
+
 const root = fileURLToPath(new URL("..", import.meta.url));
 const distDir = resolve(process.env.CC_DIST_DIR_OVERRIDE ?? join(root, "dist"));
 const buildOverride = process.env.CC_DIST_BUILD_OVERRIDE;
@@ -370,9 +372,8 @@ try {
   console.error(`dist failed: ${error.message}`);
   exitCode = 1;
 } finally {
-  if (stageDir && existsSync(stageDir)) {
-    try { rmSync(stageDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }); }
-    catch (error) { console.error(`Could not remove this run's staging directory "${stageDir}": ${error.message}`); }
+  if (stageDir) {
+    if (!removeWithRetry(stageDir)) exitCode = 1;
   }
   releaseLock();
 }

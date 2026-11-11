@@ -1,3 +1,4 @@
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
@@ -14,7 +15,7 @@ process.env.TEMP = process.env.TMP = scratch;
 after(() => {
   process.env.TEMP = savedTemp;
   process.env.TMP = savedTmp;
-  removeTree(scratch, REAL_TMP);
+  removeWithRetry(scratch);
 });
 
 function fakeRepo(withModules = true) {

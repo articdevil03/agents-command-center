@@ -1,9 +1,10 @@
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { createServer as createHttpServer } from "node:http";
-import { mkdtempSync, readFileSync, rmSync, rmdirSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { join, resolve } from "node:path";
@@ -69,11 +70,7 @@ test("OpenCode leader: a turn that started while the first one's window lookup w
     leader.stop();
     bridge.close();
     await sleep(600);
-    rmSync(logFile, { force: true });
-    // The stopped server may still hold the folder for a moment: retry the empty-folder removal, and say so (never silently) if it stays.
-    let removeError: unknown;
-    for (const end = Date.now() + 2000; Date.now() < end;) { try { rmdirSync(temp); removeError = undefined; break; } catch (error) { removeError = error; await sleep(50); } }
-    if (removeError) console.warn(`could not remove the temp folder ${temp}: ${String(removeError)}`);
+    removeWithRetry(temp);
   }
 });
 

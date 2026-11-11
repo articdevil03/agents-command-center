@@ -1,3 +1,4 @@
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 // Pack 18, Block 2: an ACP CLI (Agent Client Protocol) works as a crew seat. runSeat starts the adapter in worker mode against the fake ACP agent
 // (shapes measured on `opencode acp`), with only the spawn replaced. W1 done + log + no shell, W2 read-only seats refuse permissions, W3 Stop and errors,
 // W4 a refused start, W5 the crew tools over HTTP (and the early fail without HTTP), W6 the token never shown.
@@ -5,7 +6,7 @@ import test, { after, mock } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { existsSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importWithTempDataRoot, scratchDir } from "./temp-root.ts";
@@ -22,18 +23,8 @@ const CREW = { url: "http://127.0.0.1:1/api/leader-mcp/p18-tab.run", token: TOKE
 let counter = 0;
 // Every start() makes one folder for the fake agent's log in the OS temp dir; each is removed when the file ends (its log file, then the empty folder, never a recursive delete).
 const madeLogDirs: string[] = [];
-after(async () => {
-  for (const dir of madeLogDirs) {
-    for (let attempt = 0; attempt < 10; attempt++) {
-      try {
-        if (!existsSync(dir)) break;
-        if (lstatSync(dir).isSymbolicLink()) break; // never follow a link
-        for (const name of readdirSync(dir)) { if (!lstatSync(join(dir, name)).isSymbolicLink()) unlinkSync(join(dir, name)); }
-        rmdirSync(dir);
-        break;
-      } catch { await sleep(200); } // the agent process may still hold its log for a moment
-    }
-  }
+after(() => {
+  for (const dir of madeLogDirs) removeWithRetry(dir);
 });
 
 type Started = {

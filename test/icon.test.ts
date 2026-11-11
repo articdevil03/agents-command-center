@@ -112,10 +112,13 @@ test("make-icon runs Chrome with networking off and a dead proxy, so nothing lea
   for (const flag of ["--disable-background-networking", "--disable-component-update", "--disable-sync", "--no-first-run", "--no-default-browser-check", "--disable-features=OptimizationHints,MediaRouter", "--proxy-server=127.0.0.1:9", "--proxy-bypass-list=<-loopback>"]) assert.ok(script.includes(flag), `make-icon.mjs passes ${flag}`);
 });
 
-test("make-icon registers each temp file for cleanup before it writes it", () => {
-  const script = readFileSync(join(process.cwd(), "scripts/make-icon.mjs"), "utf8");
-  const registered = script.indexOf("made.push(page, png)"), written = script.indexOf("writeFileSync(page,");
-  assert.ok(registered > 0 && written > 0 && registered < written, `registered at ${registered}, written at ${written}`);
+test("make-icon cleans a partial temp write through its real entry", async () => {
+  const { fixture } = await import("./tooling-temp-fixtures.ts");
+  const f = fixture(); f.put("fake-chrome", "file"); f.proc.env.CHROME_PATH = "fake-chrome";
+  f.context.readFileSync = () => '<svg viewBox="0 0 64 64"></svg>';
+  f.context.writeFileSync = (path: string, text: string) => { f.put(path, "file", text); throw new Error("partial write"); };
+  await assert.rejects(f.entry("scripts/make-icon.mjs"), /partial write/);
+  assert.equal([...f.entries.keys()].some((path) => path.includes("cc-icon-")), false, "partial temp file and folder removed");
 });
 
 // ---- the picture itself ----

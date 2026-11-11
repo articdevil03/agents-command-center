@@ -29,6 +29,7 @@ test("overlap audit: no visible text or control overlaps or is clipped, at 1600,
   if (process.env.CC_SKIP_BROWSER === "1") { t.skip("CC_SKIP_BROWSER=1 was explicitly set"); return; }
   assert.ok(existsSync(CHROME), `Headless Chrome is required at ${CHROME}; set CC_SKIP_BROWSER=1 only when intentionally running without it`);
   const temp = mkdtempSync(join(tmpdir(), "cc-overlap-"));
+  console.log(`OVERLAP_TEMP_ROOT: ${temp}`);
   const dataDir = join(temp, "data"); mkdirSync(join(dataDir, "config"), { recursive: true });
   // Two projects of its own (the audit needs a second one); the server runs on this temp data root, never the repo's.
   const crew = getProcessDefinition("dev", "main").seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort }));

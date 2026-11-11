@@ -1,3 +1,4 @@
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -12,7 +13,7 @@ import { runTests, SWEEP_PRIORITY, lowerOwnPriority } from "../scripts/sweep/run
 // A fake lane in the OS temp dir: the run only needs dir (cwd), temp (TEMP/TMP) and the empty --import file; fixture test files are written per test.
 const REAL_TMP = tmpdir();
 const scratch = mkdtempSync(join(REAL_TMP, "cc-run-test-"));
-after(() => { removeTree(scratch, REAL_TMP); });
+after(() => { removeWithRetry(scratch); });
 
 function fakeLane() {
   const dir = mkdtempSync(join(scratch, "lane-"));

@@ -1,8 +1,9 @@
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 // Fix pack 2, block 2 (launching agents): process trees, crash leftovers, folders with odd characters, the Claude leader's CLI and approvals.
 // Real processes only where the behaviour IS the process (Windows): every one is started from a temp folder and killed again by pid.
 import test from "node:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeCliOnPath, scratchDir, setEnv } from "./temp-root.ts";
@@ -83,19 +84,12 @@ export function scratch(name = "cc-pack2-"): string { const dir = mkdtempSync(jo
 
 export function put(dir: string, name: string, text: string): string { const file = join(dir, name); writeFileSync(file, text); made.push(file); return file; }
 
-// A test that failed halfway leaves files nobody registered, so a scratch folder (made by mkdtempSync here, so ours alone) is removed with what is
-// in it, unless it holds a link (never followed or deleted through).
-function removeScratch(dir: string): void {
-  try { if (readdirSync(dir, { recursive: true, withFileTypes: true }).some((entry) => entry.isSymbolicLink())) return; } catch { return; }
-  rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-}
-
 test.after(async () => {
   // The data-root variables go back last: a tracker write still pending while the files are cleaned up must not resolve to the repo's own folders.
   try {
     await killSeen(tracked);
     for (const file of made) try { unlinkSync(file); } catch { /* already gone */ }
-    for (const dir of madeDirs.reverse()) try { removeScratch(dir); } catch { /* a handle still held: left for the OS temp cleaner */ }
+    for (const dir of madeDirs.reverse()) removeWithRetry(dir);
   } finally { restoreDataEnv(); }
 });
 

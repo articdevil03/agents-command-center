@@ -1,3 +1,4 @@
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 // Pack 16, test health: (A) no teardown deletes a temp folder with a bare rmSync that Windows can fail once; (C) every test that starts a
 // Command Center server hooks the crash catcher, and the catcher really reports a crash on purpose.
 import test from "node:test";
@@ -211,5 +212,5 @@ test("pack 16 catcher: the test script's preload attaches the catcher to a test 
     const lines = existsSync(log) ? readFileSync(log, "utf8").split(/\r?\n/).filter(Boolean) : [];
     console.log(`pack16 preload: flags=[${flags.join(" ")}] exit=${run.status} attach log: ${lines.join(" | ")}`);
     assert.ok(lines.some((l) => /^\d+ test-file:stall\.test\.ts$/.test(l)), `stall.test.ts ran with no catcher attached; the test script (${script}) no longer preloads test/crash-catcher-self.ts:\n${lines.join("\n")}\n${run.stderr}`);
-  } finally { try { unlinkSync(log); } catch { /* never written */ } try { rmdirSync(dir); } catch { /* left for the OS temp cleanup */ } }
+  } finally { removeWithRetry(dir); }
 });

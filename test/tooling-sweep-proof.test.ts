@@ -12,6 +12,27 @@ import { lowerOwnPriority, runTests, SWEEP_PRIORITY } from "../scripts/sweep/run
 
 // Explicit safe mappings. Ownership guards select pure cases; run guards select fake process seams.
 const PROOFS: Record<string, [string, string]> = {
+  "guard-p24-cleanup-budget": ["test/tooling-temp-cleanup.test.ts", "^P24 budget and retry"],
+  "guard-p24-cleanup-retry": ["test/tooling-temp-cleanup.test.ts", "^P24 budget and retry"],
+  "guard-p24-cleanup-exit-setter": ["test/tooling-temp-cleanup.test.ts", "^P24 permanent lock"],
+  "guard-p24-cleanup-marker": ["test/tooling-temp-cleanup.test.ts", "^P24 permanent lock"],
+  "guard-p24-cleanup-root-link": ["test/tooling-temp-cleanup.test.ts", "^P24 linked root"],
+  "guard-p24-cleanup-no-follow": ["test/tooling-temp-cleanup.test.ts", "^P24 nested junction"],
+  "guard-p24-cleanup-directory": ["test/tooling-temp-cleanup.test.ts", "^P24 immediate success"],
+  "guard-p24-cleanup-continue-siblings": ["test/tooling-temp-cleanup.test.ts", "^P24 locked child"],
+  "guard-p24-cleanup-temp-root-call": ["test/tooling-temp-cleanup.test.ts", "^P24 tempRoot registered"],
+  "guard-p24-cleanup-scratch-call": ["test/tooling-temp-cleanup.test.ts", "^P24 scratchDir registered"],
+  "guard-p24-cleanup-overlap-call": ["test/tooling-temp-cleanup.test.ts", "^P24 overlap actual"],
+  "guard-p24-cleanup-dist-call": ["test/tooling-temp-cleanup.test.ts", "^P24 dist actual"],
+  "guard-p24-cleanup-dist-status": ["test/tooling-temp-cleanup.test.ts", "^P24 dist actual"],
+  "guard-p24-cleanup-icon-call": ["test/tooling-temp-cleanup.test.ts", "^P24 icon partial"],
+  "guard-p24-cleanup-pack1-call": ["test/tooling-temp-cleanup.test.ts", "^P24 pack1 actual"],
+  "guard-p24-cleanup-pack2-call": ["test/tooling-temp-cleanup.test.ts", "^P24 pack2 actual"],
+  "guard-p24-cleanup-health-call": ["test/tooling-temp-cleanup.test.ts", "^P24 health actual"],
+  "guard-p24-cleanup-any-cli-call": ["test/tooling-temp-cleanup.test.ts", "^P24 any-cli actual"],
+  "guard-p24-cleanup-acp-call": ["test/tooling-temp-cleanup.test.ts", "^P24 acp actual"],
+  "guard-p24-cleanup-lanes-call": ["test/tooling-temp-cleanup.test.ts", "^P24 lanes actual"],
+  "guard-p24-cleanup-run-call": ["test/tooling-temp-cleanup.test.ts", "^P24 run actual"],
   "guard-sweep-confirm-live-flakes": ["test/tooling-sweep-confirm.test.ts", "^P23"],
   "guard-sweep-confirm-quiet-error": ["test/tooling-sweep-confirm.test.ts", "^P23"],
   "guard-sweep-confirm-call": ["test/tooling-sweep-confirm.test.ts", "^P23"],
@@ -143,7 +164,7 @@ test("C1 scoped mutation proof", { skip: !selection && "CC_SWEEP_PROOF_ROW unset
   parse(text); parse(mutated);
   const priority = lowerOwnPriority();
   assert.equal(priority, SWEEP_PRIORITY);
-  const lane = createLane(root, ["scripts", "test"], 1);
+  const lane = createLane(root, ["scripts", "test", "server"], 1);
   const files = [`--test-name-pattern=${pattern}`, file];
   let sequence = 0;
   const run = async (red: boolean, earlyStop: boolean) => {

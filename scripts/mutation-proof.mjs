@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { electronMutations } from "./mutations/electron.mjs";
@@ -37,22 +37,46 @@ export function isRealRed(code, output) {
   return code === 1 && /^\s*AssertionError \[ERR_ASSERTION\]/m.test(output);
 }
 
-// Windows can still hold a handle inside a mutation run's temp directory (an
-// AV scan, a just-exited child whose handle hasn't released yet) even after
-// every mutation this sweep ran has already verified RED/GREEN -- rmSync's
-// own throw used to reach the caller uncaught at that point, so a fully
-// passing sweep still crashed instead of printing its completion line, and
-// the directory it choked on was left behind for the next run to trip over.
-// The verification is already complete by the time this runs; a leftover
-// temp directory is disk clutter, never evidence the sweep itself failed.
-export function removeWithRetry(path, attempts = 5, delayMs = 300) {
+// Only the supplied caller-owned root is removed. Links are never traversed.
+function removeOwnedLink(path) {
+  try { unlinkSync(path); }
+  catch (error) {
+    if (!["EPERM", "EISDIR"].includes(error.code) || !lstatSync(path).isSymbolicLink()) throw error;
+    rmdirSync(path); // Windows directory junction, exact link object only.
+  }
+}
+
+function removeOwnedEntry(entry) {
+  const info = lstatSync(entry);
+  if (info.isSymbolicLink()) { removeOwnedLink(entry); return; }
+  if (!info.isDirectory()) { unlinkSync(entry); return; }
+  let firstError;
+  for (const name of readdirSync(entry)) {
+    try { removeOwnedEntry(join(entry, name)); }
+    catch (error) { if (error.code !== "ENOENT") firstError ??= error; }
+  }
+  if (firstError) throw firstError;
+  const current = lstatSync(entry);
+  if (current.isSymbolicLink() || !current.isDirectory()) throw new Error("temp directory changed during cleanup");
+  if (readdirSync(entry).length) throw Object.assign(new Error("temp directory is not empty"), { code: "ENOTEMPTY" });
+  rmdirSync(entry);
+}
+
+// Cleanup reports failure without replacing an earlier body error. Ten seconds
+// of bounded retries covers slow Windows handle release; success never sleeps.
+export function removeWithRetry(path, attempts = 41, delayMs = 250) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      rmSync(path, { recursive: true, force: true });
+      const rootInfo = lstatSync(path);
+      if (rootInfo.isSymbolicLink()) throw new Error("refusing linked temp root");
+      removeOwnedEntry(path);
       return true;
     } catch (err) {
-      if (attempt === attempts) {
-        console.log(`WARNING: could not remove "${path}" after ${attempts} attempts (${err.message}); leaving it on disk -- the sweep's own results are unaffected.`);
+      if (err.code === "ENOENT") return true;
+      const retryable = ["EPERM", "EBUSY", "ENOTEMPTY"].includes(err.code);
+      if (!retryable || attempt === attempts) {
+        console.error(`TEMP_CLEANUP_LEFTOVER: root="${path}" error=${err.code ?? "Error"}: ${err.message} attempts=${attempt}`);
+        if (Number(process.exitCode ?? 0) === 0) process.exitCode = 1;
         return false;
       }
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
