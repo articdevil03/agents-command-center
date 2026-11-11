@@ -12,6 +12,10 @@ import { lowerOwnPriority, runTests, SWEEP_PRIORITY } from "../scripts/sweep/run
 
 // Explicit safe mappings. Ownership guards select pure cases; run guards select fake process seams.
 const PROOFS: Record<string, [string, string]> = {
+  "guard-p25-preabort-spawn": ["test/tooling-sweep-run-order.test.ts", "^P25 "],
+  "guard-p25-timeout-late": ["test/tooling-sweep-run-order.test.ts", "^P25 "],
+  "guard-p25-stop-root": ["test/tooling-sweep-run-order.test.ts", "^P25 "],
+  "guard-p25-stop-late": ["test/tooling-sweep-run-order.test.ts", "^P25 "],
   "guard-p24-cleanup-budget": ["test/tooling-temp-cleanup.test.ts", "^P24 budget and retry"],
   "guard-p24-cleanup-retry": ["test/tooling-temp-cleanup.test.ts", "^P24 budget and retry"],
   "guard-p24-cleanup-exit-setter": ["test/tooling-temp-cleanup.test.ts", "^P24 permanent lock"],
@@ -100,7 +104,7 @@ const PROOFS: Record<string, [string, string]> = {
   "guard-sweep-record-dead-parent": ["test/tooling-sweep-proctree.test.ts","^recordTree"],
   "guard-sweep-register-root": ["test/tooling-sweep-run.test.ts","^C1 fake"],
   "guard-sweep-cleanup-every-run": ["test/tooling-sweep-run.test.ts","^C1 fake"],
-  "guard-sweep-early-stop-cleanup": ["test/tooling-sweep-run.test.ts","^C1 fake"],
+  "guard-sweep-early-stop-cleanup": ["test/tooling-sweep-run-order.test.ts", "^P25 "],
   "guard-sweep-final-cleanup-propagates": ["test/tooling-sweep-run.test.ts","^C1 fake"],
   "guard-sweep-only-assertion-early-stop": ["test/tooling-sweep-run.test.ts","^C1 fake"],
   "guard-sweep-record-and-continue": ["test/tooling-sweep-main.test.ts","^a survivor does not"],

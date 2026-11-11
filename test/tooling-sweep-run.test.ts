@@ -5,9 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { fileURLToPath } from "node:url";
-import { removeTree } from "../scripts/sweep/lanes.mjs";
+import { fakeRun } from "./tooling-sweep-run-fakes.ts";
 import { runTests, SWEEP_PRIORITY, lowerOwnPriority } from "../scripts/sweep/run.mjs";
 
 // A fake lane in the OS temp dir: the run only needs dir (cwd), temp (TEMP/TMP) and the empty --import file; fixture test files are written per test.
@@ -29,27 +27,50 @@ const FAILS_ASSERTION = `test("catches", () => assert.equal(1, 2));`;
 const PASSES = `test("fine", () => {});`;
 const THROWS_TYPE_ERROR = `test("thrower", () => { throw new TypeError("boom"); });`;
 const CRASHES_AT_LOAD = `throw new Error("crash at load");`;
-const SLEEPS_10S = `test("slow", async () => { await new Promise((r) => setTimeout(r, 10000)); });`;
+// The watchdog is a failure, never a successful natural completion.
+const PENDING = `
+async function pending(name) {
+  const marker = (suffix) => process.env.TEMP + "/" + name + "-" + suffix;
+  writeFileSync(marker("ready"), "1");
+  for (let i = 0; i < 600; i++) {
+    if (existsSync(marker("release"))) { writeFileSync(marker("completed"), "1"); return; }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  writeFileSync(marker("expired"), "1");
+  assert.fail(name + " fixture watchdog expired before release");
+}`;
+const SLEEPS_PENDING = `${PENDING} test("slow", () => pending("slow"));`;
 const PASSES_AFTER_2S = `test("late pass", async () => { await new Promise((r) => setTimeout(r, 2000)); });`;
-// Starts a holder process (a bounded life, about 60 s) and writes its pid, then sleeps: what a spawned test server looks like.
-const SLEEPS_WITH_HOLDER = `test("slow with a child", async () => {
-  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
-  writeFileSync(process.env.TEMP + "\\\\holder-pid", String(holder.pid));
-  writeFileSync(process.env.TEMP + "\\\\holder-started", "1");
-  await new Promise((r) => setTimeout(r, 10000));
+const HOLDER = `const fs = require("fs"); fs.writeFileSync(process.env.TEMP + "/holder-started", "1"); setTimeout(() => { fs.writeFileSync(process.env.TEMP + "/holder-expired", "1"); process.exit(1); }, 60000);`;
+const SLEEPS_WITH_HOLDER = `${PENDING} test("slow with a child", async () => {
+  const holder = spawn(process.execPath, ["-e", ${JSON.stringify(HOLDER)}], { stdio: "ignore" });
+  writeFileSync(process.env.TEMP + "/holder-pid", String(holder.pid));
+  await pending("slow");
 });`;
-// A holder that outlives its test file: the file ends normally after the shared poller has had time to see the holder, and the holder (bounded life, about 30 s) lives on.
-const LEAVES_ORPHAN_HOLDER = `test("leaves an orphan", async () => {
-  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], { stdio: "ignore", detached: true });
+const LEAVES_ORPHAN_HOLDER = `${PENDING} test("leaves an orphan", async () => {
+  const holder = spawn(process.execPath, ["-e", ${JSON.stringify(HOLDER)}], { stdio: "ignore", detached: true });
   holder.unref();
-  writeFileSync(process.env.TEMP + "\\\\orphan-pid", String(holder.pid));
-  await new Promise((r) => setTimeout(r, 3000));
+  writeFileSync(process.env.TEMP + "/orphan-pid", String(holder.pid));
+  await pending("orphan");
 });`;
-// Fails an assertion only after the holder exists, so the kill really has something to take down.
 const FAILS_ONCE_HOLDER_RUNS = `test("catches once the holder runs", async () => {
-  for (let i = 0; i < 80 && !existsSync(process.env.TEMP + "\\\\holder-started"); i++) await new Promise((r) => setTimeout(r, 100));
+  for (let i = 0; i < 600 && !existsSync(process.env.TEMP + "/holder-started"); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.equal(existsSync(process.env.TEMP + "/holder-started"), true, "holder readiness exhausted");
   assert.equal(1, 2);
 });`;
+async function waitForReady(check: () => boolean, label: string) {
+  for (let i = 0; i < 600; i++) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  assert.fail(`${label}: readiness exhausted`);
+}
+const release = (lane: ReturnType<typeof fakeLane>, name: string) => writeFileSync(join(lane.temp, `${name}-release`), "go");
+const notExpired = (lane: ReturnType<typeof fakeLane>, name: string) => assert.equal(existsSync(join(lane.temp, `${name}-expired`)), false, `${name}: watchdog must not expire`);
+const stillPending = (lane: ReturnType<typeof fakeLane>, name: string) => {
+  notExpired(lane, name);
+  assert.equal(existsSync(join(lane.temp, `${name}-completed`)), false, `${name}: fixture was not released`);
+};
 
 const isAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code !== "ESRCH"; } };
 
@@ -66,8 +87,10 @@ test("early stop: the first real assertion kills the run, names the catching tes
   assert.equal(result.outcome, "assertion");
   assert.equal(result.stoppedEarly, true);
   assert.deepEqual(result.catching, { file: "test/a-fails.test.mjs", name: "catches once the holder runs" });
-  assert.ok(result.ms < 4500, `the 10 s file did not run to its end (took ${result.ms} ms)`);
-  assert.notEqual(result.exitCode, null, "the tree kill ended the run; waiting out the give-up limit would leave no exit code");
+  assert.equal(existsSync(join(lane.temp, "slow-ready")), true, "pending fixture started");
+  stillPending(lane, "slow");
+  notExpired(lane, "holder");
+  // No exitCode check: the 5 s give-up can return null under load; P25 in tooling-sweep-run-order.test.ts proves kill ordering with a virtual clock.
   assert.equal(isAlive(holderPid), false, "the holder the test file started is gone");
   assert.equal(strays.status, 0);
   assert.equal(strays.stdout.trim(), "", "no process whose command line holds the lane folder or its temp");
@@ -76,10 +99,19 @@ test("early stop: the first real assertion kills the run, names the catching tes
 test("a process a test file leaves running after the file ended is stopped when the run ends", { skip: process.platform !== "win32" }, async () => {
   const lane = fakeLane();
   addFile(lane, "orphan.test.mjs", LEAVES_ORPHAN_HOLDER);
-  const result = await runTests(options(lane, ["test/orphan.test.mjs"]));
-  const orphanPid = Number(readFileSync(join(lane.temp, "orphan-pid"), "utf8"));
-  console.log(`ORPHAN PROBE: outcome=${result.outcome} orphan pid=${orphanPid} alive after return=${isAlive(orphanPid)} tracked=${JSON.stringify([...lane.tracked])}`);
+  const running = runTests(options(lane, ["test/orphan.test.mjs"]));
+  let orphanPid = 0;
+  try {
+    await waitForReady(() => existsSync(join(lane.temp, "orphan-pid")), "orphan PID publication");
+    orphanPid = Number(readFileSync(join(lane.temp, "orphan-pid"), "utf8"));
+    await waitForReady(() => lane.tracked.has(orphanPid) && existsSync(join(lane.temp, "holder-started")), "orphan discovery by the real poller");
+    assert.equal(isAlive(orphanPid), true, "holder was live before releasing its parent");
+  } finally { release(lane, "orphan"); await running; }
+  const result = await running;
   assert.equal(result.outcome, "pass");
+  assert.notEqual(result.exitCode, null);
+  assert.equal(existsSync(join(lane.temp, "orphan-completed")), true, "parent observed release");
+  notExpired(lane, "orphan"); notExpired(lane, "holder");
   assert.equal(isAlive(orphanPid), false, "the holder that outlived its test file is gone");
 });
 
@@ -150,28 +182,32 @@ test("red sets CC_MUTATION_PROOF for the test processes, and CC_DATA_DIR from th
 
 test("a run past timeoutMs is tree-killed and reported as 'timeout', never as pass or assertion", async () => {
   const lane = fakeLane();
-  addFile(lane, "slow.test.mjs", SLEEPS_10S);
+  addFile(lane, "slow.test.mjs", SLEEPS_PENDING);
   const result = await runTests(options(lane, ["test/slow.test.mjs"], { timeoutMs: 1500 }));
   assert.equal(result.outcome, "timeout");
   assert.equal(result.stoppedEarly, false);
-  assert.ok(result.ms < 4500, `killed at the timeout, not at the end of the 10 s file (took ${result.ms} ms)`);
-  assert.notEqual(result.exitCode, null, "the tree kill ended the run");
+  stillPending(lane, "slow");
+  assert.ok(lane.tracked.size > 0, "owned processes were actually discovered");
+  assert.ok([...lane.tracked.keys()].every((pid) => !isAlive(pid)), "all discovered owned processes are gone");
 });
 
 test("abort: the signal tree-kills the run at once as 'aborted'; an already-aborted signal never spawns", async () => {
   const lane = fakeLane();
-  addFile(lane, "slow.test.mjs", SLEEPS_10S);
+  addFile(lane, "slow.test.mjs", SLEEPS_PENDING);
   const controller = new AbortController();
-  setTimeout(() => controller.abort(), 1500);
-  const result = await runTests(options(lane, ["test/slow.test.mjs"], { signal: controller.signal }));
+  const running = runTests(options(lane, ["test/slow.test.mjs"], { signal: controller.signal }));
+  try {
+    await waitForReady(() => existsSync(join(lane.temp, "slow-ready")), "abort fixture");
+    controller.abort();
+  } finally { controller.abort(); await running; }
+  const result = await running;
+  stillPending(lane, "slow");
+  assert.ok(lane.tracked.size > 0, "owned processes were actually discovered");
+  assert.ok([...lane.tracked.keys()].every((pid) => !isAlive(pid)), "all discovered owned processes are gone");
   assert.equal(result.outcome, "aborted");
-  assert.ok(result.ms < 4500, `took ${result.ms} ms`);
-  assert.notEqual(result.exitCode, null);
-  const before = Date.now();
   const never = await runTests(options(lane, ["test/slow.test.mjs"], { signal: AbortSignal.abort() }));
   assert.equal(never.outcome, "aborted");
   assert.equal(never.exitCode, null);
-  assert.ok(Date.now() - before < 1000, "nothing was started");
   assert.equal(existsSync(never.logPath.replace("run.log", "never.log")), false);
 });
 
@@ -184,119 +220,86 @@ test("a spawn that fails is 'runner-error'", async () => {
 test("priority: the sweep and every test process under it run below normal, seen from inside and from outside", { skip: process.platform !== "win32" }, async () => {
   assert.equal(SWEEP_PRIORITY, 10);
   const lane = fakeLane();
-  addFile(lane, "priority.test.mjs", `test("reports its own priority", async () => {
-  writeFileSync(process.env.TEMP + "\\\\priority.json", JSON.stringify({ pid: process.pid, inside: os.getPriority(0) }));
-  await new Promise((r) => setTimeout(r, 6000));
+  addFile(lane, "priority.test.mjs", `${PENDING} test("reports its own priority", async () => {
+  writeFileSync(process.env.TEMP + "/priority.json", JSON.stringify({ pid: process.pid, inside: os.getPriority(0) }));
+  await pending("priority");
 });`);
   const running = runTests(options(lane, ["test/priority.test.mjs"]));
   const marker = join(lane.temp, "priority.json");
-  for (let i = 0; i < 100 && !existsSync(marker); i++) await new Promise((r) => setTimeout(r, 100));
-  const { pid, inside } = JSON.parse(readFileSync(marker, "utf8"));
-  const outside = spawnSync("powershell.exe", ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).PriorityClass`], { encoding: "utf8", windowsHide: true }).stdout.trim();
-  console.log(`PRIORITY PROBE: per-file process pid=${pid} os.getPriority inside=${inside} PriorityClass from outside=${outside}`);
-  assert.equal(inside, 10, "os.getPriority(0) inside the per-file process");
-  assert.equal(outside, "BelowNormal", "the Windows priority class of the per-file process while it runs");
+  try {
+    await waitForReady(() => existsSync(marker) && existsSync(join(lane.temp, "priority-ready")), "priority fixture");
+    const { pid, inside } = JSON.parse(readFileSync(marker, "utf8"));
+    assert.equal(isAlive(pid), true, "priority fixture is held live for the outside query");
+    const query = spawnSync("powershell.exe", ["-NoProfile", "-Command", `(Get-Process -Id ${pid}).PriorityClass`], { encoding: "utf8", windowsHide: true });
+    assert.equal(query.status, 0, query.stderr);
+    assert.equal(inside, 10, "os.getPriority(0) inside the per-file process");
+    assert.equal(query.stdout.trim(), "BelowNormal", "outside priority while held live");
+  } finally { release(lane, "priority"); await running; }
   assert.equal((await running).outcome, "pass");
+  assert.equal(existsSync(join(lane.temp, "priority-completed")), true, "fixture observed release");
+  notExpired(lane, "priority");
 });
 
 test("lowerOwnPriority puts the sweep process itself at below normal and says so", { skip: process.platform !== "win32" }, () => {
   assert.equal(lowerOwnPriority(), SWEEP_PRIORITY);
 });
 
-// The real runner body with fake process boundaries. No pid here names an OS process.
-// Removing cleanup/ownership protections must never reach a real kill during a proof.
+// The real runner body with fake process boundaries and a controlled clock.
 test("C1 fake runner registers its root, lowers child priority, cleans every exit and propagates cleanup errors", async () => {
-  const text = readFileSync(fileURLToPath(new URL("../scripts/sweep/run.mjs", import.meta.url)), "utf8").replaceAll("\r\n", "\n");
-  const body = text.replace(/^import .*;\n/gm, "").replaceAll("export ", "");
   for (const scenario of ["pass", "assertion", "TypeError", "import", "timeout", "early-cleanup-error", "final-cleanup-error"]) {
-    const events: any[] = [];
-    const child: any = new EventEmitter();
-    child.pid = 12345; child.exitCode = null; child.signalCode = null;
-    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-    child.stdout.setEncoding = child.stderr.setEncoding = function () { return this; };
-    const lane = fakeLane();
-    const emit = (record: object) => child.stdout.emit("data", JSON.stringify(record) + "\n");
-    let closed = false;
-    const close = (code: number) => { if (!closed) { closed = true; child.exitCode = code; child.emit("close", code); } };
-    const spawn = (_exe: string, args: string[], opts: any) => {
-      events.push(["spawn", opts.env]);
-      assert.ok(args.includes("--test-concurrency=1"));
-      setImmediate(() => {
-        if (scenario === "timeout") return;
-        if (["assertion", "early-cleanup-error", "TypeError", "import"].includes(scenario)) {
-          emit({ type: "fail", file: join(lane.dir, "test/fake.test.ts"), name: "fixture", cause: scenario === "TypeError" || scenario === "import" ? "ERR_TEST_FAILURE" : "ERR_ASSERTION", message: "fixture assertion" });
-        }
-        emit({ type: "summary", pass: 1, fail: scenario === "pass" ? 0 : 1 });
-        close(scenario === "pass" ? 0 : 1);
-      });
-      return child;
+    const world = fakeRun();
+    world.onKill = (_root, early) => {
+      if ((scenario === "early-cleanup-error" && early) || (scenario === "final-cleanup-error" && !early)) throw new Error(`C1 ${scenario}`);
     };
-    const watchTree = (pid: number, tracked: Map<number, number>) => {
-      events.push(["watch", pid]); tracked.set(pid, 100);
-      return () => { events.push(["unwatch"]); };
-    };
-    const killTracked = async (_tracked: any, options?: any) => {
-      events.push(["cleanup", options?.root]);
-      close(1);
-      if ((scenario === "early-cleanup-error" && options?.root) || (scenario === "final-cleanup-error" && !options)) throw new Error(`C1 ${scenario}`);
-    };
-    const fakeOs = { constants: { priority: { PRIORITY_BELOW_NORMAL: 10 } }, setPriority: (pid: number, priority: number) => { events.push(["priority", pid, priority]); } };
-    const load = new Function("spawn", "appendFileSync", "os", "relative", "fileURLToPath", "pathToFileURL", "laneEnv", "killTracked", "watchTree", body.replaceAll("import.meta.url", JSON.stringify(import.meta.url)) + "; return runTests;");
-    const runner = load(spawn, () => {}, fakeOs, (base: string, file: string) => file.slice(base.length + 1), (value: URL) => value.pathname, (value: string) => ({ href: value }), () => ({ isolated: "yes" }), killTracked, watchTree);
     const saved = process.env.CC_DATA_DIR;
     process.env.CC_DATA_DIR = "must-not-leak";
     let result;
     try {
-      const running = runner(options(lane, ["test/fake.test.ts"], { timeoutMs: 20, concurrency: 1 }));
-      if (scenario.endsWith("cleanup-error")) await assert.rejects(running, new RegExp(`C1 ${scenario}`), "cleanup failure must reject the run");
+      const running = world.start({ timeoutMs: 20 });
+      assert.ok(world.spawnArgs.includes("--test-concurrency=1"));
+      if (scenario === "timeout") await world.advance(20);
+      else {
+        if (["assertion", "early-cleanup-error", "TypeError", "import"].includes(scenario)) {
+          world.emit({ type: "fail", file: "fake-lane/test/fake.test.ts", name: "fixture", cause: scenario === "TypeError" || scenario === "import" ? "ERR_TEST_FAILURE" : "ERR_ASSERTION", message: "fixture assertion" });
+        }
+        world.emit({ type: "summary", pass: 1, fail: scenario === "pass" ? 0 : 1 });
+        world.close(scenario === "pass" ? 0 : 1);
+      }
+      if (scenario.endsWith("cleanup-error")) await assert.rejects(running, new RegExp(`C1 ${scenario}`));
       else result = await running;
-    } finally { if (saved === undefined) delete process.env.CC_DATA_DIR; else process.env.CC_DATA_DIR = saved; }
-    assert.deepEqual(events.find(([event]) => event === "watch"), ["watch", child.pid], `${scenario}: spawned root registered`);
-    assert.deepEqual(events.find(([event]) => event === "priority"), ["priority", child.pid, 10], `${scenario}: child priority call`);
-    assert.equal(events.find(([event]) => event === "spawn")[1].CC_DATA_DIR, undefined, "spawn uses isolated laneEnv, not parent env");
-    assert.ok(events.some(([event, root]) => event === "cleanup" && root === undefined), `${scenario}: final cleanup executed`);
+    } finally {
+      if (saved === undefined) delete process.env.CC_DATA_DIR; else process.env.CC_DATA_DIR = saved;
+      await world.finish().catch((err) => { if (!scenario.endsWith("cleanup-error")) throw err; });
+    }
+    const { events, child } = world;
+    assert.deepEqual(events.find(([event]) => event === "watch"), ["watch", 0, child.pid], world.message());
+    assert.deepEqual(events.find(([event]) => event === "priority"), ["priority", 0, child.pid, 10], world.message());
+    assert.equal(world.spawnEnv.CC_DATA_DIR, undefined, "spawn uses isolated laneEnv, not parent env");
+    assert.ok(events.some(([event, , root, early]) => event === "kill" && root === undefined && !early), world.message());
     if (scenario === "assertion") {
-      assert.ok(events.some(([event, root]) => event === "cleanup" && root === child.pid), "early assertion invokes cleanup with the spawned root");
-      assert.equal(result.stoppedEarly, true);
-      assert.equal(result.outcome, "assertion");
+      assert.ok(events.some(([event, , root]) => event === "kill" && root === child.pid), world.message());
+      assert.equal(result.stoppedEarly, true); assert.equal(result.outcome, "assertion");
     }
     if (scenario === "pass") assert.equal(result.outcome, "pass");
     if (scenario === "TypeError" || scenario === "import") {
-      assert.equal(result.outcome, "failure", `${scenario} is not an assertion`);
-      assert.equal(result.stoppedEarly, false);
+      assert.equal(result.outcome, "failure"); assert.equal(result.stoppedEarly, false);
     }
     if (scenario === "timeout") assert.equal(result.outcome, "timeout");
   }
 });
 
 test("R1 fake runner passes root only before child exit when abort precedes close", async () => {
-  const text = readFileSync(fileURLToPath(new URL("../scripts/sweep/run.mjs", import.meta.url)), "utf8").replaceAll("\r\n", "\n");
-  const body = text.replace(/^import .*;\n/gm, "").replaceAll("export ", "");
   for (const exited of [false, true, "signal"]) {
-    const child: any = new EventEmitter();
-    child.pid = 12345; child.exitCode = null; child.signalCode = null;
-    child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
-    child.stdout.setEncoding = child.stderr.setEncoding = function () { return this; };
+    const world = fakeRun();
     const controller = new AbortController();
-    const roots: (number | undefined)[] = [];
-    const spawn = () => {
-      setImmediate(() => {
-        if (exited === true) { child.exitCode = 0; child.emit("exit", 0); }
-        if (exited === "signal") { child.signalCode = "SIGTERM"; child.emit("exit", null, "SIGTERM"); }
-        controller.abort();
-      });
-      return child;
-    };
-    const killTracked = async (_tracked: any, options?: any) => {
-      if (options) roots.push(options.root);
-      setImmediate(() => child.emit("close", child.exitCode ?? (child.signalCode ? null : 1)));
-    };
-    const fakeOs = { constants: { priority: { PRIORITY_BELOW_NORMAL: 10 } }, setPriority: () => {} };
-    const load = new Function("spawn", "appendFileSync", "os", "relative", "fileURLToPath", "pathToFileURL", "laneEnv", "killTracked", "watchTree", body.replaceAll("import.meta.url", JSON.stringify(import.meta.url)) + "; return runTests;");
-    const runner = load(spawn, () => {}, fakeOs, () => "", (value: URL) => value.pathname, (value: string) => ({ href: value }), () => ({}), killTracked, () => () => {});
-    const lane = { dir: "fake-lane", temp: "fake-temp", tracked: new Map() };
-    const result = await runner({ lane, files: [], red: false, earlyStop: false, timeoutMs: 1000, concurrency: 1, logPath: "fake-log", signal: controller.signal });
-    assert.equal(result.outcome, "aborted");
-    assert.deepEqual(roots, [exited === false ? child.pid : undefined], `exited=${exited}: stop must not reuse an exited child's pid`);
+    const running = world.start({ signal: controller.signal, earlyStop: false, timeoutMs: 1000 });
+    try {
+      if (exited === true) { world.child.exitCode = 0; world.child.emit("exit", 0); }
+      if (exited === "signal") { world.child.signalCode = "SIGTERM"; world.child.emit("exit", null, "SIGTERM"); }
+      controller.abort();
+      const result = await running;
+      assert.equal(result.outcome, "aborted");
+      assert.deepEqual(world.events.filter(([kind, , , early]) => kind === "kill" && early).map(([, , root]) => root), [exited === false ? world.child.pid : undefined], `exited=${exited}: ${world.message()}`);
+    } finally { await world.finish(); }
   }
 });

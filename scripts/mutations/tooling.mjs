@@ -227,6 +227,10 @@ export const toolingMutations = [
   ["guard-sweep-cleanup-every-run","scripts/sweep/run.mjs","if (lane.tracked.size) await killTracked(lane.tracked);",""],
   // C1 guard-sweep-early-stop-cleanup: added protection of the current sweep.
   ["guard-sweep-early-stop-cleanup","scripts/sweep/run.mjs","stopped = killTracked(lane.tracked, { root }).catch((err) => { killError = err; });","stopped = Promise.resolve();"],
+  ["guard-p25-stop-late", "scripts/sweep/run.mjs", "stopped = killTracked(lane.tracked, { root }).catch((err) => { killError = err; });", "stopped = new Promise((resolve) => setTimeout(resolve, 10_000)).then(() => killTracked(lane.tracked, { root })).catch((err) => { killError = err; });"],
+  ["guard-p25-stop-root", "scripts/sweep/run.mjs", "stopped = killTracked(lane.tracked, { root }).catch((err) => { killError = err; });", "stopped = killTracked(lane.tracked, { root: undefined }).catch((err) => { killError = err; });"],
+  ["guard-p25-timeout-late", "scripts/sweep/run.mjs", "const timer = setTimeout(() => stop(\"timeout\"), timeoutMs);", "const timer = setTimeout(() => stop(\"timeout\"), timeoutMs + 10_000);"],
+  ["guard-p25-preabort-spawn", "scripts/sweep/run.mjs", "if (signal?.aborted) return emptyResult(\"aborted\");", "if (false) return emptyResult(\"aborted\");"],
   // C1 guard-sweep-final-cleanup-propagates: added protection of the current sweep.
   ["guard-sweep-final-cleanup-propagates","scripts/sweep/run.mjs","if (lane.tracked.size) await killTracked(lane.tracked);","if (lane.tracked.size) await killTracked(lane.tracked).catch(() => {});"],
   // C1 guard-sweep-only-assertion-early-stop: added protection of the current sweep.
