@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
-import { advanceStep, approveLook, createTabState, getStepBar } from "../server/process.ts";
-import { legacySetup, getProcessDefinition } from "./old-definitions.ts";
+import { FIXED_CREW, type Assignment, type FixedSlot } from "../server/fixed-crew/roster.ts";
+import { fixedState } from "../server/fixed-crew/runtime.ts";
+import type { ProcessState } from "../server/process.ts";
+import { fixedTab } from "./fixed-server-fixture.ts";
+
+export const WORK_SLOTS: readonly FixedSlot[] = ["leader", "coder", "reviewer1", "reviewer2"];
 
 export function seat(state: ProcessState, slotId: string) {
   const result = state.seats.find((item) => item.slotId === slotId);
@@ -8,20 +12,11 @@ export function seat(state: ProcessState, slotId: string) {
   return result;
 }
 
-export function atLook(kind: ProcessKind = "dev", process: ProcessId = "main", folderPath = "C:\\work") {
-  let state = createTabState(legacySetup(kind, process), { tabId: `${kind}-${process}`, folderPath });
-  const lookIndex = getProcessDefinition(kind, process).steps.findIndex((step) => step.id === "look");
-  assert.notEqual(lookIndex, -1);
-  while (state.currentStepIndex < lookIndex) state = advanceStep(state);
-  assert.equal(state.currentStepIndex, lookIndex);
-  assert.equal(state.approval.state, "pending");
-  return state;
-}
-
-export function activeReview(kind: ProcessKind = "dev", process: ProcessId = "main") {
-  return approveLook(atLook(kind, process));
-}
-
-export function currentStepText(state: ProcessState) {
-  return getStepBar(state)[state.currentStepIndex]?.label;
+// A real fixed-crew runtime state: a fixed tab whose listed slots hold the roster's preferred assignment (a slot with no assignment has no seat),
+// then `choices` replace individual slots. Built by the shipped fixedState(), never by hand.
+export function fixedProcess(options: { slots?: readonly FixedSlot[]; folderPath?: string; tabId?: string; choices?: Partial<Record<FixedSlot, Assignment>> } = {}): ProcessState {
+  const choices: Partial<Record<FixedSlot, Assignment>> = {};
+  for (const slot of options.slots ?? WORK_SLOTS) choices[slot] = { ...FIXED_CREW.find((item) => item.slot === slot)!.preferred };
+  Object.assign(choices, options.choices);
+  return fixedState(fixedTab(options.tabId ?? "dev-main", options.folderPath ?? "C:\\work", choices));
 }

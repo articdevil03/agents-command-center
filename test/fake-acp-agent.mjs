@@ -5,7 +5,7 @@
 //   permission   asks session/request_permission (reject, allow_once, allow_always) and reports the option it got back
 //   permission-always   asks with allow_always as the only allow
 //   permission-none     asks with reject options only
-//   crew         calls the crew tool get_crew_status through the HTTP bridge it was given in session/new
+//   crew         calls the fixed-crew tool get_fixed_task through the HTTP bridge it was given in session/new
 //   nohttp       says it takes no HTTP MCP servers
 //   auth         session/new fails with "authentication required"
 //   promptauth   the prompt fails with an auth error
@@ -117,17 +117,17 @@ async function prompt(id, params) {
     usage(); finish(); return;
   }
   if (scenario === "crew") {
-    update(sessionId, { sessionUpdate: "tool_call", toolCallId: "call_c", title: "tab-crew: get_crew_status", kind: "other", status: "pending" });
+    update(sessionId, { sessionUpdate: "tool_call", toolCallId: "call_c", title: "tab-crew: get_fixed_task", kind: "other", status: "pending" });
     const call = async (method, p, rpcId) => {
       const response = await fetch(bridge.url, { method: "POST", headers: { Authorization: `Bearer ${bridge.token}`, "Content-Type": "application/json", Accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: rpcId, method, params: p }) });
       return { status: response.status, body: await response.json().catch(() => null) };
     };
     const init = await call("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "fake-acp", version: "1" } }, 1);
     const tools = await call("tools/list", {}, 2);
-    const crew = await call("tools/call", { name: "get_crew_status", arguments: {} }, 3);
-    log({ bridgeInit: init.status, bridgeTools: tools.body?.result?.tools?.map((tool) => tool.name), bridgeCrew: crew.body?.result?.content?.[0]?.text });
+    const task = await call("tools/call", { name: "get_fixed_task", arguments: {} }, 3);
+    log({ bridgeInit: init.status, bridgeTools: tools.body?.result?.tools?.map((tool) => tool.name), bridgeTask: task.body?.result?.content?.[0]?.text });
     update(sessionId, { sessionUpdate: "tool_call_update", toolCallId: "call_c", status: "completed" });
-    say(`crew ok: ${crew.status}`);
+    say(`crew ok: ${task.status}`);
     usage(); finish(); return;
   }
   // basic: a message, a tool call (its title and content hold the secret), a second message

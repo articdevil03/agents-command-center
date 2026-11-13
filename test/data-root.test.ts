@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join, dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { scratchDir, setEnv, tempRoot } from "./temp-root.ts";
+import { assertFresh, assertRecovery } from "./data-root-recovery-helpers.ts";
 import { ignoresDataRootUnderTestRunner, resolveDataRoot } from "../server/data-root.ts";
 
 // ---- resolveDataRoot: pure (packaged-or-not, via the env var) -------------
@@ -94,7 +95,8 @@ test("config.ts: first packaged launch starts a new user on one empty example pr
   assert.equal(existsSync(join(packagedUserDir, "config/projects.json")), false, "the bundled projects.json is not copied");
   assert.equal(existsSync(join(packagedUserDir, "config/seats.json")), false, "no legacy seats.json is seeded");
   assert.deepEqual(workspaces.projects.map((project: any) => project.id), ["example"]);
-  assert.ok(workspaces.projects.every((project: any) => project.tabs.length === 1 && project.tabs[0].kind === "dev" && project.tabs[0].setupName === "Our process" && !("process" in project.tabs[0])));
+  assert.ok(workspaces.projects.every((project: any) => project.tabs.length === 1 && project.tabs[0].kind === "dev" && project.tabs[0].setupName === "Fixed crew" && !("process" in project.tabs[0])));
+  assertFresh(workspaces);
   const folder = workspaces.projects[0].folder;
   assert.equal(dirname(folder), packagedUserDir, "the example folder is inside the user's own data root");
   assert.deepEqual(readdirSync(folder), [], "the example folder starts empty");
@@ -136,7 +138,12 @@ const configPreSeeded = await withDataDir(preSeededUserDir, () => importAsPackag
 test("config.ts: an existing projects.json is never overwritten and drives the initial migration", () => {
   assert.equal(existsSync(join(preSeededUserDir, "config/seats.json")), false, "no legacy seats.json is seeded");
   assert.equal(readFileSync(configPreSeeded.projectsPath, "utf8"), customProjects);
-  assert.equal(JSON.parse(readFileSync(configPreSeeded.workspacesPath, "utf8")).projects[0].id, "custom");
+  const fresh = JSON.parse(readFileSync(configPreSeeded.workspacesPath, "utf8"));
+  assertFresh(fresh); assert.notEqual(fresh.projects[0].id, "custom");
+  assert.notEqual(fresh.projects[0].tabs[0].id, "custom-dev");
+  assert.equal(dirname(fresh.projects[0].folder), join(preSeededUserDir, "example-project"));
+  assert.deepEqual(readdirSync(fresh.projects[0].folder), []);
+  assertRecovery(preSeededUserDir, "config/projects.json", customProjects);
 });
 
 // An interrupted package seed completes the workspace migration on the next
@@ -217,19 +224,23 @@ test("packaged override is inert outside node --test in both data-root direction
 });
 
 // ---- a workspaces file that is empty or unparsable starts the app on the example project, and the bad file is
-// kept beside it as workspaces.json.bad-<timestamp> (never overwritten without that copy). -----------------------
+// preserved byte-exact in a verified recovery backup before the workspace is replaced. -----------------------
 
 for (const [label, content] of [["empty", ""], ["unparsable", '{"projects": [ {"id": "torn'], ["whitespace only", "  \n"]] as const) {
-  test(`config.ts: an ${label} workspaces.json starts on the example project and keeps a .bad copy`, async () => {
+  test(`config.ts: an ${label} workspaces.json starts on the example project and keeps a verified recovery backup`, async () => {
     const userDir = scratchDir();
     mkdirSync(join(userDir, "config"), { recursive: true });
     writeFileSync(join(userDir, "config", "workspaces.json"), content, "utf8");
     const copy = tempRoot(["server", "config"]);
     const loaded = await withDataDir(userDir, () => importAsPackaged(join(copy, "server/config.ts")));
-    const bad = readdirSync(join(userDir, "config")).filter((name) => /^workspaces\.json\.bad-\d+/.test(name));
-    assert.equal(bad.length, 1, `exactly one kept copy: ${JSON.stringify(readdirSync(join(userDir, "config")))}`);
-    assert.equal(readFileSync(join(userDir, "config", bad[0]), "utf8"), content, "the kept copy is the bad file, byte for byte");
-    assert.deepEqual(JSON.parse(readFileSync(loaded.workspacesPath, "utf8")).projects.map((project: any) => project.id), ["example"]);
+    const original = assertRecovery(userDir, "config/workspaces.json", content);
+    const fresh = JSON.parse(readFileSync(loaded.workspacesPath, "utf8")); assertFresh(fresh);
+    assert.match(fresh.projects[0].tabs[0].id, /^fresh-/);
+    assert.deepEqual(readdirSync(fresh.projects[0].folder), []);
+    const restartCopy = tempRoot(["server", "config"]);
+    const restarted = await withDataDir(userDir, () => importAsPackaged(join(restartCopy, "server/config.ts")));
+    assert.deepEqual(JSON.parse(readFileSync(restarted.workspacesPath, "utf8")), fresh);
+    assert.deepEqual(assertRecovery(userDir, "config/workspaces.json", content), original);
   });
 }
 

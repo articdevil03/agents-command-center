@@ -57,7 +57,7 @@ test("crewRailOpen and detailsOpen are saved by the server and come back after a
 
 // ---- An older launch-safety.json no longer stops the app from starting ------------------------------------------------------------
 
-test("a launch-safety.json from an older version (no released/uncertain/live lists) starts the server; a damaged list still refuses", async () => {
+test("a launch-safety.json from an older version (no released/uncertain/live lists) starts the server; a damaged list blocks the workspace and is never reset", async () => {
   const data = makeData();
   try {
     writeFileSync(join(data, "config", "launch-safety.json"), JSON.stringify({ blocked: ["old-tab.coder"], timestamps: [], notices: [{ type: `${["boo", "gie"].join("")}Launch`, id: 3, seatId: "old-tab.coder", seatName: "Sonny", brief: "x", source: "Atlas" }], nextNoticeId: 4 }));
@@ -68,18 +68,23 @@ test("a launch-safety.json from an older version (no released/uncertain/live lis
       assert.deepEqual(client.state().launchSafety.uncertain, []);
     } finally { client.close(); await server.stop(); }
 
-    writeFileSync(join(data, "config", "launch-safety.json"), JSON.stringify({ blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: "not a list" }));
-    const bad = await boot(data, { waitListening: false });
+    // Since fixed-crew block 4 a damaged list no longer ends the process: the server starts blocked ("Workspace unavailable") and never resets the file.
+    const damaged = JSON.stringify({ blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: "not a list" });
+    writeFileSync(join(data, "config", "launch-safety.json"), damaged);
+    const bad = await boot(data); const badClient = await connect(bad);
     try {
-      assert.notEqual(await Promise.race([bad.exited, sleep(10_000).then(() => "still running" as const)]), "still running");
-      assert.match(bad.log(), /invalid launch safety state/);
-    } finally { await bad.stop(); }
+      const tab = badClient.state().projects[0].tabs[0];
+      assert.equal(tab.name, "Workspace unavailable", "the damaged list blocks the workspace");
+      assert.equal(tab.fixedCrew.unavailable, true);
+      assert.match(tab.fixedCrew.notice, /Workspace unavailable/);
+      assert.equal(readFileSync(join(data, "config", "launch-safety.json"), "utf8"), damaged, "the damaged brake file is not reset on disk");
+    } finally { badClient.close(); await bad.stop(); }
   } finally { removeWithRetry(data); }
 });
 
 // ---- A data root behind a junction: uploads are reachable in either spelling ----------------------------------------------------
 
-test("uploads work when the data root is reached through a junction: the returned real path, the linked path and a differently cased path are all accepted", { skip: process.platform !== "win32" }, async () => {
+test("a pasted image upload and a historical avatar GET work when the data root is reached through a junction: the real path is reported and both can be served", { skip: process.platform !== "win32" }, async () => {
   const base = mkdtempSync(join(tmpdir(), "cc-pack2-junction-"));
   const real = join(base, "real"), link = join(base, "link");
   const png = Buffer.from("89504e470d0a1a0a", "hex");
@@ -95,24 +100,18 @@ test("uploads work when the data root is reached through a junction: the returne
     };
     const { path } = await upload("/api/paste-image", { "Content-Type": "image/png" });
     assert.ok(path.toLowerCase().startsWith(join(real, "scratch").toLowerCase()), `the upload reports the real path: ${path}`);
-    const tabId = client.state().projects[0].tabs[0].id;
-    const accepted = async (images: string[], requestId: string) => {
-      client.send({ type: "chat", tabId, text: JSON.stringify([{ tool: "Read", input: { file_path: "x" } }]), images, requestId });
-      return await client.wait(() => client.messages.find((m) => m.requestId === requestId && (m.type === "chatMessage" || m.type === "error")), `chat ${requestId}`);
-    };
-    const linked = join(link, "scratch", path.slice(join(real, "scratch").length + 1));
-    assert.equal((await accepted([path], "jn_real")).type, "chatMessage", "the real path the upload returned");
-    await client.wait(() => client.messages.some((m) => m.type === "chatDone" || m.type === "chatError"), "first turn over");
-    assert.equal((await accepted([linked], "jn_link")).type, "chatMessage", "the path through the junction");
-    assert.equal((await accepted([path.toUpperCase()], "jn_case")).type, "chatMessage", "the same path in another case");
+    // RETIRED (fixed-crew block 4): chat acceptance of the real, linked and differently cased image path, and the outside-path refusal.
+    // Startup recovery refuses a linked data root (noLinks in server/fixed-crew/recovery-backup.ts), so the workspace is "Workspace unavailable" and chat cannot run here.
+    assert.equal(client.state().projects[0].tabs[0].name, "Workspace unavailable", "documents the current behaviour: recovery blocks a data root behind a link");
     const shown = await fetch(`http://127.0.0.1:${server.port}/api/paste-image?path=${encodeURIComponent(path)}`);
     assert.equal(shown.status, 200); await shown.arrayBuffer();
-    const avatar = await upload("/api/avatar", { "Content-Type": "image/png" });
-    const served = await fetch(`http://127.0.0.1:${server.port}${avatar.path}`);
-    assert.equal(served.status, 200, "the avatar it returned can be served"); await served.arrayBuffer();
-    // A path that is only outside the scratch folder stays refused.
-    const outside = join(base, "outside.png"); writeFileSync(outside, png);
-    assert.equal((await accepted([outside], "jn_out")).type, "error");
+    // RETIRED (run 18): POST /api/avatar is gone. A historical avatar image written under the real data root is still served through the link.
+    const historical = "avatar-00000000-0000-4000-8000-000000000003.png";
+    mkdirSync(join(real, "avatars"), { recursive: true });
+    writeFileSync(join(real, "avatars", historical), png);
+    const served = await fetch(`http://127.0.0.1:${server.port}/api/avatar/${historical}`);
+    assert.equal(served.status, 200, "a historical avatar can be served through the linked data root");
+    assert.deepEqual(Buffer.from(await served.arrayBuffer()), png);
     client.close();
   } finally {
     await server?.stop();

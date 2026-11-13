@@ -4,14 +4,16 @@ import * as path from "node:path";
 import * as stall from "../server/stall.ts";
 import { tempRoot } from "./temp-root.ts";
 import { config } from "./round2-setup.ts";
-import { loadServer, connect, lastState } from "./round2-helpers.ts";
+import { loadServer, loadFixed, connect, lastState, startHelper, endRun, setAssignment } from "./round2-helpers.ts";
 import { tabState } from "./round2-gate-helpers.ts";
+
+const confirmRelease = "release may leave a process running and editing files";
 
 test("every recovery alias requires its confirmation phrase and leaves state unchanged when refused", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   t.after(() => t.mock.timers.reset());
-  const server = await loadServer({ skipHealth: true, deferKill: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "will not die");
+  const server = await loadFixed({ skipHealth: true, deferKill: true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "will not die");
   const run = server.launched[0].run;
   ws.message({ type: "killRun", runId: run.runId });
   t.mock.timers.tick(5_000);
@@ -39,133 +41,72 @@ test("every recovery alias requires its confirmation phrase and leaves state unc
     assert.match(ws.messages.at(-1).message, /explicit launch-block confirmation/, JSON.stringify(message));
     assert.equal(JSON.stringify(server.safety()), before);
   }
-  ws.message({ type: "releaseUnconfirmed", runId: run.runId, confirm: "release may leave a process running and editing files" });
+  ws.message({ type: "releaseUnconfirmed", runId: run.runId, confirm: confirmRelease });
   assert.equal(server.isRunning(run.runId), false);
   ws.message({ type: "clearLaunchBlock", seatKey: run.seatKey, confirm: "allow this seat to launch again" });
   assert.equal(server.safety().blocked.includes(run.seatKey), false);
   server.closeRun(run.runId);
 });
 
-test("unconfirmed kill grace and recovery use the real runner, and refusals require both phrases", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
-  const server = await loadServer({ relaunchable: true, skipHealth: true, deferKill: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "unconfirmed stall");
-  const entry = server.launched[0];
-  server.stallTrackers.startRun(entry.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
-  server.tick();
-  assert.equal(server.pendingRelaunch.has(entry.run.runId), true);
-  t.mock.timers.tick(4_999);
-  assert.equal(server.safety().uncertain.length, 0);
-  t.mock.timers.tick(1);
-  assert.equal(server.pendingRelaunch.has(entry.run.runId), false);
-  assert.equal(server.stallTrackers.isKilled(entry.run.runId), true);
-  assert.equal(server.safety().uncertain.length, 1);
-  assert.equal(server.isRunning(entry.run.runId), true);
-  ws.message({ type: "releaseUnconfirmedSeat", seatId: entry.run.seatKey });
-  assert.match(ws.messages.at(-1).message, /explicit release confirmation/);
-  ws.message({ type: "unblockSeat", seatId: entry.run.seatKey });
-  assert.match(ws.messages.at(-1).message, /explicit launch-block confirmation/);
-  assert.equal(server.safety().uncertain.length, 1);
-  ws.message({ type: "releaseUnconfirmedSeat", seatId: entry.run.seatKey, confirm: "release may leave a process running and editing files" });
-  assert.equal(server.isRunning(entry.run.runId), false);
-  assert.equal(server.tabs.get("alpha-dev").state.runs.find((run: any) => run.id === entry.run.runId).status, "failed");
-  assert.equal(server.runContexts.has(entry.run.runId), false);
-  assert.equal(server.pendingRelaunch.has(entry.run.runId), false);
-  assert.equal(server.stallTrackers.isKilled(entry.run.runId), true);
-  assert.ok(server.safety().blocked.includes(entry.run.seatKey));
-  server.closeRun(entry.run.runId);
-  assert.equal(server.safety().released.length, 0);
-  assert.equal(server.launched.length, 1);
-});
-
 test("release refuses when the real runner does not own an unconfirmed kill", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "still running");
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "still running");
   const run = server.launched[0].run;
   const row = { seatId: run.seatKey, pid: server.runnerProcesses.get(run.runId).pid, runId: run.runId };
   server.launchSafety.uncertain.push(row);
-  ws.message({ type: "releaseUnconfirmedSeat", seatId: run.seatKey, confirm: "release may leave a process running and editing files" });
+  ws.message({ type: "releaseUnconfirmedSeat", seatId: run.seatKey, confirm: confirmRelease });
   assert.match(ws.messages.at(-1).message, /process is not tracked as unconfirmed/);
   assert.deepEqual(server.launchSafety.uncertain, [row]);
   assert.deepEqual(server.launchSafety.released, []);
   assert.equal(server.isRunning(run.runId), true);
   assert.equal(server.runContexts.has(run.runId), true);
-  assert.equal(server.tabs.get("alpha-dev").state.runs.find((entry: any) => entry.id === run.runId).status, "working");
-  server.closeRun(run.runId);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").executions.find((e: any) => e.id === run.runId).status, "running");
+  server.launchSafety.uncertain.length = 0;
+  await endRun(server, run.runId);
 });
 
-test("real stall timer never kills or relaunches a writable slot", async () => {
-  const server = await loadServer({ skipHealth: true });
+test("a stall after real output at the runner callback is escalated, never stopped or restarted", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "edit carefully" });
-  const entry = server.launched[0];
-  server.stallTrackers.startRun(entry.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
-  server.tick();
-  assert.equal(server.launched.length, 1);
-  assert.equal(server.kills.length, 0);
-  assert.ok(ws.messages.some((message: any) => message.type === "runStalled" && message.runId === entry.run.runId && message.action === "escalate"));
-  assert.equal(server.stateMessage().projects[0].tabs[0].crew.find((seat: any) => seat.slot === "coder").status, "stalled");
-});
-
-test("a manual Kill that arrives during a stall kill wins over the queued relaunch", async () => {
-  const server = await loadServer({ skipHealth: true, deferKill: true });
-  const ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "reviewer2", prompt: "review this" });
-  const first = server.launched[0];
-  server.stallTrackers.startRun(first.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
-  server.tick();
-  ws.message({ type: "killRun", runId: first.run.runId });
-  server.closeRun(first.run.runId);
-  assert.equal(server.launched.length, 1, "a user Kill during the automatic kill must suppress the relaunch");
-});
-
-test("any real output at the runner callback disqualifies a stall relaunch", async () => {
-  const server = await loadServer({ skipHealth: true });
-  const ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "reviewer2", prompt: "review this" });
+  await startHelper(server, "alpha-dev", "helper", "review this");
   const entry = server.launched[0];
   server.emitOutput(entry.run.runId, "progress");
   server.stallTrackers.trackers.get(entry.run.runId).lastGrowthAt = Date.now() - stall.STALL_THRESHOLD_MS - 1;
   server.tick();
   assert.equal(server.launched.length, 1);
   assert.equal(server.kills.length, 0);
+  assert.equal(server.isRunning(entry.run.runId), true);
   assert.ok(ws.messages.some((message: any) => message.type === "runStalled" && message.runId === entry.run.runId && message.action === "escalate"));
+  await endRun(server, entry.run.runId);
 });
 
-test("tab process state transitions and client message validation are wired at the WebSocket call site", async () => {
-  const server = await loadServer({ skipHealth: true });
+test("a run started on behalf of a seat keeps its launcher on the run context, so the live state names who started it", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  server.createTabLeader("alpha-dev");
+  const reserved = server.reserveFixedExecution(server.currentActor("alpha-dev"), { kind: "assist", route: "normal", change: "none" }, "helper");
+  const result = server.launchWorker("alpha-dev", "helper", "seat launched", "seat", undefined, { slot: "helper", runId: "launcher-run" }, reserved.context);
+  assert.equal(result.ok, true, JSON.stringify(result));
+  const start = ws.messages.find((message: any) => message.type === "runStart" && message.runId === result.runId);
+  assert.equal(start.launchedBy?.kind, "seat"); assert.equal(start.launchedBy?.slot, "helper");
+  const live = server.stateMessage().projects[0].tabs[0].runs.find((run: any) => run.runId === result.runId);
+  assert.equal(JSON.stringify(live.launchedBy), JSON.stringify(start.launchedBy), "the saved run context carries the launcher");
+  await endRun(server, result.runId);
+  server.stopLeaderSession("alpha-dev");
+});
+
+test("client message validation is wired at the WebSocket call site, and the retired step and review messages are refused", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
   ws.message({ type: "hello" });
   for (const raw of ["null", "[]", "3", '"text"', "true", "{}", '{"type":3}', "{"]) {
     assert.doesNotThrow(() => ws.message(raw));
     assert.equal(ws.messages.at(-1).type, "error");
   }
-  for (let i = 0; i < 8 && lastState(ws).projects[0].tabs[0].processState.approval.state !== "pending"; i++) ws.message({ type: "advanceStep", tabId: "alpha-dev" });
-  ws.message({ type: "approveLook", tabId: "alpha-dev" });
-  assert.equal(lastState(ws).projects[0].tabs[0].processState.approval.state, "approved");
-  ws.message({ type: "reviewFindings", tabId: "alpha-dev" });
-  assert.equal(lastState(ws).projects[0].tabs[0].processState.phase, "fix");
-  ws.message({ type: "selectFixer", tabId: "alpha-marketing", slot: "image" });
-  assert.equal(lastState(ws).projects[0].tabs.find((tab: any) => tab.id === "alpha-marketing").processState.selectedFixer, "image");
-});
-
-test("reviewClean is wired at the WebSocket call site: a clean review closes the round once the look is approved, and before that nothing happens", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  ws.message({ type: "hello" });
-  const processOf = () => lastState(ws).projects[0].tabs[0].processState;
-  ws.message({ type: "reviewClean", tabId: "alpha-dev" });
-  assert.deepEqual([processOf().phase === "clean", processOf().roundHistory.length], [false, 0], "control: before the review stage the message changes nothing");
-  for (let i = 0; i < 8 && processOf().approval.state !== "pending"; i++) ws.message({ type: "advanceStep", tabId: "alpha-dev" });
-  ws.message({ type: "approveLook", tabId: "alpha-dev" });
-  assert.equal(processOf().phase, "review");
-  ws.message({ type: "reviewClean", tabId: "alpha-dev" });
-  assert.equal(processOf().phase, "clean");
-  assert.deepEqual(processOf().roundHistory.map((round: any) => round.outcome), ["clean"]);
-  assert.equal(lastState(ws).projects[1].tabs[0].processState.roundHistory.length, 0, "another tab's process is untouched");
-  ws.message({ type: "reviewClean", tabId: "no-such-tab" });
-  assert.equal(ws.messages.at(-1).type, "error");
-  assert.match(ws.messages.at(-1).message, /unknown tab/);
+  // The tab process state transitions (advanceStep, approveLook, reviewFindings, reviewClean, selectFixer) left with the legacy process engine in run 13; a fixed crew refuses them.
+  for (const type of ["advanceStep", "approveLook", "reviewFindings", "reviewClean", "selectFixer"]) {
+    ws.message({ type, requestId: `retired_${type}`, tabId: "alpha-dev", slot: "image" });
+    assert.match(ws.messages.at(-1).message, /Fixed crews use task decisions/, type);
+  }
 });
 
 test("renameTab is wired at the WebSocket call site: it trims the name and saves it, and a blank, missing or non-string name or an unknown tab is refused with nothing changed", async () => {
@@ -196,8 +137,8 @@ test("renameTab is wired at the WebSocket call site: it trims the name and saves
 
 test("ackLaunchNotices is wired at the WebSocket call site: it removes exactly the listed notices, saves that, answers with the ids, and a bad list or a failed save removes nothing", async () => {
   let fail = false;
-  const safetyPath = path.join(tempRoot(), "launch-safety.json"), server = await loadServer({ skipHealth: true, safetyPath, failSafety: () => fail }), ws = connect(server);
-  for (const brief of ["notice one", "notice two", "notice three"]) assert.equal(server.leaderLaunch("alpha-dev", "coder", brief).ok, true);
+  const safetyPath = path.join(tempRoot(), "launch-safety.json"), server = await loadFixed({ skipHealth: true, safetyPath, failSafety: () => fail }), ws = connect(server);
+  for (const brief of ["notice one", "notice two", "notice three"]) await endRun(server, (await startHelper(server, "alpha-dev", "helper", brief)).runId);
   ws.message({ type: "hello" });
   const ids = lastState(ws).launchSafety.notices.map((notice: any) => notice.id);
   assert.equal(ids.length, 3, "control: three notices are waiting");
@@ -234,16 +175,16 @@ test("uncertain kill PIDs stay visible in server state and release requires the 
 });
 
 test("an advisor chosen on a seat validates model ids, and only a Claude seat can have one", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
-  const leader = () => lastState(ws).projects[0].tabs[0].crew.find((seat: any) => seat.slot === "leader");
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", advisor: "nope" });
-  assert.match(ws.messages.at(-1).message, /invalid advisor/);
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", advisor: "claude-opus-5-5[1m]" });
+  ws.message({ type: "hello" });
+  const leader = () => server.getWorkspaces().projects[0].tabs[0].fixedCrew.preferences.leader.assignment;
+  const claude = { cli: "claude", model: "claude-sonnet-5-5[1m]", effort: "medium" };
+  assert.match((await setAssignment(ws, "alpha-dev", "leader", { ...claude, advisor: "nope" })).message, /Unknown crew advisor/);
+  assert.equal((await setAssignment(ws, "alpha-dev", "leader", { ...claude, advisor: "claude-opus-5-5[1m]" })).type, "actionResult");
   assert.equal(leader().advisor, "claude-opus-5-5[1m]");
   assert.equal("advisor" in lastState(ws).projects[0].tabs[0], false, "the advisor is a seat's now, not the tab's");
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "coder", advisor: "claude-opus-5-5[1m]" });
-  assert.match(ws.messages.at(-1).message, /cannot have an advisor/, "the classic coder is on Codex");
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", advisor: null });
+  assert.match((await setAssignment(ws, "alpha-dev", "coder", { cli: "codex", model: "gpt-6.1-sol", effort: "low", advisor: "claude-opus-5-5[1m]" })).message, /Invalid crew advisor/, "a Codex seat cannot have an advisor");
+  assert.equal((await setAssignment(ws, "alpha-dev", "leader", claude)).type, "actionResult");
   assert.equal(leader().advisor, undefined);
 });

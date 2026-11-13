@@ -196,8 +196,10 @@ test("fix 8: Save clicked while a reply runs and a handed-back steer waits behin
     writeFileSync(file, "handover");
     const ahead = new Date(Date.now() + 60_000); utimesSync(file, ahead, ahead);
     c.send({ type: "save", tabId: tab });
+    let saveAnswer: any;
     try {
-      await c.wait(() => c.messages.find((m) => m.type === "saved" && m.tabId === tab), "Save succeeds after the steer's turn", 30_000);
+      // Save answers one way or the other: a refusal is read as the failure it is, not waited out.
+      saveAnswer = await c.wait(() => c.messages.find((m) => (m.type === "saved" && m.tabId === tab) || (m.type === "error" && m.action === "save" && m.tabId === tab)), "Save answers after the steer's turn", 30_000);
     } catch (error) {
       // Seen once under heavy load with nothing else to go on: say exactly what happened (what the client received, what reached the fake CLI).
       const types: string[] = [];
@@ -209,6 +211,7 @@ the fake CLI's turn/start log for this tab: ${JSON.stringify(turns)}
 handover file mtime - now: ${statSync(file).mtimeMs - Date.now()} ms
 server log tail: ${server.log().slice(-1500)}`);
     }
+    assert.equal(saveAnswer.type, "saved", `Save succeeds after the steer's turn: ${JSON.stringify(saveAnswer)}`);
     assert.equal(c.messages.some((m) => m.type === "error" && m.action === "save"), false, "no Save failure was reported");
     const log = fakeLog(server).filter((entry) => entry.cli === "codex" && entry.method === "turn/start");
     const order = log.map((entry) => String(entry.params.input[0].text));

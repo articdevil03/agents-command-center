@@ -1,6 +1,6 @@
 import type { query } from "@anthropic-ai/claude-agent-sdk";
 import type { WebSocket } from "ws";
-import type { readWorkspaces, ClientPrefs, LaunchSafety, AcpCli, SavedSetup } from "../config.ts";
+import type { readWorkspaces, ClientPrefs, LaunchSafety, AcpCli } from "../config.ts";
 import type { RunnerRun } from "../runner.ts";
 import type { resolveClaudeCli } from "../leader.ts";
 import type { AcpSpawn, BackgroundJob, LeaderHandle, LeaderSpawn } from "../leader-common.ts";
@@ -13,6 +13,10 @@ import type { createFolderActivity } from "../folder-activity.ts";
 import type { GitChanges, TabNotes } from "../changes.ts";
 import type { SettingsService, RunCli } from "../settings.ts";
 import type { ProcessState } from "../process.ts";
+import type { TaskStore } from "../fixed-crew/task-store.ts";
+
+export let fixedTasks: TaskStore;
+export function setFixedTasks(value: TaskStore): void { fixedTasks = value; }
 
 export function describeError(value: unknown): string {
   if (value instanceof Error) return value.message;
@@ -42,9 +46,6 @@ export function setWorkspaces(value: ReturnType<typeof readWorkspaces>): void { 
 // The leader CLIs added in Settings by their start command (Agent Client Protocol). An unreadable list is kept aside and the app starts with none.
 export let acpClis: AcpCli[] = [];
 export function setAcpClis(value: AcpCli[]): void { acpClis = value; }
-// The setups the user saved by name (config/setups.json). An unreadable list is kept aside and the app starts with none.
-export let savedSetups: SavedSetup[] = [];
-export function setSavedSetups(value: SavedSetup[]): void { savedSetups = value; }
 export let selectedTabId: string;
 export function setSelectedTabId(value: string): void { selectedTabId = value; }
 export type TabRuntime = { state: ProcessState; stalledRuns: Set<string> };
@@ -55,6 +56,7 @@ export const leaderBridge = createLeaderBridge();
 export let boundPort = PORT;
 export function setBoundPort(value: number): void { boundPort = value; }
 export const leaderInstances = new Map<string, object>();
+export const fixedLeaderSettings = new Map<string, string>();
 // Who asks: the tab's live leader (named by its instance), or a seat's run (a planner that runs the process). The answer, the liveness and the cleanup all go by origin.
 export type Origin = { kind: "leader"; instance: object } | { kind: "seat"; runId: string; slot: string };
 export const pendingApprovals = new Map<string, { approvalId: string; tabId: string; origin: Origin; tool: string; summary: string; createdAt: number; settle: (allow: boolean) => void }>();
@@ -78,8 +80,6 @@ export const leaderActivity = new Map<string, string>();
 export const leaderJobs = new Map<string, BackgroundJob[]>();
 // The model an ACP leader's CLI says it runs (its own default), kept while that leader lives.
 export const leaderModels = new Map<string, string>();
-// A leader model/effort change asked for mid-answer waits here until that answer ends (finishLeaderTurn applies it).
-export const queuedLeaderChanges = new Map<string, { model?: string; effort?: string; liveLeader: LeaderHandle }>();
 export const activeLeaderTurns = new Set<string>();
 // Steered messages the CLI handed back while their turn was still running (it ended them first): each goes out as the next turn when this one finishes. They are already in the chat.
 export const lateSteers = new Map<string, Array<{ text: string; images: string[] }>>();
@@ -94,12 +94,12 @@ export const pendingClearUndos = new Map<string, { snapshot: ChatSnapshot; expir
 export const expiredClearUndos = new Set<string>();
 export const chatClearGenerations = new Map<string, number>();
 export type Launcher = { slot: string; runId: string };
-export const runContexts = new Map<string, { tabId: string; slot: string; run: RunnerRun; prompt: string; source: "client" | "leader" | "seat" | "stall"; launcher?: Launcher; relaunchUsed: boolean }>();
-// What wait_for_runs reports about a run, kept after the run ends (capped). reply is set only on a leader job (a job the process-running seat handed the leader): the leader's answer, in place of a log.
-export type RunRecord = { tabId: string; seatKey: string; status: "working" | "done" | "stopped" | "failed"; outcome: string | null; logPath: string | null; reply?: string };
+export const runContexts = new Map<string, { tabId: string; slot: string; run: RunnerRun; prompt: string; source: "client" | "leader" | "seat"; launcher?: Launcher }>();
+// What a run ended with, kept after the run ends (capped).
+export type RunRecord = { tabId: string; seatKey: string; status: "working" | "done" | "stopped" | "failed"; outcome: string | null; logPath: string | null };
 export const runRecords = new Map<string, RunRecord>();
 export const RUN_RECORDS_KEPT = 200;
-// The crew tools of every live bridge entry: leaders by tab id, seat runs by `${tabId}.${runId}`. Their tokens are hidden wherever a run's output is shown back.
+// The tokens of every live bridge entry (the leader's, by tab id). They are hidden wherever a run's output is shown back.
 export const bridgeTokens = new Map<string, string>();
 export const runBridgeRevokers = new Map<string, () => void>();
 // Command Center's own activity windows (see folder-activity.ts): a leader turn per tab and a crew run per run id, so none of it reads as an outsider.
@@ -107,9 +107,6 @@ export const turnWindows = new Map<string, number>();
 export const runWindows = new Map<string, number>();
 export const runOutput = new Map<string, string>();
 export const runUsage = new Map<string, UsageTotals>();
-export const userKilledRuns = new Set<string>();
-export const pendingRelaunch = new Map<string, { tabId: string; slot: string; prompt: string; originSource: "client" | "leader" | "seat"; launcher?: Launcher; relaunchUsed: true }>();
-export const stallKillRuns = new Set<string>();
 export const stallTrackers = createStallTrackers();
 export const MAX_RUN_OUTPUT = 200 * 1024;
 export const FILE_MAX_BYTES = 20 * 1024 * 1024;

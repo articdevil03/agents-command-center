@@ -1,7 +1,26 @@
 (() => {
-  const { check, waitFor, text, $, requireElement, waitToastVisible, latestTab, clickTab, openSeatView, openInbox, pressEscape } = window.__ccHarness;
+  const { fail, check, waitFor, text, $, requireElement, waitToastVisible, latestTab, clickTab, openSeatView, openInbox, pressEscape } = window.__ccHarness;
+  // One LIVE run and one RETAINED UNCONFIRMED record on a single fixed position of the seed, so the work view's record tabs and the count badge have two records to show.
+  // The live run is the tab's one heavy execution; the second is a record the server still lists as working (an unconfirmed stop), never a newly launched task. Every view is kept telling one story.
+  const seedLiveAndRetainedRecords = (tabId = "alpha-dev", slot = "coder") => {
+    const { tab, seat } = window.__ccHarness.fixed.findSlot(tabId, slot, window.__ccSeed);
+    if (!seat) fail(`${tabId}.${slot} has no assigned model, so it cannot hold run records`);
+    const records = [["audit-parallel-1", "Live run on " + slot, "real runner output 1", Date.now() - 20_000], ["audit-parallel-2", "Retained unconfirmed record on " + slot, "real runner output 2", Date.now() - 40_000]].map(([runId, label, output, startedAt]) => {
+      const base = { id: runId, crewGenerationId: tab.processState.crewGenerationId, seatSlotId: slot, seatName: seat.name, seatIsLeader: seat.isLeader, label, status: "working", outcome: null, cli: seat.cli, model: seat.model, effort: seat.effort, folderPath: tab.folder, startedAt, endedAt: null };
+      tab.runs.push({ ...base, runId, seatKey: seat.seatKey, output, launchedBy: null }); tab.processState.runs.push(base);
+      return base;
+    });
+    Object.assign(seat, { status: "working", task: `Working · ${records[0].label}`, runs: records.map((run) => run.id) });
+    tab.processState.seats.find((item) => item.slotId === slot).status = "working";
+    tab.fixedCrew.busy[slot] = true; tab.activeWork = true;
+    tab.derived.busy = true; tab.derived.workingSeats = [{ slotId: slot, name: seat.name, isLeader: seat.isLeader }];
+    tab.derived.runViews = { liveBySeat: { [slot]: records }, history: [], retiredHistory: [] };
+    window.__ccDeliver({ ...structuredClone(window.__ccSeed), type: "state" });
+  };
+  Object.assign(window.__ccHarness.fixed, { seedLiveAndRetainedRecords });
   const runFake = async () => {
     await waitFor(() => window.__latestState?.type === "state", "fake server state");
+    seedLiveAndRetainedRecords();
     // The bar drags the window; its controls, tabs and popovers are not drag areas. Chrome exposes app-region in computed style, so each target's real value is read (a missing target fails).
     const regionTargets = [["#top", "drag"], ["#soundBtn", "no-drag"], ["#ptabs", "no-drag"], ['#ptabs [role="tab"]', "no-drag"], ["#inboxPop", "no-drag"], ["#setModal", "no-drag"], ["#toast", "no-drag"], ["#undo", "no-drag"], ["#conn", "no-drag"]];
     const regions = regionTargets.map(([selector, wanted]) => { const element = document.querySelector(selector); return { selector, wanted, found: Boolean(element), actual: element ? getComputedStyle(element).getPropertyValue("-webkit-app-region") : null }; });
@@ -120,7 +139,11 @@
     const badge = text('#crew [data-seat-id="coder"] .cnt');
     const runTabs = [...document.querySelectorAll("#view [data-run-tab]")].map((node) => node.dataset.runTab);
     const runOutput = text('#view [data-output-run="audit-parallel-1"]');
-    check("two parallel runs show the count badge and independent run tabs", badge === "2" && runTabs.length === 2 && runOutput.includes("real runner output 1"), { badge, runTabs, targetSeat: "coder", runOutput });
+    const secondTab = requireElement('#view [data-run-tab="audit-parallel-2"]'); secondTab.click();
+    const secondOutput = text('#view [data-output-run="audit-parallel-2"]');
+    const secondSelected = requireElement('#view [data-run-tab="audit-parallel-2"]').getAttribute("aria-selected") === "true";
+    requireElement('#view [data-run-tab="audit-parallel-1"]').click();
+    check("a live run and a retained unconfirmed record on one seat show the count badge and independent record tabs, each with its own output", badge === "2" && runTabs.length === 2 && runTabs.join() === "audit-parallel-1,audit-parallel-2" && runOutput.includes("real runner output 1") && secondSelected && secondOutput.includes("real runner output 2") && !secondOutput.includes("output 1"), { badge, runTabs, targetSeat: "coder", runOutput, secondSelected, secondOutput });
     const runFolderPath = latestTab("alpha-dev").runs.find((run) => run.runId === "audit-parallel-1").folderPath;
     check("Writes only inside shows the server's folderPath", text("#view .touched .file") === runFolderPath && Boolean(runFolderPath), { renderedFolder: text("#view .touched .file"), folderPath: runFolderPath });
     const first = requireElement('#view [data-stop-run]'); first.click();
@@ -187,26 +210,26 @@
     check("theme and personal avatar choices stay usable", appearanceWorks && avatarWorks, { themeApplied: document.body.classList.contains("light"), looksSent, avatarApplied: $("meImg").src.endsWith("/avatars/pip.svg"), serverPrefs: { theme: window.__latestState.clientPrefs?.theme, avatar: window.__latestState.clientPrefs?.avatar }, storageBlocked: window.__ccStorageBlocked });
 
     const safetyState = structuredClone(window.__ccSeed);
-    safetyState.launchSafety = { blocked: ["alpha-dev.coder", "alpha-dev.reviewer1"], uncertain: [{ seatId: "coder", seatKey: "alpha-dev.coder", runId: "audit-uncertain", pid: 4321 }], released: [], notices: [{ id: 41, pending: true, source: "Codex", seatName: "Coder", seatKey: "alpha-dev.coder", brief: "Audit launch notice" }] };
+    safetyState.launchSafety = { blocked: ["alpha-dev.planner", "alpha-dev.reviewer1"], uncertain: [{ seatId: "planner", seatKey: "alpha-dev.planner", runId: "audit-uncertain", pid: 4321 }], released: [], notices: [{ id: 41, pending: true, source: "Codex", seatName: "Planner", seatKey: "alpha-dev.planner", brief: "Audit launch notice" }] };
     window.__socket.sendMessage({ ...safetyState, type: "state" });
     openInbox();
     const reviewerSeat = latestTab("alpha-dev", safetyState).crew.find((seat) => seat.slot === "reviewer1");
     const warnings = [...document.querySelectorAll("#inboxList .safety-warning")].map((node) => node.textContent.trim());
-    // Codex cannot enforce read-only, Claude can: the two cards of the blocked and unconfirmed Codex coder warn, the blocked Claude reviewer's card does not.
-    const coderSeat = latestTab("alpha-dev", safetyState).crew.find((seat) => seat.slot === "coder");
-    const warning = warnings.length === 2 && warnings.every((line) => line === `${coderSeat.name} runs on Codex, which cannot be held read-only. It can still write.`) && !warnings.some((line) => line.includes(reviewerSeat.name)) ? "The Codex coder is warned about, the Claude reviewer is not." : warnings.join(" | ");
+    // Codex cannot enforce read-only, Claude can: the two cards of the blocked and unconfirmed Codex planner (a fixed read-only position) warn, the blocked Claude reviewer's card does not.
+    const plannerSeat = latestTab("alpha-dev", safetyState).crew.find((seat) => seat.slot === "planner") ?? fail("the seed has no planner position");
+    const warning = warnings.length === 2 && warnings.every((line) => line === `${plannerSeat.name} runs on Codex, which cannot be held read-only. It can still write.`) && !warnings.some((line) => line.includes(reviewerSeat.name)) ? "The Codex planner is warned about, the Claude reviewer is not." : warnings.join(" | ");
     const releasePhrase = "release may leave a process running and editing files";
-    const unblockInput = requireElement('[data-confirm-unblock="alpha-dev.coder"]');
+    const unblockInput = requireElement('[data-confirm-unblock="alpha-dev.planner"]');
     const releaseInput = requireElement('[data-confirm-release="audit-uncertain"]');
     const safetyStart = window.__sent.length;
     unblockInput.value = "allow this seat to launch again ";
-    requireElement('[data-unblock="alpha-dev.coder"]').click();
+    requireElement('[data-unblock="alpha-dev.planner"]').click();
     releaseInput.value = `${releasePhrase} `;
     requireElement('[data-release="audit-uncertain"]').click();
     const wrongPhrasesNotSent = !window.__sent.slice(safetyStart).some((message) => ["unblockSeat", "releaseUnconfirmed", "releaseUnconfirmedSeat"].includes(message.type));
     const wrongPhraseToastVisible = await waitToastVisible();
     unblockInput.value = "allow this seat to launch again";
-    requireElement('[data-unblock="alpha-dev.coder"]').click();
+    requireElement('[data-unblock="alpha-dev.planner"]').click();
     releaseInput.value = releasePhrase;
     requireElement('[data-release="audit-uncertain"]').click();
     requireElement('[data-retry-kill="audit-uncertain"]').click();
@@ -216,7 +239,7 @@
     const retryKill = window.__sent.filter((message) => message.type === "killRun").at(-1);
     const ack = window.__sent.filter((message) => message.type === "ackLaunchNotice").at(-1);
     check("wrong launch-safety phrases stay local and the exact typed phrases are sent", wrongPhrasesNotSent && wrongPhraseToastVisible && unblock?.confirm === unblockInput.value && release?.confirm === releaseInput.value && release.runId === "audit-uncertain" && retryKill?.runId === "audit-uncertain", { wrongPhrasesNotSent, wrongPhraseToastVisible, unblock, typedUnblockPhrase: unblockInput.value, release, typedReleasePhrase: releaseInput.value, retryKill });
-    check("launch safety warns about a seat whose CLI cannot enforce read-only, and not about one that can", warning === "The Codex coder is warned about, the Claude reviewer is not." && ack?.id === 41, { warning, ack, warnedSeat: "alpha-dev.coder", enforcedSeat: "alpha-dev.reviewer1" });
+    check("launch safety warns about a seat whose CLI cannot enforce read-only, and not about one that can", warning === "The Codex planner is warned about, the Claude reviewer is not." && ack?.id === 41, { warning, ack, warnedSeat: "alpha-dev.planner", enforcedSeat: "alpha-dev.reviewer1" });
 
     window.__ccDeliver({ type: "leaderLaunch", id: 9001, source: "Audit harness", seatName: "Coder", pending: true });
     window.__ccDeliver({ type: "runStalled", seatKey: "alpha-dev.coder" });

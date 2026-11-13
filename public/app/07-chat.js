@@ -1,20 +1,5 @@
 // Command Center page script, part 7 of 12: the chat. Ordered classic scripts (index.html loads public/app/*.js in name order) share one scope.
   "use strict";
-  function runProcessAction(tab, action, extra = {}) {
-    if (processPending.has(tab.id) || Date.now() < (stepClickGuard.get(tab.id) ?? 0)) return;
-    if (!send({ type: action, tabId: tab.id, ...extra })) return;
-    const since = Date.now();
-    processPending.set(tab.id, action); processPendingSince.set(tab.id, since);
-    // With no further state the button would stay "Sending…" for ever: free it after PROCESS_PENDING_MS unless the answer (or a newer click) got there first.
-    setTimeout(() => {
-      if (processPending.get(tab.id) !== action || processPendingSince.get(tab.id) !== since) return;
-      processPending.delete(tab.id); processPendingSince.delete(tab.id);
-      renderStatusLine(findTab(tab.id) ?? tab); renderChatIfShown();
-    }, PROCESS_PENDING_MS);
-    if (action !== "selectFixer") stepActionSent.add(tab.id);
-    renderStatusLine(tab); renderChatIfShown();
-  }
-  function renderChatIfShown() { const tab = currentTab(); if (tab && inChat(tab)) renderChat(tab); }
   function meName() { return "You"; }
   function contextLine(tab) {
     const context = Number(tab?.leaderUsage?.contextTokens);
@@ -317,19 +302,6 @@
     return user
       ? `<div class="msg mine" data-message-id="${esc(message.id ?? message.revision ?? "")}"><div class="body"><span class="meta">${esc(when)} <b>${esc(meName())}</b></span><div class="bubble"><p>${text}</p></div>${files}</div>${img(mePic(), `/avatars/${ME_DEFAULT}`, ' class="uav" alt="Your avatar"').replace(' alt=""', "")}</div>`
       : `<div class="msg" data-message-id="${esc(message.id ?? message.revision ?? "")}">${seatImg(speaker)}<div class="body"><span class="meta"><b>${esc(speaker?.name ?? "Lead")}</b>${esc(when)}</span><div class="md">${mdHtml(messageText(message))}</div>${files}</div></div>`;
-  }
-  function lookCard(tab) {
-    const shots = screenshotPaths(tab).length, pending = processPending.get(tab.id);
-    if (lookPending(tab)) {
-      const rounds = (tab.derived?.stepBar ?? []).some((step) => step.type === "rounds");
-      return `<div class="msg"><span></span><div class="ask" id="lookCard"><div class="h">${ICONS.warn}Your turn: approve the look</div><p>${rounds ? "Review round 1 starts after you approve and any running work finishes. Nothing is reviewed until then." : "This setup has no review rounds: approving finishes this work."}</p><div class="acts"><button type="button" class="btn primary" data-process-action="approveLook"${pending ? " disabled" : ""}>${pending === "approveLook" ? "Approving…" : "Approve the look"}</button><button type="button" class="btn" data-ask-changes>Ask for changes</button>${shots ? `<button type="button" class="btn" data-open-screenshots="${esc(tab.id)}">Open screenshots <span class="faint">${shots}</span></button>` : ""}</div></div></div>`;
-    }
-    if (tab.processState?.approval?.state === "approved") {
-      const actor = reviewActor(tab), paused = actor?.seat && ["stopped", "failed"].includes(actor.seat.status);
-      const line = paused ? `Round ${actor.round} is paused. ${actor.seat.name}${actor.seat.status === "failed" ? "'s run failed." : " was stopped."}` : tab.derived?.approvedCardLine ?? "The process continues.";
-      return `<div class="msg"><span></span><div class="ask ${paused ? "stop" : "ok"}"><div class="h">${paused ? ICONS.warn : ICONS.ok}${tab.steps?.some((step) => step.type === "look") ? "Look approved" : "Review rounds"}</div><p>${esc(line)}</p>${shots ? `<div class="acts"><button type="button" class="btn" data-open-screenshots="${esc(tab.id)}">Open screenshots <span class="faint">${shots}</span></button></div>` : ""}</div></div>`;
-    }
-    return "";
   }
   function askForChanges() {
     const tab = currentTab(); if (!tab) return;

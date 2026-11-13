@@ -6,18 +6,18 @@
     const selectedTab = window.__latestState.projects.flatMap((project) => project.tabs).find((tab) => tab.id === window.__latestState.selectedTabId);
     const leaderSeat = selectedTab.crew.find((seat) => seat.isLeader || seat.slot === "leader");
     const coderSeat = selectedTab.crew.find((seat) => seat.slot === "coder");
-    const knownModels = { "gpt-6-luna": "Luna 6", "gpt-6-sol": "Sol 6", "gpt-6-astra": "Astra 6", "deepseek/deepseek-flash": "DeepSeek Flash", "deepseek/deepseek-pro": "DeepSeek Pro", "opencode/mimo-v2.6-flash-free": "MiMo Flash (free)", "opencode/muse-spark-1.3-contributor-free": "Muse Spark (free)", "opencode-go/gpt-5.6-luna": "GPT 5.6 Luna (Go)", "google/gemini-3-pro": "Gemini 3 Pro", "google/gemini-3-flash": "Gemini 3 Flash", "moonshot/kimi-k3": "Kimi K3", "qwen/qwen4-coder": "Qwen 4 Coder", "zai/glm-5": "GLM 5", "xai/grok-5": "Grok 5", "mistral/devstral-3": "Devstral 3", "openrouter/llama-5-405b": "Llama 5 405B" };
+    const knownModels = { "gpt-6.1-sol": "Sol 6.1", "gpt-6-luna": "Luna 6", "gpt-6-sol": "Sol 6", "gpt-6-astra": "Astra 6", "deepseek/deepseek-flash": "DeepSeek Flash", "deepseek/deepseek-pro": "DeepSeek Pro", "opencode/mimo-v2.6-flash-free": "MiMo Flash (free)", "opencode/muse-spark-1.3-contributor-free": "Muse Spark (free)", "opencode-go/gpt-5.6-luna": "GPT 5.6 Luna (Go)", "google/gemini-3-pro": "Gemini 3 Pro", "google/gemini-3-flash": "Gemini 3 Flash", "moonshot/kimi-k3": "Kimi K3", "qwen/qwen4-coder": "Qwen 4 Coder", "zai/glm-5": "GLM 5", "xai/grok-5": "Grok 5", "mistral/devstral-3": "Devstral 3", "openrouter/llama-5-405b": "Llama 5 405B" };
     const expectedModel = (seat) => seat.cli === "claude"
       ? (window.__latestState.claudeModels?.find((model) => model.value === seat.model)?.displayName ?? seat.model).replace(/\s*\([^)]*context[^)]*\)$/i, "").trim()
       : knownModels[seat.model] ?? seat.model;
-    // Model and effort read where they are now shown: each seat's card.
+    // Model and effort read where they are shown as saved facts: each seat's card Model row (the editor buttons are retired; the fixed Settings pickers are checked in the real render case).
     const leadCard = openSeatCard("leader");
-    const leadParts = [requireElement("[data-seat-model] .model-label", leadCard), requireElement("[data-seat-model] .eff", leadCard)];
+    const leadParts = [requireElement(".rowb .model-label", leadCard), requireElement(".rowb .eff", leadCard)];
     const leadModel = leadParts[0].textContent.trim(), leadEffort = leadParts[1].textContent.trim();
     const leadFit = leadParts.map((element) => ({ width: element.clientWidth, scrollWidth: element.scrollWidth }));
     pressEscape();
     const coderCard = openSeatCard("coder");
-    const coderParts = [requireElement("[data-seat-model] .model-label", coderCard), requireElement("[data-seat-model] .eff", coderCard)];
+    const coderParts = [requireElement(".rowb .model-label", coderCard), requireElement(".rowb .eff", coderCard)];
     const coderModel = coderParts[0].textContent.trim(), coderEffort = coderParts[1].textContent.trim();
     const coderFit = coderParts.map((element) => ({ width: element.clientWidth, scrollWidth: element.scrollWidth }));
     pressEscape();
@@ -53,7 +53,7 @@
     const stageClickable = stageParts.every((element) => { if (!element) return false; const rect = element.getBoundingClientRect(); const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2); return Boolean(hit && (element.contains(hit) || hit.contains(element)) && !element.disabled); });
     const stageOverlaps = [];
     for (let i = 0; i < 4; i++) for (let j = i + 1; j < 4; j++) { const a = stageParts[i]?.getBoundingClientRect(), b = stageParts[j]?.getBoundingClientRect(); if (a && b && a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) stageOverlaps.push(stageTargets[i] + " / " + stageTargets[j]); }
-    check("stage header, steps, transcript and composer fit and remain clickable", stageVisible && stageInside && stageClickable && stageOverlaps.length === 0, { visible: stageVisible, inside: stageInside, clickable: stageClickable, overlaps: stageOverlaps, viewport: { width: innerWidth, height: innerHeight }, children: [...document.querySelector("#stage > .col").children].map((element) => { const rect = element.getBoundingClientRect(); return { id: element.id, className: element.className, hidden: element.hidden, top: rect.top, bottom: rect.bottom, height: rect.height }; }) });
+    check("stage header, status line, transcript and composer fit and remain clickable", stageVisible && stageInside && stageClickable && stageOverlaps.length === 0, { visible: stageVisible, inside: stageInside, clickable: stageClickable, overlaps: stageOverlaps, viewport: { width: innerWidth, height: innerHeight }, children: [...document.querySelector("#stage > .col").children].map((element) => { const rect = element.getBoundingClientRect(); return { id: element.id, className: element.className, hidden: element.hidden, top: rect.top, bottom: rect.bottom, height: rect.height }; }) });
     const top = document.getElementById("top");
     const topChildren = [...top.children].filter((element) => { const rect = element.getBoundingClientRect(); const style = getComputedStyle(element); return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0; });
     const headerOverlaps = [];

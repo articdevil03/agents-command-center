@@ -11,20 +11,18 @@ const INVENTORY: Record<string, { count: number; paths: string[] }> = {
   "pendingHandoverReads.add(tabId); handoverReadTurns.delete(tabId);": { count: 1, paths: ["every stopLeaderSession caller"] },
   "stopLeaderSession(tab.id, true);": { count: 1, paths: ["removeTab"] },
   "stopLeaderSession(tabId);": { count: 1, paths: ["deadLeader"] },
+  "if (fixedTab && isFixedTab(fixedTab) && leaders.has(tabId) && fixedLeaderSettings.get(tabId) !== fixedLeaderSignature(tabId)) stopLeaderSession(tabId);": { count: 1, paths: ["fixedLeaderChange"] },
   "if (isLeader) stopLeaderSession(tabId);": { count: 1, paths: ["stopSeat"] },
-  "if (cliChanged && leaderSlot) { stopLeaderSession(tabId); pendingHandoverReads.add(tabId); }": { count: 1, paths: ["cliSwitch"] },
   "stopLeaderSession(tabId, false, reason);": { count: 1, paths: ["permissionModeFails"] },
   "pendingHandoverReads.add(tabId);": { count: 3, paths: ["permissionModeFails", "clear", "undoClear"] },
   "stopLeaderSession(message.tabId);": { count: 1, paths: ["changeFolder"] },
-  "deps.stopLeaderSession(message.tabId);": { count: 1, paths: ["useSetup"] },
-  "if (!sameSteps || !sameSeats || bare(setup.crew) !== bare(location.tab.crew)) deps.stopLeaderSession(message.tabId);": { count: 1, paths: ["setSetup"] },
-  "deps.stopLeaderSession(tabId);": { count: 1, paths: ["roleChange"] },
   "for (const tabId of leadersAndWaitingTurns()) stopLeaderSession(tabId);": { count: 2, paths: ["stopAll", "restart (shutdown)"] },
   "stopLeaderSession(tabId, true);": { count: 2, paths: ["clear", "undoClear"] },
 };
 // removeTab ends the tab itself: ids are never handed out again, so nothing is left to give a leader.
+// The legacy-crew sites (useSetup, setSetup, roleChange, cliSwitch) were deleted with their handlers in run 13: the server answers those messages with a refusal (the in-session test below sends each one and checks the refusal and that the leader was left alone).
 const NOT_APPLICABLE = new Set(["removeTab"]);
-const COVERED = new Set(["restart", "restart (shutdown)", "every stopLeaderSession caller", "stopSeat", "stopAll", "changeFolder", "useSetup", "setSetup", "roleChange", "cliSwitch", "deadLeader", "permissionModeFails", "clear", "undoClear"]);
+const COVERED = new Set(["restart", "restart (shutdown)", "every stopLeaderSession caller", "stopSeat", "stopAll", "changeFolder", "fixedLeaderChange", "deadLeader", "permissionModeFails", "clear", "undoClear"]);
 
 // ---- the creation inventory: every place a leader is created or registered. A leader made anywhere else would skip `deliver`'s chat hand-back. ----
 const CREATION_PATTERN = /\b(startTabLeader|createTabLeader|createCodexLeader|createOpencodeLeader|createLeader)\(|\bleaders\.set\(/g;
@@ -47,8 +45,8 @@ function inventory(source: string): { stop: [string, number][]; creation: [strin
 }
 
 test("pack 11: the call sites that make a leader forget the tab are exactly the ones this file walks", () => {
-  // The setup messages moved out of index.ts into crew-setup.ts: the scan covers both files.
-  const source = [sourceText("server/index.ts"), readFileSync("server/crew-setup.ts", "utf8")].join("\n");
+  // sourceText("server/index.ts") is index.ts plus every server/main module it imports, so the scan covers the message handlers too.
+  const source = sourceText("server/index.ts");
   const found = inventory(source);
   assert.ok(found.stop.reduce((sum, [, n]) => sum + n, 0) >= 15, "the scan found the call sites");
   assert.deepEqual(found.stop, Object.entries(INVENTORY).map(([line, entry]) => [line, entry.count] as [string, number]).sort(), "a new or removed call site needs a path here");
@@ -103,7 +101,7 @@ test("path:restart: the first turn after a restart (new process, same data folde
   } finally { await (second ?? first).stop(); }
 });
 
-test("in-session paths: Stop on each CLI, Stop all, folder change, process change, CLI switch, a dead leader, a failed mode change, Clear and Undo", { timeout: 240_000 }, async () => {
+test("in-session paths: Stop on each CLI, Stop all, folder change, the legacy crew messages refused, a changed leader assignment or role text, a dead leader, a failed mode change, Clear and Undo", { timeout: 240_000 }, async () => {
   const server = await boot({ env: { FAKE_OPENCODE_PATCH_EXITS: "1" } });
   const c = await client(server); const h: Harness = { server, c };
   try {
@@ -157,34 +155,36 @@ test("in-session paths: Stop on each CLI, Stop all, folder change, process chang
       }, "after-undo");
       expectChatGiven(undone.text, "after-undo", [...again, "after-clear"], false);
     }
-    // path:useSetup:
+    // The legacy crew messages (process change, saved crew, seat update) are refused on a fixed tab and leave the leader alone: the next turn is a plain one.
     {
-      const earlier = await seed(h, TABS.codex, "process");
-      const got = await turnAfter(h, TABS.codex, async () => { c.send({ type: "useSetup", tabId: TABS.codex, templateId: "blank" }); await c.wait(() => c.tabOf(TABS.codex).setupName === "Start blank", "setup changed"); }, "after-process");
-      expectChatGiven(got.text, "after-process", earlier);
+      await seed(h, TABS.codex, "legacy");
+      const refused = async (payload: any) => {
+        const from = c.messages.length; c.send(payload);
+        await c.wait(() => c.messages.slice(from).find((m) => m.type === "error" && /Fixed crews use task decisions/.test(m.message)), `${payload.type} is refused`);
+      };
+      const leader = c.tabOf(TABS.codex).fixedCrew.preferences.leader.assignment;
+      await refused({ type: "useSetup", tabId: TABS.codex, templateId: "blank" });
+      await refused({ type: "setSetup", tabId: TABS.codex, crew: [], lookPause: false });
+      await refused({ type: "updateSeat", tabId: TABS.codex, slot: "leader", cli: "claude", model: "claude-sonnet-5-5[1m]", effort: "high" });
+      assert.deepEqual(c.tabOf(TABS.codex).fixedCrew.preferences.leader.assignment, leader, "the refused messages changed nothing");
+      assert.equal(c.tabOf(TABS.codex).leaderStatus, "ready", "and the leader was not stopped");
+      const got = await turnAfter(h, TABS.codex, async () => {}, "after-legacy");
+      assert.equal(got.text, "after-legacy", "no handover is asked for: the leader kept its session");
     }
-    // path:setSetup: a saved crew whose leader settings changed (names and pictures alone would not end the leader)
+    // path:fixedLeaderChange: a saved leader effort, a role text for the leader and a leader that moves to another CLI each end the old leader at the next turn
     {
-      const earlier = await seed(h, TABS.codex, "setup");
-      const tab = c.tabOf(TABS.codex);
-      const crew = tab.crew.map(({ seatKey: _k, status: _s, task: _t, runs: _r, ...rest }: any) => rest.slot === "leader" ? { ...rest, effort: rest.effort === "low" ? "medium" : "low" } : rest);
-      const got = await turnAfter(h, TABS.codex, async () => { c.send({ type: "setSetup", tabId: TABS.codex, crew, lookPause: tab.lookPause }); await c.wait(() => c.tabOf(TABS.codex).crew.find((seat: any) => seat.slot === "leader")?.effort === crew[0].effort, "setup saved"); }, "after-setup");
-      expectChatGiven(got.text, "after-setup", earlier);
-    }
-    // path:roleChange: a seat's new role changes the steps the leader was started with (a Helper is added first, which ends that leader once)
-    {
-      const tab = c.tabOf(TABS.codex);
-      const crew = [...tab.crew.map(({ seatKey: _k, status: _s, task: _t, runs: _r, ...rest }: any) => rest), { slot: "helper", name: "Hal", role: "Helper", cli: "claude", model: "claude-sonnet-5-5[1m]", effort: "medium", canWrite: true, isLeader: false }];
-      c.send({ type: "setSetup", tabId: TABS.codex, crew, lookPause: false });
-      await c.wait(() => c.tabOf(TABS.codex).crew.some((seat: any) => seat.slot === "helper"), "the helper is added");
-      const earlier = await seed(h, TABS.codex, "role");
-      const got = await turnAfter(h, TABS.codex, async () => { c.send({ type: "updateSeat", tabId: TABS.codex, slot: "helper", role: "Coder" }); await c.wait(() => c.tabOf(TABS.codex).steps.length > 0, "the steps follow the role"); }, "after-role");
-      expectChatGiven(got.text, "after-role", earlier);
-    }
-    // path:cliSwitch: the Claude tab's leader becomes Codex
-    {
-      const earlier = await seed(h, TABS.claude, "cli");
-      const got = await turnAfter(h, TABS.claude, async () => { await c.action({ type: "refreshSettings" }); c.send({ type: "updateSeat", tabId: TABS.claude, slot: "leader", cli: "codex", model: "gpt-6-sol", effort: "high" }); await c.wait(() => c.tabOf(TABS.claude).crew.find((seat: any) => seat.slot === "leader")?.cli === "codex", "leader CLI changed"); }, "after-cli");
+      await c.action({ type: "refreshSettings" });
+      // A crew change is made on the tab the person has selected.
+      const assign = (tab: string, assignment: any) => { c.send({ type: "selectTab", tabId: tab }); return c.action({ type: "setCrewAssignment", tabId: tab, slot: "leader", assignment }); };
+      let earlier = await seed(h, TABS.codex, "effort");
+      const leader = c.tabOf(TABS.codex).fixedCrew.preferences.leader.assignment;
+      let got = await turnAfter(h, TABS.codex, async () => { const reply = await assign(TABS.codex, { ...leader, effort: leader.effort === "low" ? "medium" : "low" }); assert.equal(reply.type, "actionResult", JSON.stringify(reply)); }, "after-effort");
+      expectChatGiven(got.text, "after-effort", earlier);
+      earlier = await seed(h, TABS.codex, "extra");
+      got = await turnAfter(h, TABS.codex, async () => { c.send({ type: "selectTab", tabId: TABS.codex }); const reply = await c.action({ type: "setCrewRoleExtra", tabId: TABS.codex, slot: "leader", text: "Be brief." }); assert.equal(reply.type, "actionResult", JSON.stringify(reply)); }, "after-extra");
+      expectChatGiven(got.text, "after-extra", earlier);
+      earlier = await seed(h, TABS.claude, "cli");
+      got = await turnAfter(h, TABS.claude, async () => { const reply = await assign(TABS.claude, { cli: "codex", model: "gpt-6-sol", effort: "high" }); assert.equal(reply.type, "actionResult", JSON.stringify(reply)); }, "after-cli");
       assert.equal(got.cli, "codex"); expectChatGiven(got.text, "after-cli", earlier, false);
     }
   } finally { c.close(); await server.stop(); }

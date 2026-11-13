@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
 import { appSource } from "./source-text.ts";
-import { J, type Page, withPage, skipped, FENCE, REPLY, history, summary } from "./pack10-markdown-helpers.ts";
+import { J, delay, type Page, withPage, skipped, FENCE, REPLY, history, summary } from "./pack10-markdown-helpers.ts";
 
 test("a leader reply shows its formatting as real tags, every supported construct, and no raw ** outside a code block", async (t) => {
   if (skipped(t)) return;
@@ -60,7 +60,10 @@ test("a lone ** while streaming is shown as text and never swallows the rest of 
 
 ${FENCE}
 code **here**`);
-    await waitFor(`document.querySelectorAll("#view [data-stream] .md li").length===2`, "the list after an unclosed marker still renders");
+    // The paint is a frame (or a 50 ms timer) after the delta: wait it out, but a page that hangs or crashes on the draft is an assertion, never a silent timeout.
+    const settled = await Promise.race([ev(`new Promise((done)=>setTimeout(()=>done(true),150))`).catch(() => "crashed"), delay(5000).then(() => "hung")]);
+    assert.equal(settled, true, "the page still answers after an unclosed fence (a hang or crash here means the fence swallowed the rest of the reply)");
+    assert.equal(await ev(`document.querySelectorAll("#view [data-stream] .md li").length`), 2, "the list after an unclosed marker still renders");
     assert.equal(await ev(`document.querySelector("#view [data-stream] .md").textContent.includes(${J(FENCE)})`), true, "an unclosed fence stays as text");
     assert.equal(await ev(`document.querySelectorAll("#view [data-stream] .md pre").length`), 0, "no code block from an unclosed fence");
   });
@@ -73,7 +76,10 @@ test("the streaming reply renders exactly like the final message", async (t) => 
     await waitFor(`document.querySelectorAll("#view .msg").length===1`, "history");
     const delta = (text: string) => ev(`__ccDeliver({type:"chatDelta",tabId:${J(tabA)},text:${J(text)}});true`);
     const full = "Half **bold more**\n\n- item one\n- item **two**\n\n" + REPLY;
-    await delta(full.slice(0, 40)); await delta(full.slice(40));
+    await delta(full.slice(0, 40));
+    await waitFor(`document.querySelector("#view [data-stream] .md")?.textContent.includes("Half")`, "the first delta is painted");
+    assert.equal(await ev(`document.querySelector("#view [data-stream] .md").innerHTML.includes("<strong>bold more</strong>")`), true, "the draft's very first paint already has real tags");
+    await delta(full.slice(40));
     await waitFor(`document.querySelector("#view [data-stream] .md")?.textContent.includes("snake_case_name")`, "the whole draft is painted");
     const streamed = await ev(`document.querySelector("#view [data-stream] .md").innerHTML`);
     await ev(`__ccDeliver({type:"chatMessage",tabId:${J(tabA)},role:"assistant",text:${J(full)},at:1_700_000_002_000,revision:2});__ccDeliver({type:"chatDone",tabId:${J(tabA)},revision:2,savedRevision:2});true`);
@@ -130,7 +136,7 @@ test("nested emphasis with adjacent closers renders balanced tags, in a reply an
     await waitFor(`document.querySelectorAll("#view .msg").length===${messages.length}`, "all replies render");
     const got = await ev(`[...document.querySelectorAll("#view .msg:not(.mine) .md")].map((m)=>m.innerHTML)`);
     assert.deepEqual(got, NESTED.map(([, html]) => `<p>${html}</p>`), `matched: ${JSON.stringify(got)}`);
-    const plain = await ev(`(()=>{const s=window.__ccSeed,tab=s.projects[0].tabs.find((x)=>x.id===${J(tabA)}),worker=tab.crew.find((x)=>!x.isLeader);worker.status="working";tab.runs=[];
+    const plain = await ev(`(()=>{const s=window.__ccSeed,tab=s.projects[0].tabs.find((x)=>x.id===${J(tabA)}),worker=tab.crew.find((x)=>x.slot==="coder");worker.status="working";tab.runs=[];
       const out=[];for(const text of ${J(NESTED.map(([text]) => text))}){worker.task=text;__ccDeliver({...structuredClone(s),type:"state"});out.push(document.querySelector('#statusBtn .pt')?.textContent??null)}return out})()`);
     assert.equal(plain.length, NESTED.length);
     for (const [index, label] of plain.entries()) assert.ok(typeof label === "string" && label.endsWith(` ${NESTED[index][2]}`), `${NESTED[index][0]} as a plain label keeps its words and shows no marker; matched: ${JSON.stringify(label)}`);

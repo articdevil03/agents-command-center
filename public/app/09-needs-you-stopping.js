@@ -72,7 +72,6 @@
   function attention(tab) {
     const items = [];
     for (const approval of tab.pendingApprovals ?? []) items.push({ type: "toolApproval", tab, approval });
-    if (lookPending(tab)) items.push({ type: "look", tab });
     for (const request of serverState?.requests ?? []) if (request.status === "pending" && request.toTabId === tab.id) items.push({ type: "request", tab, request });
     for (const run of unseenFailedRuns(tab)) items.push({ type: "failed", tab, run, bad: true });
     for (const run of (tab.runs ?? []).filter((item) => item.status === "working" && item.stalled)) items.push({ type: "stalled", tab, run, bad: true });
@@ -123,10 +122,9 @@
   function attentionCard(item) {
     const tab = item.tab;
     if (item.type === "toolApproval") return `<div class="ncard apx">${whereLine(item)}<b>${esc(approvalTitle(item.approval.tool, tab, item.approval.askedBy))}</b><code class="approval-code"><span class="approval-path">${esc(item.approval.summary)}</span></code><div class="acts"><button type="button" class="btn sm primary" data-wait-approval="${esc(item.approval.approvalId)}" data-approval-tab="${esc(tab.id)}">Open it</button><span class="st">Answer it above ${esc(tab.name)}'s composer</span></div></div>`;
-    if (item.type === "look") { const shots = screenshotPaths(tab).length; return `<div class="ncard look">${whereLine(item)}<b>Approve the look</b><p>${esc(leaderName(tab))}${shots ? ` has ${shots} screenshot${shots === 1 ? "" : "s"} ready for you.` : " is waiting for your look."}</p><div class="acts"><button type="button" class="btn sm primary" data-wait-tab="${esc(tab.id)}">Open it</button></div></div>`; }
     if (item.type === "request") return requestCard(item.request, true);
     if (item.type === "failed") return `<div class="ncard bad">${whereLine(item)}<b>${esc(item.run.seatName)}'s run failed</b><p>${plainMd(item.run.label)} · ${esc(item.run.outcome ?? "failed")}${item.run.endedAt ? ` · ${esc(agoText(item.run.endedAt))}` : ""}</p><div class="acts"><button type="button" class="btn sm primary" data-open-seat="${esc(item.run.seatSlotId)}" data-open-tab="${esc(tab.id)}">Open ${esc(item.run.seatName)}</button><button type="button" class="btn sm" data-dismiss-run="${esc(item.run.runId)}">Dismiss</button></div></div>`;
-    if (item.type === "stalled") return `<div class="ncard bad">${whereLine(item)}<b>${esc(item.run.seatName)}'s run stalled</b><p>${plainMd(item.run.label)}: no output for ${STALL_MINUTES} minutes. ${stallActions.get(item.run.runId) === "relaunch" ? "Command Center is stopping it and starting it once more." : "It was not relaunched by itself."}</p><div class="acts"><button type="button" class="btn sm primary" data-open-seat="${esc(item.run.seatSlotId)}" data-open-tab="${esc(tab.id)}">Watch it</button><button type="button" class="btn sm danger" data-stop-run="${esc(item.run.runId)}">Stop this run</button></div></div>`;
+    if (item.type === "stalled") return `<div class="ncard bad">${whereLine(item)}<b>${esc(item.run.seatName)}'s run stalled</b><p>${plainMd(item.run.label)}: no output for ${STALL_MINUTES} minutes. It was not relaunched by itself.</p><div class="acts"><button type="button" class="btn sm primary" data-open-seat="${esc(item.run.seatSlotId)}" data-open-tab="${esc(tab.id)}">Watch it</button><button type="button" class="btn sm danger" data-stop-run="${esc(item.run.runId)}">Stop this run</button></div></div>`;
     if (item.type === "uncertain") {
       const key = item.row.seatKey ?? item.row.seatId ?? "unknown seat", runId = item.row.runId, owner = seatOfKey(key);
       const run = owner.tab?.runs?.find((candidate) => candidate.runId === runId);
@@ -156,7 +154,7 @@
     const focusKey = document.activeElement?.closest?.("#inboxPop") && !document.activeElement.closest("#reqForm") ? focusKeyOf(document.activeElement) : null;
     const selection = document.activeElement?.matches?.(".phrase") ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
     $("inboxHead").textContent = `Needs you${items.length ? ` · ${items.length}` : ""}`;
-    list.innerHTML = items.length ? items.map(attentionCard).join("") : '<div class="allclear"><b>Nothing needs you right now</b><span>Approvals, looks, requests and stopped or failed work show up here.</span></div>';
+    list.innerHTML = items.length ? items.map(attentionCard).join("") : '<div class="allclear"><b>Nothing needs you right now</b><span>Approvals, requests and stopped or failed work show up here.</span></div>';
     const safety = serverState?.launchSafety ?? {};
     const released = safety.released ?? [], recordNotices = (safety.notices ?? []).filter((row) => !row.pending);
     records.innerHTML = `${released.length ? `<div class="grp">Released without a confirmed exit · ${released.length}</div>${released.map((row) => { const owner = seatOfKey(row.seatId); return `<div class="ncard sent"><div class="route"><span class="tg">PID ${esc(row.pid)}</span><span class="tg" title="${esc(owner.seat?.name ?? row.seatId)}">${esc(owner.seat?.name ?? row.seatId)}</span></div><p>${esc(owner.tab ? tabLabel(owner.tab.id) : owner.legacy ? `Old seat ID ${row.seatId}` : "Removed tab")}. Released by you; it may still be running. The seat stays blocked until you allow it.</p></div>`; }).join("")}` : ""}${recordNotices.length ? `<div class="grp row"><span>Launch records · ${recordNotices.length}</span><button type="button" class="btn sm" data-ack-all>Acknowledge all</button></div>${recordNotices.map((row) => { const owner = seatOfKey(row.seatKey ?? row.seatId); return `<div class="ncard sent"><div class="route"><span class="tg" title="${esc(row.source ?? "Command Center")}">${esc(row.source === "Local client" ? "You" : row.source ?? "Command Center")}</span><span class="route-arrow" aria-label="to">&#8594;</span><span class="tg" title="${esc(row.seatName ?? row.seatId)}">${esc(row.seatName ?? row.seatId)}</span><span class="spacer"></span><span class="faint" title="${esc(owner.tab ? tabLabel(owner.tab.id) : "Removed tab")}">${esc(owner.tab ? tabLabel(owner.tab.id) : "Removed tab")}</span></div><p>Launched: ${plainMd(row.brief ?? "")}</p><div class="acts"><button type="button" class="btn sm" data-ack-notice="${esc(row.id)}">Acknowledge</button></div></div>`; }).join("")}` : ""}`;
@@ -166,12 +164,6 @@
     if (!$("inboxPop").hidden) placePopover($("inboxPop"));
   }
   function bindInbox(root) {
-    root.querySelectorAll("[data-wait-tab]").forEach((button) => button.addEventListener("click", () => {
-      const tabId = button.dataset.waitTab; closePopovers();
-      const tab = findTab(tabId); if (tab) { selectedSeatByTab.set(tab.id, leader(tab)?.slot); selectedView = "live"; }
-      selectTabFromUser(tabId); renderStage();
-      requestAnimationFrame(() => $("lookCard")?.querySelector("button")?.focus({ preventScroll: true }));
-    }));
     root.querySelectorAll("[data-wait-approval]").forEach((button) => button.addEventListener("click", () => {
       approvalFocusTabId = button.dataset.approvalTab;
       const tab = findTab(approvalFocusTabId); if (tab) { selectedSeatByTab.set(tab.id, leader(tab)?.slot); selectedView = "live"; }

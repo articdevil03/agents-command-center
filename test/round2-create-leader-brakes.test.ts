@@ -3,11 +3,11 @@ import assert from "node:assert/strict";
 import { readdir, writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import * as usage from "../server/usage.ts";
-import * as stall from "../server/stall.ts";
 import * as processEngine from "../server/process.ts";
+import { fixedProcess } from "./process-helpers.ts";
 import { tempRoot } from "./temp-root.ts";
 import { config, leaderApi } from "./round2-setup.ts";
-import { loadServer, connect, lastState, tick } from "./round2-helpers.ts";
+import { loadServer, loadFixed, connect, lastState, tick, waitFor, startHelper, endRun } from "./round2-helpers.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
 
 test("createLeader: a null native CLI path reaches the SDK builder without a fallback", () => {
@@ -105,7 +105,7 @@ test("createLeader returns false when a live permission apply resolves after sto
 });
 
 test("isSeatBusy: working runs count as busy and completed process state does not", () => {
-  const state = processEngine.createTabState(processEngine.legacySetup("dev", "main"), { tabId: "tab", folderPath: "C:/work" });
+  const state = fixedProcess({ tabId: "tab", folderPath: "C:/work" });
   assert.equal(processEngine.isBusy(state), false);
   const working = processEngine.runEvent(state, { type: "start", run: { id: "run-1", seatSlotId: "coder", label: "work", startedAt: 1 } });
   assert.equal(processEngine.isBusy(working), true);
@@ -113,32 +113,25 @@ test("isSeatBusy: working runs count as busy and completed process state does no
   assert.equal(processEngine.isBusy(done), false);
 });
 
-test("launch brakes: kill blocks and launch-budget timestamps survive a fresh server module", async () => {
-  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadServer({ skipHealth: true, safetyPath });
-  first.launchWorker("alpha-dev", "reviewer2", "run then stop");
-  const ws = connect(first); ws.message({ type: "killRun", runId: first.launched[0].run.runId });
-  const restarted = await loadServer({ skipHealth: true, safetyPath });
-  assert.deepEqual(restarted.safety().blocked, ["alpha-dev.reviewer2"]);
-  assert.equal(restarted.safety().timestamps.length, 1);
-  assert.match(restarted.launchWorker("alpha-dev", "reviewer2", "client bypass").error, /launch blocked/);
-  assert.match(restarted.leaderLaunch("alpha-dev", "reviewer2", "blocked").error, /launch blocked/);
-});
+const refusal = (promise: Promise<unknown>) => promise.then(() => "launched", (error: Error) => error.message);
+const confirmRelease = "release may leave a process running and editing files";
 
-test("launch brakes: a stall relaunch is recorded only after its real close callback and keeps the same brief", async () => {
-  const server = await loadServer({ relaunchable: true, skipHealth: true, deferKill: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "same original brief"); const first = server.launched[0];
-  server.stallTrackers.startRun(first.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1); server.tick();
-  assert.equal(server.launched.length, 1); assert.equal(server.safety().timestamps.length, 1);
-  server.closeRun(first.run.runId);
-  assert.equal(server.launched.length, 2); assert.equal(server.launched[1].prompt, "same original brief");
-  assert.equal(server.safety().timestamps.length, 1, "the automatic retry reuses its reserved launch and costs no second slot");
-  assert.ok(ws.messages.some((message: any) => message.type === "runStop" && message.runId === first.run.runId));
+test("launch brakes: kill blocks and launch-budget timestamps survive a fresh server module", async () => {
+  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadFixed({ skipHealth: true, safetyPath });
+  const started = await startHelper(first, "alpha-dev", "helper", "run then stop");
+  const ws = connect(first); ws.message({ type: "killRun", runId: started.runId });
+  const restarted = await loadFixed({ skipHealth: true, safetyPath });
+  assert.deepEqual(restarted.safety().blocked, ["alpha-dev.helper"]);
+  assert.equal(restarted.safety().timestamps.length, 1);
+  assert.match(await refusal(startHelper(restarted, "alpha-dev", "helper", "blocked")), /launch blocked/);
+  assert.equal(restarted.launched.length, 0);
+  assert.equal(restarted.executionJournal(restarted.testRoot, "alpha-dev").activeExecutionId, null, "the blocked launch left no reservation");
 });
 
 test("launch notices: an offline launch survives restart, replays to the client, and its single-message ACK persists", async () => {
-  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadServer({ skipHealth: true, safetyPath });
-  first.leaderLaunch("alpha-dev", "coder", "offline notice");
-  const restarted = await loadServer({ skipHealth: true, safetyPath }), ws = connect(restarted);
+  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadFixed({ skipHealth: true, safetyPath });
+  await startHelper(first, "alpha-dev", "helper", "offline notice");
+  const restarted = await loadFixed({ skipHealth: true, safetyPath }), ws = connect(restarted);
   ws.message({ type: "hello" });
   const notice = lastState(ws).launchSafety.notices[0];
   assert.equal(notice.brief, "offline notice");
@@ -147,69 +140,60 @@ test("launch notices: an offline launch survives restart, replays to the client,
 });
 
 test("launch recovery UI: the released PID warning survives state replay and a confirmed close removes it", async () => {
-  const server = await loadServer({ skipHealth: true, releaseUnconfirmed: () => true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "uncertain run"); const entry = server.launched[0];
+  const server = await loadFixed({ skipHealth: true, releaseUnconfirmed: () => true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "uncertain run"); const entry = server.launched[0];
   entry.callback.onUnconfirmedKill(entry.run, 4321);
-  ws.message({ type: "releaseUnconfirmedSeat", seatId: entry.run.seatKey, confirm: "release may leave a process running and editing files" });
-  assert.deepEqual(JSON.parse(JSON.stringify(server.stateMessage().releasedProcesses)), [{ seatId: "alpha-dev.reviewer2", pid: 4321 }]);
+  ws.message({ type: "releaseUnconfirmedSeat", seatId: entry.run.seatKey, confirm: confirmRelease });
+  assert.deepEqual(JSON.parse(JSON.stringify(server.stateMessage().releasedProcesses)), [{ seatId: "alpha-dev.helper", pid: 4321 }]);
   assert.equal(server.stateMessage().launchSafety.uncertain.length, 0);
-  server.closeRun(entry.run.runId);
+  await endRun(server, entry.run.runId);
   assert.deepEqual(server.stateMessage().releasedProcesses, []);
 });
 
 test("launch recovery: a restarted server preserves unconfirmed ownership until the user deliberately releases it", async () => {
-  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadServer({ skipHealth: true, safetyPath });
-  first.launchWorker("alpha-dev", "reviewer2", "uncertain"); const entry = first.launched[0]; entry.callback.onUnconfirmedKill(entry.run, 7654);
-  const restarted = await loadServer({ skipHealth: true, safetyPath });
-  assert.match(restarted.launchWorker("alpha-dev", "reviewer2", "blocked").error, /unconfirmed process/);
-  const ws = connect(restarted); ws.message({ type: "releaseUnconfirmedSeat", seatId: "alpha-dev.reviewer2", confirm: "release may leave a process running and editing files" });
+  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadFixed({ skipHealth: true, safetyPath });
+  await startHelper(first, "alpha-dev", "helper", "uncertain"); const entry = first.launched[0]; entry.callback.onUnconfirmedKill(entry.run, 7654);
+  const restarted = await loadFixed({ skipHealth: true, safetyPath });
+  assert.match(await refusal(startHelper(restarted, "alpha-dev", "helper", "blocked")), /unconfirmed process/);
+  const ws = connect(restarted); ws.message({ type: "releaseUnconfirmedSeat", seatId: "alpha-dev.helper", confirm: confirmRelease });
   assert.equal(restarted.launchSafety.uncertain.length, 0);
   assert.equal(restarted.launchSafety.released[0].pid, 7654);
-  assert.match(restarted.launchWorker("alpha-dev", "reviewer2", "still blocked").error, /launch blocked/);
-  ws.message({ type: "unblockSeat", seatKey: "alpha-dev.reviewer2", confirm: "allow this seat to launch again" });
-  assert.equal(restarted.launchWorker("alpha-dev", "reviewer2", "explicitly released").ok, true);
+  assert.match(await refusal(startHelper(restarted, "alpha-dev", "helper", "still blocked")), /launch blocked/);
+  ws.message({ type: "unblockSeat", seatKey: "alpha-dev.helper", confirm: "allow this seat to launch again" });
+  const next = await startHelper(restarted, "alpha-dev", "helper", "explicitly released");
+  assert.equal(restarted.launched.at(-1).run.runId, next.runId);
+  await endRun(restarted, next.runId);
 });
 
 test("launch recovery: retry keeps unconfirmed ownership until explicit release frees the seat", async () => {
-  const server = await loadServer({ skipHealth: true, deferKill: true, releaseUnconfirmed: () => true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "uncertain run"); const entry = server.launched[0]; entry.callback.onUnconfirmedKill(entry.run, 2222);
-  assert.match(server.launchWorker("alpha-dev", "reviewer2", "blocked").error, /unconfirmed process/);
+  const server = await loadFixed({ skipHealth: true, deferKill: true, releaseUnconfirmed: () => true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "uncertain run"); const entry = server.launched[0]; entry.callback.onUnconfirmedKill(entry.run, 2222);
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "blocked")), /process tree has not been confirmed ended/);
   ws.message({ type: "killRun", runId: entry.run.runId }); assert.deepEqual(server.kills, [entry.run.runId]);
-  ws.message({ type: "releaseUnconfirmedSeat", seatId: entry.run.seatKey, confirm: "release may leave a process running and editing files" });
+  ws.message({ type: "releaseUnconfirmedSeat", seatId: entry.run.seatKey, confirm: confirmRelease });
   assert.equal(server.launchSafety.released[0].runId, entry.run.runId);
-  assert.match(server.launchWorker("alpha-dev", "reviewer2", "still blocked").error, /launch blocked/);
+  server.closeRun(entry.run.runId, 0);
+  await waitFor(() => server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId === null, "the released run's process tree to be confirmed ended");
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "still blocked")), /launch blocked/);
   ws.message({ type: "unblockSeat", seatKey: entry.run.seatKey, confirm: "allow this seat to launch again" });
-  assert.equal(server.launchWorker("alpha-dev", "reviewer2", "after explicit release").ok, true);
+  assert.equal((await startHelper(server, "alpha-dev", "helper", "after explicit release")).runId, server.launched.at(-1).run.runId);
   for (const launched of server.launched) server.closeRun(launched.run.runId, 0);
+  await tick();
   assert.equal(server.active.size, 0, "every run this test started is closed");
 });
 
 test("launch safety: a failed durable reservation blocks spawn, but disk failure never suppresses Kill", async () => {
-  let fail = true; const server = await loadServer({ skipHealth: true, failSafety: () => fail }), ws = connect(server);
-  assert.equal(server.launchWorker("alpha-dev", "reviewer2", "must not spawn").ok, false);
-  assert.equal(server.launched.length, 0); fail = false;
-  server.launchWorker("alpha-dev", "reviewer2", "running"); const id = server.launched[0].run.runId; fail = true;
+  let fail = true; const server = await loadFixed({ skipHealth: true, failSafety: () => fail }), ws = connect(server);
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "must not spawn")), /could not persist launch safety/);
+  assert.equal(server.launched.length, 0);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the failed save left no reservation"); fail = false;
+  const id = (await startHelper(server, "alpha-dev", "helper", "running")).runId; fail = true;
   ws.message({ type: "killRun", runId: id }); assert.deepEqual(server.kills, [id]);
 });
 
 test("launch safety: corrupt persisted state refuses startup instead of resetting brakes", async () => {
   const safetyPath = path.join(tempRoot(), "corrupt-launch-safety.json"); await writeFile(safetyPath, "not JSON");
   await assert.rejects(loadServer({ skipHealth: true, safetyPath }), /JSON|Unexpected/);
-});
-
-test("leader health-check options strip CC_DATA_DIR from the actual SDK environment", async () => {
-  const previousRoot = process.env.CC_DATA_DIR, previousPackaged = process.env.CC_TEST_FORCE_PACKAGED;
-  process.env.CC_DATA_DIR = "C:/private/never-open-this"; process.env.CC_TEST_FORCE_PACKAGED = "1"; process.env.CC_APP_KEY = "test-app-key-must-not-leak";
-  let env: any;
-  try {
-    const server = await loadServer({ realLeaderOptions: true, query: (args) => { env = args.options.env; return { [Symbol.asyncIterator]: async function* () { yield { type: "result" }; } }; } });
-    await server.leaderHealthCheck;
-  } finally {
-    delete process.env.CC_APP_KEY;
-    if (previousRoot === undefined) delete process.env.CC_DATA_DIR; else process.env.CC_DATA_DIR = previousRoot;
-    if (previousPackaged === undefined) delete process.env.CC_TEST_FORCE_PACKAGED; else process.env.CC_TEST_FORCE_PACKAGED = previousPackaged;
-  }
-  assert.equal(Object.hasOwn(env, "CC_DATA_DIR"), false); assert.equal(Object.hasOwn(env, "CC_TEST_FORCE_PACKAGED"), false); assert.equal(Object.hasOwn(env, "CC_APP_KEY"), false, "the leader's SDK child never sees the app key");
 });
 
 test("leader launch strips CC_DATA_DIR from the actual SDK options", () => {
@@ -268,7 +252,7 @@ test("listHistory reports a missing or unreadable logs directory instead of retu
 
 test("message handler catches a dispatch error and continues handling a following valid message", async () => {
   const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  ws.message({ type: "useSetup", tabId: "missing", templateId: "solo" });
+  ws.message({ type: "removeTab", tabId: "missing" }); // the handler that threw here was useSetup, retired in run 13; removeTab throws the same unknown tab error
   ws.message({ type: "hello" });
   assert.ok(ws.messages.some((message: any) => message.type === "error" && /unknown tab/.test(message.message)));
   assert.ok(lastState(ws));
@@ -306,10 +290,12 @@ test("null-message guard: the actual WebSocket callback rejects invalid envelope
   ws.message({ type: "hello" }); assert.ok(lastState(ws));
 });
 
+
 test("output trim: the real runner callback keeps a 200KB UTF-8 cap at whole-character boundaries", async () => {
-  const server = await loadServer({ skipHealth: true }); connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "large output"); const entry = server.launched[0];
+  const server = await loadFixed({ skipHealth: true }); connect(server);
+  await startHelper(server, "alpha-dev", "helper", "large output"); const entry = server.launched[0];
   server.emitOutput(entry.run.runId, "🙂".repeat(90_000));
   const run = server.stateMessage().projects[0].tabs[0].runs.find((item: any) => item.runId === entry.run.runId);
   assert.equal(Buffer.byteLength(run.output, "utf8"), 200 * 1024); assert.equal(run.output.endsWith("🙂"), true);
+  await endRun(server, entry.run.runId);
 });

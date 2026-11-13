@@ -3,29 +3,53 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { WebSocket } from "ws";
 import { keyedWsUrl } from "./temp-root.ts";
-import { HOST, APP_KEY, assertAuditFinished, C2_APPROVAL_CHECKS, packCWidthChecks, packCFileUndoChecks } from "./browser-constants.ts";
+import { HOST, APP_KEY, assertAuditFinished, assertExactChecks, COLLISION_CHECKS, c2EarlyNames, c2FullNames } from "./browser-constants.ts";
 import { getServerState, listen, chromeAudit } from "./browser-helpers.ts";
 import { chromeDialogAudit } from "./browser-dialog-audit.ts";
 import type { BrowserProxy } from "./browser-real-types.ts";
 
-export async function packCWidthAudit(proxy: BrowserProxy, temp: string, folder: string, width: number) {
+// The early C2 route (Pack C, tool approvals, R6 and R7, no R1) runs the harness case "c2-through-r7" and expects exactly what that case executes.
+export async function packCWidthAudit(proxy: BrowserProxy, temp: string, folder: string, width: number, early = false) {
   const c2Port = await listen(proxy.proxy);
-  const c2 = await chromeAudit({ port: c2Port, mode: "fake", folder, width, profile: join(temp, `chrome-packc-${width}`), caseName: "c2", virtualMs: 60_000 });
+  const c2 = await chromeAudit({ port: c2Port, mode: "fake", folder, width, profile: join(temp, `chrome-packc${early ? "-early" : ""}-${width}`), caseName: early ? "c2-through-r7" : "c2", virtualMs: 60_000 });
   console.log(`Browser Pack C ${width}px audit: ${JSON.stringify(c2)}`);
   assert.equal(c2.failures?.length ?? 0, 0, `Pack C ${width}px call-site mutation detected: ${(c2.failures ?? []).map((item: any) => item.name).join(" | ")}`);
   assert.equal(c2.failure, undefined, `Pack C ${width}px browser audit failed: ${c2.failure ?? JSON.stringify(c2)}`);
   assertAuditFinished(c2, "c2");
   assert.deepEqual(c2.errors, [], `Pack C ${width}px browser console/runtime errors: ${JSON.stringify(c2.errors)}`);
-  const c2Names = c2.checks.map((item: any) => item.name);
-  for (const name of C2_APPROVAL_CHECKS) assert.ok(c2Names.includes(name), `missing Pack C approval check ${name}; matched ${JSON.stringify(c2Names)}`);
-  for (const name of packCWidthChecks(width)) assert.ok(c2Names.includes(name), `missing Pack C ${width}px browser check ${name}; matched ${JSON.stringify(c2Names)}`);
-  for (const name of packCFileUndoChecks()) assert.ok(c2Names.includes(name), `missing Pack C file check ${name}; matched ${JSON.stringify(c2Names)}`);
+  // Exact list: a missing, extra, renamed or duplicated result fails here, and every result must have passed. The early route also keeps the page's order.
+  if (early) assertExactChecks(`early Pack C ${width}px`, c2.checks, [...COLLISION_CHECKS, ...c2EarlyNames(width)], true);
+  else assertExactChecks(`full Pack C ${width}px`, c2.checks, c2FullNames(width), true);
   if (width === 1600 || width === 1024) {
     const dialogAudit = await chromeDialogAudit({ port: c2Port, folder, width, profile: join(temp, `chrome-dialog-close-${width}`) });
     assert.deepEqual(dialogAudit.dialogs, ["#inboxPop", "#setModal", "#avModal", "#viewer", "#modal", "#projModal", "#runModal"]);
     console.log(`Dialog browser audit ${width}px passed: ${JSON.stringify(dialogAudit)}`);
   }
+  if (early) console.log("PARTIAL BROWSER RUN (announced, not a full run): Pack C, tool approvals, R6 and R7 only (no R1, no native seat pointer)");
 }
+
+const REAL_SETTINGS_NAMES = (width: number): string[] => [
+  `real fake-runner Settings and permission targets exist at ${width}px`,
+  `real Settings nav finds all eight sections at ${width}px`,
+  `real Gemini remains install-only with server instruction inventory at ${width}px`,
+  `Gemini install shows real server status for its fresh id at ${width}px`,
+  `Claude sign-in shows real server status for its fresh id at ${width}px`,
+  `GitHub connect shows real server status for its fresh id at ${width}px`,
+  `Notes vault refusal shows real server status for its fresh id at ${width}px`,
+  `Notes vault save shows real server status for its fresh id at ${width}px`,
+  `real Notes vault Open in Obsidian uses the encoded server path at ${width}px`,
+  `Default folder refusal shows real server status for its fresh id at ${width}px`,
+  `Default folder save shows real server status for its fresh id at ${width}px`,
+  `real folder pickers update the default and selected tab at ${width}px`,
+  `MCP add shows real server status for its fresh id at ${width}px`,
+  `MCP remove shows real server status for its fresh id at ${width}px`,
+  `Plugin install shows real server status for its fresh id at ${width}px`,
+  `Plugin remove shows real server status for its fresh id at ${width}px`,
+  `real MCP and plugin actions use server refusals and require confirmation at ${width}px`,
+  `real per-tab permission flow uses server state and confirmation at ${width}px`,
+  `Clear Notes vault shows real server status for its fresh id at ${width}px`,
+  `real Notes vault clears back to its honest no-vault state at ${width}px`,
+];
 
 export async function packCRealSettingsAudit(proxy: BrowserProxy, temp: string, settingsFolder: string, width: number) {
   const settingsPort = await listen(proxy.proxy);
@@ -35,29 +59,7 @@ export async function packCRealSettingsAudit(proxy: BrowserProxy, temp: string, 
   assert.equal(settingsAudit.failure, undefined, `Pack C real Settings ${width}px browser audit failed: ${settingsAudit.failure ?? JSON.stringify(settingsAudit)}`);
   assertAuditFinished(settingsAudit, "settingsAudit");
   assert.deepEqual(settingsAudit.errors, [], `Pack C real Settings ${width}px browser errors: ${JSON.stringify(settingsAudit.errors)}`);
-  const settingsNames = settingsAudit.checks.map((item: any) => item.name);
-  for (const name of [
-    `real fake-runner Settings and permission targets exist at ${width}px`,
-    `real Settings nav finds all eight sections at ${width}px`,
-    `real Gemini remains install-only with server instruction inventory at ${width}px`,
-    `Gemini install shows real server status for its fresh id at ${width}px`,
-    `Claude sign-in shows real server status for its fresh id at ${width}px`,
-    `GitHub connect shows real server status for its fresh id at ${width}px`,
-    `Notes vault refusal shows real server status for its fresh id at ${width}px`,
-    `Notes vault save shows real server status for its fresh id at ${width}px`,
-    `real Notes vault Open in Obsidian uses the encoded server path at ${width}px`,
-    `Default folder refusal shows real server status for its fresh id at ${width}px`,
-    `Default folder save shows real server status for its fresh id at ${width}px`,
-    `real folder pickers update the default and selected tab at ${width}px`,
-    `MCP add shows real server status for its fresh id at ${width}px`,
-    `MCP remove shows real server status for its fresh id at ${width}px`,
-    `Plugin install shows real server status for its fresh id at ${width}px`,
-    `Plugin remove shows real server status for its fresh id at ${width}px`,
-    `real MCP and plugin actions use server refusals and require confirmation at ${width}px`,
-    `real per-tab permission flow uses server state and confirmation at ${width}px`,
-    `Clear Notes vault shows real server status for its fresh id at ${width}px`,
-    `real Notes vault clears back to its honest no-vault state at ${width}px`,
-  ]) assert.ok(settingsNames.includes(name), `missing real fake-runner Settings check ${name}; matched ${JSON.stringify(settingsNames)}`);
+  assertExactChecks(`real Settings ${width}px`, settingsAudit.checks, [...COLLISION_CHECKS, ...REAL_SETTINGS_NAMES(width)]);
 }
 
 export async function requestsRealAudit(proxy: BrowserProxy, temp: string, folder: string) {
@@ -67,8 +69,10 @@ export async function requestsRealAudit(proxy: BrowserProxy, temp: string, folde
   assert.equal(requestAudit.failure, undefined, `Pack C real request audit failed: ${requestAudit.failure ?? JSON.stringify(requestAudit)}`);
   assertAuditFinished(requestAudit, "requestAudit");
   assert.deepEqual(requestAudit.errors, [], `Pack C real request browser errors: ${JSON.stringify(requestAudit.errors)}`);
-  assert.ok(requestAudit.checks.some((item: any) => item.name === "the real browser server probes Gemini and GitHub through its scripted fake runner"), `missing real fake-runner settings proof; matched ${JSON.stringify(requestAudit.checks.map((item: any) => item.name))}`);
-  assert.ok(requestAudit.checks.some((item: any) => item.name === "requests run end to end on the fake-runner server: send, badge, accept/decline, and destination removed"), `missing real-server request proof; matched ${JSON.stringify(requestAudit.checks.map((item: any) => item.name))}`);
+  assertExactChecks("real requests 1600px", requestAudit.checks, [...COLLISION_CHECKS,
+    "a request destination tab is created through the fixed crew, holding the picked coder and no legacy kind or template",
+    "the real browser server probes Gemini and GitHub through its scripted fake runner",
+    "requests run end to end on the fake-runner server: send, badge, accept/decline, and destination removed"]);
 }
 
 export async function looksWriteAudit(proxy: BrowserProxy, temp: string, folder: string) {
@@ -78,7 +82,7 @@ export async function looksWriteAudit(proxy: BrowserProxy, temp: string, folder:
   assert.equal(looksWrite.failure, undefined, `looks-write audit failed: ${looksWrite.failure ?? JSON.stringify(looksWrite)}`);
   assertAuditFinished(looksWrite, "looksWrite");
   assert.deepEqual(looksWrite.errors, [], `looks-write browser errors: ${JSON.stringify(looksWrite.errors)}`);
-  for (const name of ["a theme and picture chosen in one page load are kept by the real server", "a sound volume set in one page load is kept by the real server"]) assert.ok(looksWrite.checks.some((item: any) => item.name === name), `missing looks-write proof ${name}; matched ${JSON.stringify(looksWrite.checks)}`);
+  assertExactChecks("looks-write 1600px", looksWrite.checks, [...COLLISION_CHECKS, "a theme and picture chosen in one page load are kept by the real server", "a sound volume set in one page load is kept by the real server"]);
   return { looksWrite, writePort };
 }
 
@@ -106,7 +110,7 @@ export async function looksReadAudit(proxy: BrowserProxy, temp: string, folder: 
   assert.equal(looksRead.failure, undefined, `looks-read audit failed: ${looksRead.failure ?? JSON.stringify(looksRead)}`);
   assertAuditFinished(looksRead, "looksRead");
   assert.deepEqual(looksRead.errors, [], `looks-read browser errors: ${JSON.stringify(looksRead.errors)}`);
-  for (const name of ["a fresh page load on a different port opens in the theme and picture chosen before", "a fresh page load on a different port opens the sound popover at the volume set before"]) assert.ok(looksRead.checks.some((item: any) => item.name === name), `missing looks-read proof ${name}; matched ${JSON.stringify(looksRead.checks)}`);
+  assertExactChecks("looks-read 1600px", looksRead.checks, [...COLLISION_CHECKS, "a fresh page load on a different port opens in the theme and picture chosen before", "a fresh page load on a different port opens the sound popover at the volume set before"]);
   assert.equal(looksWrite.matched.port, String(writePort)); assert.equal(looksRead.matched.port, String(readPort));
   assert.notEqual(looksWrite.matched.port, looksRead.matched.port, "the two page loads ran on different ports");
 }

@@ -1,12 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as stall from "../server/stall.ts";
-import { tempWorkspaceFolders, loadServer, connect, lastState, tick, flushMicrotasks } from "./round2-helpers.ts";
+import { tempWorkspaceFolders, loadServer, loadFixed, connect, lastState, tick, waitFor, flushMicrotasks, startHelper, endRun } from "./round2-helpers.ts";
+
+const refusal = (promise: Promise<unknown>) => promise.then(() => "launched", (error: Error) => error.message);
+const stalledFor = (server: any, runId: string) => server.stallTrackers.startRun(runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
+const escalated = (ws: any, runId: string) => ws.messages.some((message: any) => message.type === "runStalled" && message.runId === runId && message.action === "escalate");
+const treeEnded = (server: any, what: string) => waitFor(() => server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId === null, what);
 
 test("run output replay stays under 200 KB and trims only at UTF-8 boundaries through the real callback", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "inspect output");
+  await startHelper(server, "alpha-dev", "helper", "inspect output");
   const entry = server.launched[0];
   const cap = 200 * 1024;
   for (const text of ["x".repeat(cap + 1), "😀".repeat(cap), "界".repeat(cap), "😀" + "a".repeat(cap - 1)]) {
@@ -21,11 +26,13 @@ test("run output replay stays under 200 KB and trims only at UTF-8 boundaries th
   const run = server.stateMessage().projects[0].tabs[0].runs.find((item: any) => item.runId === entry.run.runId);
   assert.equal(run.output.endsWith("a"), true);
   assert.ok(Buffer.byteLength(run.output, "utf8") <= cap);
-  server.launchWorker("alpha-dev", "reviewer2", "short output");
+  await endRun(server, entry.run.runId);
+  await startHelper(server, "alpha-dev", "helper", "short output");
   const short = server.launched[1];
   server.emitOutput(short.run.runId, "abc");
   server.emitOutput(short.run.runId, "界😀");
   assert.equal(server.stateMessage().projects[0].tabs[0].runs.find((item: any) => item.runId === short.run.runId).output, "abc界😀");
+  await endRun(server, short.run.runId);
 });
 
 test("slow clients skip output and state, receive small errors, then quiet resync with a drop notice", async () => {
@@ -42,177 +49,65 @@ test("slow clients skip output and state, receive small errors, then quiet resyn
   assert.equal(ws.messages.at(-1).notice, "[output dropped: client fell behind]");
 });
 
-test("real stall timer relaunches a silent read-only Codex run once and escalates the next stall", async () => {
-  const server = await loadServer({ relaunchable: true, skipHealth: true });
+test("a stalled fixed run is never stopped or restarted by the timer: it escalates once and keeps running", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "reviewer2", prompt: "review this" });
+  await startHelper(server, "alpha-dev", "helper", "review this");
   const first = server.launched[0];
-  server.stallTrackers.startRun(first.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
+  assert.equal(first.run.cli, "codex"); assert.equal(first.run.canWrite, false, "control: a read-only Codex position");
+  stalledFor(server, first.run.runId);
   server.tick();
-  assert.equal(server.launched.length, 2);
-  assert.equal(server.launched[1].prompt, "review this");
-  assert.ok(ws.messages.some((message: any) => message.type === "runStalled" && message.runId === first.run.runId && message.action === "relaunch"));
-  assert.ok(ws.messages.some((message: any) => message.type === "runStop" && message.runId === first.run.runId && message.internal === true));
-  assert.equal(server.safety().notices.at(-1)?.source, "Stall relaunch");
-
-  const second = server.launched[1];
-  const tracker = server.stallTrackers.trackers.get(second.run.runId);
-  tracker.lastGrowthAt = Date.now() - stall.STALL_THRESHOLD_MS - 1;
-  server.tick();
-  assert.equal(server.launched.length, 2);
-  assert.ok(ws.messages.some((message: any) => message.type === "runStalled" && message.runId === second.run.runId && message.action === "escalate"));
-});
-
-test("a stalled run is never relaunched by itself: the real canRunWrite counts every run as able to write, so a silent read-only Codex run escalates at once", async () => {
-  const server = await loadServer({ skipHealth: true });
-  const ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "reviewer2", prompt: "review this" });
-  const first = server.launched[0];
-  assert.equal(first.run.cli, "codex"); assert.equal(first.run.canWrite, false, "control: a read-only Codex slot");
-  server.stallTrackers.startRun(first.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
-  server.tick();
+  server.tick(); server.tick();
   assert.equal(server.launched.length, 1, "no second launch");
-  assert.equal(server.pendingRelaunch.size, 0);
-  assert.ok(ws.messages.some((message: any) => message.type === "runStalled" && message.runId === first.run.runId && message.action === "escalate"), "the stall is escalated to the user");
-  assert.equal(ws.messages.some((message: any) => message.type === "runStalled" && message.action === "relaunch"), false);
+  assert.equal(server.kills.length, 0, "the timer never stops a run because its output is flat");
+  assert.equal(server.isRunning(first.run.runId), true, "the flat run is still running after several ticks");
+  assert.ok(escalated(ws, first.run.runId), "the stall is escalated to the user");
+  assert.deepEqual(ws.messages.filter((message: any) => message.type === "runStalled").map((message: any) => message.action), ["escalate"], "one stalled notice, only ever an escalation");
+  assert.equal(ws.messages.some((message: any) => message.type === "runStop" || message.type === "runFail"), false, "no run end was broadcast by the timer");
+  await endRun(server, first.run.runId);
 });
 
-test("output after a stall cancels the queued relaunch before the real child closes", async () => {
-  const server = await loadServer({ relaunchable: true, skipHealth: true, deferKill: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "recover before relaunch");
-  const first = server.launched[0];
-  server.stallTrackers.startRun(first.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
+test("Stop seat stops a fixed run's position, blocks its next launch and settles the run only on its close", async () => {
+  const server = await loadFixed({ skipHealth: true, deferKill: true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "stalling run");
+  const stalled = server.launched[0];
+  stalledFor(server, stalled.run.runId);
   server.tick();
-  assert.equal(server.pendingRelaunch.has(first.run.runId), true);
-  server.emitOutput(first.run.runId, "late recovery output");
-  assert.equal(server.pendingRelaunch.has(first.run.runId), false);
-  server.closeRun(first.run.runId);
-  assert.equal(server.launched.length, 1);
-  assert.ok(ws.messages.some((message: any) => message.type === "output" && message.chunk === "late recovery output"));
-});
-
-test("Stop seat stops only its engine seat and cancels its queued stall relaunch", async () => {
-  const server = await loadServer({ relaunchable: true, skipHealth: true, deferKill: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "stalling run");
-  server.launchWorker("beta-dev", "coder", "other tab run");
-  const stalled = server.launched[0], other = server.launched[1];
-  server.stallTrackers.startRun(stalled.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
-  server.tick();
-  assert.equal(server.pendingRelaunch.has(stalled.run.runId), true);
-  ws.message({ type: "stopSeat", tabId: "alpha-dev", slot: "reviewer2" });
-  assert.equal(server.pendingRelaunch.has(stalled.run.runId), false);
-  const engine = () => server.tabs.get("alpha-dev").state;
-  assert.equal(engine().seats.find((seat: any) => seat.slotId === "reviewer2").status, "stopped", "the stop request shows at once");
-  assert.equal(engine().runs.find((run: any) => run.id === stalled.run.runId).status, "working", "a live run is not settled before its close");
+  ws.message({ type: "stopSeat", tabId: "alpha-dev", slot: "helper" });
   assert.ok(server.safety().blocked.includes(stalled.run.seatKey));
-  assert.equal(server.userKilledRuns.has(stalled.run.runId), true);
-  assert.equal(server.stallTrackers.isKilled(stalled.run.runId), true);
-  assert.equal(server.isRunning(other.run.runId), true);
+  assert.equal(server.isRunning(stalled.run.runId), true, "a live run is not settled before its close");
   server.closeRun(stalled.run.runId);
-  assert.equal(engine().runs.find((run: any) => run.id === stalled.run.runId).status, "stopped");
-  assert.equal(server.launched.length, 2);
+  await treeEnded(server, "the stopped run's process tree to be confirmed ended");
+  assert.equal(server.stateMessage().projects[0].tabs[0].runs.find((run: any) => run.runId === stalled.run.runId).status, "stopped");
+  assert.equal(server.launched.length, 1);
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "start anyway")), /launch blocked/);
 });
 
-test("Stop all stops the engine, leaders, and workers and cancels a queued stall relaunch", async () => {
-  const server = await loadServer({ skipHealth: true, deferKill: true, hangLeader: true }), ws = connect(server);
+test("Stop all stops the leader and the worker, blocks the worker's seat and settles it only on its close", async () => {
+  const server = await loadFixed({ skipHealth: true, deferKill: true, hangLeader: true }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "start leader" });
-  server.launchWorker("alpha-dev", "reviewer2", "stalling run");
-  server.launchWorker("beta-dev", "coder", "second run");
-  const stalled = server.launched[0], second = server.launched[1];
-  server.stallTrackers.startRun(stalled.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1);
+  await startHelper(server, "alpha-dev", "helper", "stalling run");
+  const stalled = server.launched[0];
+  stalledFor(server, stalled.run.runId);
   server.tick();
   ws.message({ type: "stopAll" });
   assert.ok(ws.messages.some((message: any) => message.type === "stopAllAccepted"), JSON.stringify(ws.messages));
-  assert.equal(server.pendingRelaunch.has(stalled.run.runId), false);
-  const runStatus = (tabId: string, runId: string) => server.tabs.get(tabId).state.runs.find((run: any) => run.id === runId).status;
-  assert.equal(runStatus("alpha-dev", stalled.run.runId), "working", "a live run is not settled before its close");
-  assert.equal(runStatus("beta-dev", second.run.runId), "working");
-  assert.equal(server.tabs.get("alpha-dev").state.seats.find((seat: any) => seat.slotId === "reviewer2").status, "stopped");
-  assert.deepEqual(new Set(server.safety().blocked), new Set([stalled.run.seatKey, second.run.seatKey]));
-  assert.equal(server.userKilledRuns.has(stalled.run.runId), true);
-  assert.equal(server.stallTrackers.isKilled(stalled.run.runId), true);
+  assert.equal(server.isRunning(stalled.run.runId), true, "a live run is not settled before its close");
+  assert.deepEqual(server.safety().blocked, [stalled.run.seatKey]);
   assert.ok(server.leaderHandles[0].stopCalls > 0);
-  server.closeRun(stalled.run.runId); server.closeRun(second.run.runId);
-  assert.equal(runStatus("alpha-dev", stalled.run.runId), "stopped");
-  assert.equal(runStatus("beta-dev", second.run.runId), "stopped");
-  assert.equal(server.launched.length, 2);
+  server.closeRun(stalled.run.runId);
+  await treeEnded(server, "the stopped run's process tree to be confirmed ended");
+  assert.equal(server.stateMessage().projects[0].tabs[0].runs.find((run: any) => run.runId === stalled.run.runId).status, "stopped");
+  assert.equal(server.launched.length, 1);
 });
 
-function approvedLookWithWorker(server: any, ws: any, tabId: string) {
-  for (let i = 0; i < 8 && server.tabs.get(tabId).state.approval.state !== "pending"; i++) ws.message({ type: "advanceStep", tabId });
-  assert.equal(server.launchWorker(tabId, "coder", "still editing").ok, true);
-  ws.message({ type: "approveLook", tabId });
-  assert.equal(server.tabs.get(tabId).state.approval.reviewWaits, true, "review waits for the working coder");
-  return server.launched.at(-1).run.runId;
-}
-
-const reviewerStatus = (server: any, tabId: string) => server.tabs.get(tabId).state.seats.find((seat: any) => seat.slotId === "reviewer1").status;
-
-test("Stop seat keeps the review gate closed until the stopped worker's close is confirmed", async () => {
-  const server = await loadServer({ skipHealth: true, deferKill: true }), ws = connect(server);
-  const runId = approvedLookWithWorker(server, ws, "alpha-dev");
-  ws.message({ type: "stopSeat", tabId: "alpha-dev", slot: "coder" });
-  assert.equal(server.tabs.get("alpha-dev").state.approval.reviewWaits, true, "the reviewer must not start while the worker may still edit");
-  assert.notEqual(reviewerStatus(server, "alpha-dev"), "working");
-  server.closeRun(runId);
-  assert.equal(server.tabs.get("alpha-dev").state.approval.reviewWaits, false);
-  assert.equal(reviewerStatus(server, "alpha-dev"), "working");
-});
-
-test("Stop all pauses a waiting review: it stays closed when each stopped worker's close is confirmed", async () => {
-  const server = await loadServer({ skipHealth: true, deferKill: true }), ws = connect(server);
-  const runId = approvedLookWithWorker(server, ws, "alpha-dev");
-  ws.message({ type: "stopAll" });
-  // Stop all pauses the waiting review at once: it never opens by itself, neither now nor when the stopped worker's close is confirmed.
-  assert.equal(server.tabs.get("alpha-dev").state.approval.reviewWaits, false);
-  assert.equal(reviewerStatus(server, "alpha-dev"), "stopped", "the reviewer must not start while the worker may still edit");
-  server.closeRun(runId);
-  assert.equal(server.tabs.get("alpha-dev").state.approval.reviewWaits, false);
-  assert.equal(reviewerStatus(server, "alpha-dev"), "stopped", "the confirmed close does not open the paused review");
-  assert.equal(server.tabs.get("alpha-dev").state.seats.find((seat: any) => seat.slotId === "leader").status, "stopped");
-  assert.equal(server.stateMessage().projects[0].tabs[0].derived.busy, false, "a stopped tab is not busy");
-});
-
-test("Stop all settles a stopped worker on explicit release when its close is never confirmed", async (t) => {
-  t.mock.timers.enable({ apis: ["setTimeout"] });
-  t.after(() => t.mock.timers.reset());
-  const server = await loadServer({ skipHealth: true, deferKill: true }), ws = connect(server);
-  const runId = approvedLookWithWorker(server, ws, "alpha-dev");
-  ws.message({ type: "stopAll" });
-  t.mock.timers.tick(5_000);
-  assert.equal(server.tabs.get("alpha-dev").state.approval.reviewWaits, false);
-  ws.message({ type: "releaseUnconfirmed", runId, confirm: "release may leave a process running and editing files" });
-  assert.equal(server.tabs.get("alpha-dev").state.runs.find((run: any) => run.id === runId).status, "failed");
-  assert.equal(server.tabs.get("alpha-dev").state.approval.reviewWaits, false);
-  assert.equal(reviewerStatus(server, "alpha-dev"), "stopped", "releasing the worker does not open the paused review");
-  server.closeRun(runId);
-});
-
-test("Stop seat on an idle worker seat still blocks its next launch", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  ws.message({ type: "stopSeat", tabId: "alpha-dev", slot: "reviewer1" });
-  assert.ok(server.safety().blocked.includes("alpha-dev.reviewer1"));
-  const refused = server.leaderLaunch("alpha-dev", "reviewer1", "start anyway");
-  assert.match(refused.ok ? "launched" : refused.error, /launch blocked/);
+test("Stop seat on an idle worker position still blocks its next launch", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  ws.message({ type: "stopSeat", tabId: "alpha-dev", slot: "helper" });
+  assert.ok(server.safety().blocked.includes("alpha-dev.helper"));
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "start anyway")), /launch blocked/);
   assert.equal(server.launched.length, 0);
-});
-
-test("changing process or kind banks and stops the live leader, and the next chat starts a fresh one", async () => {
-  const server = await loadServer({ skipHealth: true, usageDelta: { modelId: "claude-opus-5-5[1m]", contextTokens: 10, contextWindow: 1_000_000, costUsd: 0.5 } }), ws = connect(server);
-  ws.message({ type: "chat", tabId: "alpha-dev", text: "before" });
-  await tick();
-  const first = server.leaders.get("alpha-dev");
-  ws.message({ type: "useSetup", tabId: "alpha-dev", templateId: "duo" });
-  assert.equal(server.leaders.has("alpha-dev"), false, "the old leader must not keep answering for the new process");
-  assert.equal(server.leaderHandles[0].stopCalls, 1);
-  assert.ok(lastState(ws).projects[0].tabs[0].leaderUsage, "the stopped leader's spend stays banked");
-  ws.message({ type: "chat", tabId: "alpha-dev", text: "after" });
-  await tick();
-  assert.notEqual(server.leaders.get("alpha-dev"), first);
-  assert.equal(server.leaderCreates.length, 2);
-  ws.message({ type: "useSetup", tabId: "alpha-dev", templateId: "design" });
-  assert.equal(server.leaders.has("alpha-dev"), false);
-  assert.equal(server.leaderHandles[1].stopCalls, 1);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the blocked launch left no reservation");
 });
 
 test("an SDK error result during Save is a failed handover, never a saved one", async () => {
@@ -241,7 +136,7 @@ test("an SDK error result during Save is a failed handover, never a saved one", 
 });
 
 test("Clear recovers the same tab while its own Save is hung", async () => {
-  const server = await loadServer({ skipHealth: true, hangSave: true, writeHandover: true, workspaces: tempWorkspaceFolders() }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, hangSave: true, writeHandover: true, workspaces: tempWorkspaceFolders() }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "work" });
   await tick(10);
   ws.message({ type: "save", tabId: "alpha-dev" });
@@ -258,36 +153,39 @@ test("Clear recovers the same tab while its own Save is hung", async () => {
   await tick(10);
   ws.message({ type: "save", tabId: "beta-dev" });
   await tick(20);
-  assert.ok(server.chats.some((entry: any) => entry.tabId === "beta-dev" && entry.text.startsWith("Save a concise handover")), "the Save queue is free again");
+  assert.ok(server.chats.some((entry: any) => entry.tabId === "beta-dev" && entry.text.includes("Save a concise handover")), "the Save queue is free again");
   ws.message({ type: "clear", tabId: "beta-dev" });
   await tick(10);
 });
 
-test("a thrown runner start rolls back its launch-budget reservation and pending notice", async () => {
-  const server = await loadServer({ skipHealth: true });
+
+test("a thrown runner start rolls back its launch-budget reservation, pending notice and reservation", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const priorTimestamps = [...server.safety().timestamps], priorNotices = [...server.safety().notices];
+  server.createTabLeader("alpha-dev");
   server.throwRun();
-  const refused = server.launchWorker("alpha-dev", "reviewer2", "crashing start");
-  assert.equal(refused.ok, false);
-  assert.match(refused.error, /injected runner crash/);
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "crashing start")), /injected runner crash/);
   assert.deepEqual(server.safety().timestamps, priorTimestamps);
   assert.deepEqual(server.safety().notices, priorNotices);
   assert.equal(server.runContexts.size, 0);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the crashed start left no reservation");
 });
 
 test("a closed run leaves no per-run output, usage, or kill flags behind", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "finishes");
-  server.launchWorker("alpha-dev", "reviewer2", "killed");
-  const [done, killed] = server.launched.map((entry: any) => entry.run.runId);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "finishes");
+  const done = server.launched[0].run.runId;
   server.emitOutput(done, "some output");
-  server.emitOutput(killed, "more output");
   assert.equal(server.runOutput.has(done), true);
+  await endRun(server, done, "alpha-dev", 0);
+  await startHelper(server, "alpha-dev", "helper", "killed");
+  const killed = server.launched[1].run.runId;
+  server.emitOutput(killed, "more output");
   assert.equal(server.runOutput.has(killed), true);
-  server.closeRun(done, 0);
   ws.message({ type: "killRun", runId: killed });
+  await treeEnded(server, "the killed run's process tree to be confirmed ended");
   for (const runId of [done, killed]) {
-    for (const [name, map] of Object.entries({ runOutput: server.runOutput, runUsage: server.runUsage, userKilledRuns: server.userKilledRuns, stallKillRuns: server.stallKillRuns, pendingRelaunch: server.pendingRelaunch, runContexts: server.runContexts })) {
+    for (const [name, map] of Object.entries({ runOutput: server.runOutput, runUsage: server.runUsage, runContexts: server.runContexts })) {
       assert.equal((map as any).has(runId), false, `${name} still holds ${runId}`);
     }
     const replay = server.stateMessage().projects[0].tabs[0].runs.find((run: any) => run.runId === runId);

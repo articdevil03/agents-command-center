@@ -1,13 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { MAX_FINISHED_RUNS, advanceStep, approveLook, createTabState, failRun, finishFix, finishRun, getApprovedCardLine, getLeaderStatusLine, getRoundStepIndex, getRunViews, getStepBar, getStepOwners, getWorkingSeats, isBusy, reviewClean, reviewFindings, runEvent, selectFixer, startRun, stopRun, stopSeat } from "../server/process.ts";
-import { legacySetup, getProcessDefinition } from "./old-definitions.ts";
-import { seat, atLook, activeReview } from "./process-helpers.ts";
+import { MAX_FINISHED_RUNS, failRun, finishRun, getRunViews, getWorkingSeats, isBusy, runEvent, startRun, stopRun, stopSeat } from "../server/process.ts";
+import { seat, fixedProcess } from "./process-helpers.ts";
 
-test("run events snapshot setup and folder, and finalize every terminal outcome", () => {
-  const original = createTabState(legacySetup("dev", "main"), {
-    folderPath: "C:\\work\\one",
-  });
+test("run events snapshot assignment and folder, and finalize every terminal outcome", () => {
+  const original = fixedProcess({ folderPath: "C:\\work\\one" });
   const started = runEvent(original, {
     type: "start",
     run: { id: "run-1", seatSlotId: "coder", label: "First", startedAt: 10 },
@@ -15,9 +12,10 @@ test("run events snapshot setup and folder, and finalize every terminal outcome"
   assert.notStrictEqual(started, original);
   assert.equal(original.runs.length, 0);
   assert.equal(startRun(started, { id: "run-1", seatSlotId: "coder", label: "duplicate", startedAt: 11 }).runs.length, 1, "duplicate run IDs are ignored");
+  assert.equal(startRun(started, { id: "run-x", seatSlotId: "missing", label: "no seat", startedAt: 11 }).runs.length, 1, "a run for a missing seat is ignored");
   assert.deepEqual(started.runs[0], {
-    id: "run-1", crewGenerationId: 1, seatSlotId: "coder", seatName: "Sonny", seatIsLeader: false, label: "First",
-    status: "working", outcome: null, cli: "codex", model: "gpt-6-luna", effort: "max",
+    id: "run-1", crewGenerationId: 1, seatSlotId: "coder", seatName: "Coder", seatIsLeader: false, label: "First",
+    status: "working", outcome: null, cli: "codex", model: "gpt-6.1-sol", effort: "medium",
     folderPath: "C:\\work\\one", startedAt: 10, endedAt: null,
   });
 
@@ -31,7 +29,7 @@ test("run events snapshot setup and folder, and finalize every terminal outcome"
   const second = startRun(changedSettings, { id: "run-2", seatSlotId: "coder", label: "Second", startedAt: 11 });
   assert.deepEqual(
     [second.runs[0].cli, second.runs[0].model, second.runs[0].effort, second.runs[0].folderPath],
-    ["codex", "gpt-6-luna", "max", "C:\\work\\one"],
+    ["codex", "gpt-6.1-sol", "medium", "C:\\work\\one"],
   );
   assert.deepEqual(
     [second.runs[1].cli, second.runs[1].model, second.runs[1].effort, second.runs[1].folderPath],
@@ -50,7 +48,7 @@ test("run events snapshot setup and folder, and finalize every terminal outcome"
 });
 
 test("finished and stopped runs stay live only while their seat has another working run", () => {
-  let state = createTabState(legacySetup("dev", "main"));
+  let state = fixedProcess();
   state = startRun(state, { id: "run-a", seatSlotId: "coder", label: "A", startedAt: 1 });
   state = startRun(state, { id: "run-b", seatSlotId: "coder", label: "B", startedAt: 2 });
   state = finishRun(state, "run-a", 3);
@@ -68,9 +66,7 @@ test("finished and stopped runs stay live only while their seat has another work
 });
 
 test("failed, missing, or repeated run events do not overwrite a terminal run", () => {
-  let state = startRun(createTabState(legacySetup("dev", "main")), {
-    id: "run", seatSlotId: "coder", label: "One", startedAt: 10,
-  });
+  let state = startRun(fixedProcess(), { id: "run", seatSlotId: "coder", label: "One", startedAt: 10 });
   state = failRun(state, "run", 12, "exit 1");
   const duplicateStop = stopRun(state, "run", 13);
   assert.equal(duplicateStop.runs[0].status, "failed");
@@ -79,60 +75,38 @@ test("failed, missing, or repeated run events do not overwrite a terminal run", 
   assert.equal(stopRun(state, "missing", 14).runs.length, 1);
 });
 
-test("review waits are rechecked once after stopping a seat's parallel runs", () => {
-  let state = atLook();
+test("stopping a seat settles all its parallel runs and leaves the other seats alone", () => {
+  let state = fixedProcess();
   state = startRun(state, { id: "one", seatSlotId: "coder", label: "One", startedAt: 1 });
   state = startRun(state, { id: "two", seatSlotId: "coder", label: "Two", startedAt: 2 });
-  state = approveLook(state);
+  state = startRun(state, { id: "other", seatSlotId: "reviewer1", label: "Other", startedAt: 3 });
   state = stopSeat(state, "coder", 5);
-  assert.ok(state.runs.every((run) => run.status === "stopped" && run.endedAt === 5));
+  const coderRuns = state.runs.filter((run) => run.seatSlotId === "coder");
+  assert.equal(coderRuns.length, 2);
+  assert.ok(coderRuns.every((run) => run.status === "stopped" && run.endedAt === 5));
   assert.equal(seat(state, "coder").status, "stopped");
-  assert.equal(state.approval.reviewWaits, false);
+  assert.equal(state.runs.find((run) => run.id === "other")!.status, "working");
   assert.equal(seat(state, "reviewer1").status, "working");
-  assert.equal(seat(state, "leader").status, "working");
+  assert.equal(isBusy(state), true);
 });
 
-test("step advancement cannot skip the look approval or the round result", () => {
-  let state = createTabState(legacySetup("dev", "main"));
-  while (state.currentStepIndex < 3) state = advanceStep(state);
-  assert.equal(state.approval.state, "pending");
-  assert.equal(advanceStep(state).currentStepIndex, 3);
-  state = approveLook(state);
-  assert.equal(advanceStep(state).currentStepIndex, getRoundStepIndex(state));
-  state = reviewClean(state);
-  assert.equal(state.currentStepIndex, 5);
-  assert.equal(getStepOwners(state, 5)[0], "finalReviewer");
-  state = advanceStep(state);
-  assert.equal(getProcessDefinition("dev", "main").steps[state.currentStepIndex].label, "Ship");
-});
+test("working seats follow the runs: the leader is listed, a finished seat is not, and a missing seat keeps its run snapshot", () => {
+  let state = fixedProcess();
+  assert.deepEqual(getWorkingSeats(state), []);
+  state = startRun(state, { id: "lead", seatSlotId: "leader", label: "Lead", startedAt: 1 });
+  state = startRun(state, { id: "code", seatSlotId: "coder", label: "Code", startedAt: 2 });
+  assert.deepEqual(getWorkingSeats(state).map((item) => item.slotId).sort(), ["coder", "leader"]);
+  assert.equal(getWorkingSeats(state).find((item) => item.slotId === "leader")!.isLeader, true);
+  state = finishRun(state, "code", 3);
+  assert.deepEqual(getWorkingSeats(state).map((item) => item.slotId), ["leader"]);
 
-test("review history captures assigned names and marketing maker changes", () => {
-  let dev = activeReview();
-  seat(dev, "reviewer1").name = "Vera Current";
-  dev = reviewFindings(dev);
-  assert.equal(dev.roundHistory[0].reviewerName, "Vera Current");
-  assert.equal(dev.roundHistory[0].fixerName, "Sonny");
-
-  let marketing = activeReview("mkt", "main");
-  marketing = reviewFindings(marketing);
-  marketing = selectFixer(marketing, "videoAndMotion");
-  assert.equal(marketing.roundHistory[0].fixerName, "Terra");
-  assert.equal(marketing.roundHistory[0].fixerSlotId, "videoAndMotion");
-});
-
-test("derived owners, round flag, approval line, and working seat list follow the current state", () => {
-  let state = activeReview();
-  assert.deepEqual(getStepOwners(state), ["reviewer1"]);
-  assert.deepEqual(getWorkingSeats(state).map((item) => item.slotId).sort(), ["leader", "reviewer1"]);
-  assert.equal(getLeaderStatusLine(state), "Working · Round 1 running");
-  state = reviewFindings(state);
-  assert.deepEqual(getStepOwners(state), ["coder"]);
-  assert.equal(getLeaderStatusLine(state), "Working · Round 1 running");
-  assert.equal(getApprovedCardLine(state), "Round 1: Sonny is fixing.");
+  const orphan = { ...state, seats: state.seats.filter((item) => item.slotId !== "leader") };
+  const listed = getWorkingSeats(orphan).find((item) => item.slotId === "leader")!;
+  assert.deepEqual([listed.name, listed.isLeader], ["Leader", true], "the name and leader flag come from the run's own snapshot");
 });
 
 test("finished runs are bounded while every working run is kept", () => {
-  let state = createTabState(legacySetup("dev", "main"));
+  let state = fixedProcess();
   state = startRun(state, { id: "live-first", seatSlotId: "coder", label: "Long build", startedAt: 1 });
   const total = MAX_FINISHED_RUNS + 15;
   for (let i = 0; i < total; i++) {
@@ -149,15 +123,8 @@ test("finished runs are bounded while every working run is kept", () => {
   assert.equal(state.runs.length, MAX_FINISHED_RUNS + 1);
 });
 
-test("getProcessDefinition: an unknown kind or process is a plain error, never undefined", () => {
-  for (const [kind, process] of [["dev", "bad"], ["nope", "main"], ["dev", "constructor"], ["constructor", "main"], ["dev", "__proto__"]] as const) {
-    assert.throws(() => getProcessDefinition(kind as ProcessKind, process as ProcessId), /unknown kind\/process/, `${kind}/${process}`);
-  }
-  assert.equal(getProcessDefinition("dev", "main").steps.length > 0, true);
-});
-
 test("a run that settles is never pruned itself, even when it started first: the finished run that ended longest ago goes", () => {
-  let state = createTabState(legacySetup("dev", "main"));
+  let state = fixedProcess();
   state = startRun(state, { id: "long-run", seatSlotId: "coder", label: "Long build", startedAt: 1 });
   for (let i = 0; i < MAX_FINISHED_RUNS; i++) {
     state = startRun(state, { id: `short-${i}`, seatSlotId: "reviewer1", label: `Review ${i}`, startedAt: 10 + i });
@@ -172,25 +139,10 @@ test("a run that settles is never pruned itself, even when it started first: the
 });
 
 test("a run settled without an end time ends now, not at its own start (no zero-length run)", () => {
-  let state = createTabState(legacySetup("dev", "main"));
+  let state = fixedProcess();
   state = startRun(state, { id: "no-end-time", seatSlotId: "coder", label: "Build", startedAt: 1 });
   const before = Date.now();
   state = finishRun(state, "no-end-time");
   const run = state.runs.find((item) => item.id === "no-end-time")!;
   assert.ok(run.endedAt! >= before && run.endedAt! > run.startedAt, `ended at ${run.endedAt}`);
-});
-
-test("the step bar says '1 round' for one finished round and '2 rounds' for two", () => {
-  let state = activeReview();
-  state = reviewClean(state);
-  assert.equal(state.roundHistory.length, 1);
-  const labels = getStepBar(state).map((step) => step.label);
-  assert.ok(labels.some((label) => label.endsWith("· 1 round")), `one round reads singular: ${JSON.stringify(labels)}`);
-  assert.ok(!labels.some((label) => /1 rounds/.test(label)));
-  let two = activeReview();
-  two = reviewFindings(two);
-  two = finishFix(two);
-  two = reviewClean(two);
-  assert.equal(two.roundHistory.length, 2);
-  assert.ok(getStepBar(two).map((step) => step.label).some((label) => label.endsWith("· 2 rounds")));
 });

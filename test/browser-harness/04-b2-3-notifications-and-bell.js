@@ -42,7 +42,7 @@
     }
     window.AudioContext = AuditAudioContext;
     const notifyState = structuredClone(window.__ccSeed); const notifyTab = tabOf("alpha-dev", notifyState);
-    notifyTab.processState.approval = { state: "none" };
+    notifyTab.pendingApprovals = [];
     window.__ccDeliver({ ...notifyState, type: "state" });
     const notifyWorker = notifyTab.crew.find((seat) => seat.slot === "coder");
     const notifySeatKey = notifyWorker.seatKey ?? "alpha-dev.coder";
@@ -58,26 +58,24 @@
     window.__ccDeliver({ type: "runStalled", tabId: "alpha-dev", seatKey: notifySeatKey, runId: "notice-stall" });
     const workerNotifications = window.__notified.length;
     const workerTones = window.__tones;
-    // The server marks a stop it made itself (a stalled run it restarts) internal: true, and a stop the user asked for internal: false. Neither rings or notifies: the page has no stop signal at all, so both are sent.
-    window.__ccDeliver({ type: "runStop", tabId: "alpha-dev", seatKey: notifySeatKey, runId: "notice-internal-stop", outcome: "stopped", internal: true });
-    const internalStopSilent = window.__notified.length === workerNotifications && window.__tones === workerTones;
-    window.__ccDeliver({ type: "runStop", tabId: "alpha-dev", seatKey: notifySeatKey, runId: "notice-user-stop", outcome: "stopped", internal: false });
+    // A stop the user asked for neither rings nor notifies: the page has no stop signal at all.
+    window.__ccDeliver({ type: "runStop", tabId: "alpha-dev", seatKey: notifySeatKey, runId: "notice-user-stop", outcome: "stopped" });
     const userStopSilent = window.__notified.length === workerNotifications && window.__tones === workerTones;
     window.__ccDeliver({ type: "chatDone", tabId: "alpha-dev", revision: 10, savedRevision: 8 });
     const focusedLeaderSilent = window.__notified.length === workerNotifications;
     window.__ccFocused = false;
     window.__ccDeliver({ type: "chatDone", tabId: "alpha-dev", revision: 10, savedRevision: 8 });
     const blurredLeaderNotified = window.__notified.length === workerNotifications + 1;
-    const pendingState = structuredClone(window.__latestState); tabOf("alpha-dev", pendingState).processState.approval = { state: "pending" };
+    const pendingState = structuredClone(window.__latestState); tabOf("alpha-dev", pendingState).pendingApprovals = [{ approvalId: "b2-approval-1", tool: "Write", summary: "C:/b2/first.ts", createdAt: 1 }];
     window.__ccDeliver({ ...pendingState, type: "state" });
     const needsUserNotified = window.__notified.length === workerNotifications + 2;
     const repeatedPending = structuredClone(window.__latestState);
     window.__ccDeliver({ ...repeatedPending, type: "state" });
     const noRepeatedApproval = window.__notified.length === workerNotifications + 2;
-    const enabledPolicy = routineSilent && launchSilent && workerNotifications === 3 && workerTones === 24 && internalStopSilent && userStopSilent && focusedLeaderSilent && blurredLeaderNotified && needsUserNotified && noRepeatedApproval;
-    check("notification policy covers worker finish, failure, stall (never launch), focus, approval, routine noise, and both kinds of stop (the server's own internal stop and the user's)", enabledPolicy, { routineSilent, launchSilent, workerNotifications, workerTones, internalStopSilent, userStopSilent, focusedLeaderSilent, blurredLeaderNotified, needsUserNotified, noRepeatedApproval, notifications: window.__notified, tones: window.__tones });
+    const enabledPolicy = routineSilent && launchSilent && workerNotifications === 3 && workerTones === 24 && userStopSilent && focusedLeaderSilent && blurredLeaderNotified && needsUserNotified && noRepeatedApproval;
+    check("notification policy covers worker finish, failure, stall (never launch), focus, approval, routine noise, and a stop (the user's)", enabledPolicy, { routineSilent, launchSilent, workerNotifications, workerTones, userStopSilent, focusedLeaderSilent, blurredLeaderNotified, needsUserNotified, noRepeatedApproval, notifications: window.__notified, tones: window.__tones });
 
-    const noPending = structuredClone(window.__latestState); tabOf("alpha-dev", noPending).processState.approval = { state: "none" };
+    const noPending = structuredClone(window.__latestState); tabOf("alpha-dev", noPending).pendingApprovals = [];
     window.__ccDeliver({ ...noPending, type: "state" });
     $("setBtn").click(); requireElement('#setNav [data-settings-section="behaviour"]').click();
     requireElement('#setBody [data-setting="notificationsEnabled"]').click();
@@ -85,9 +83,9 @@
     window.__ccDeliver({ type: "runStart", tabId: "alpha-dev", seatKey: notifySeatKey, runId: "off-start" });
     window.__ccDeliver({ type: "runFail", tabId: "alpha-dev", seatKey: notifySeatKey, runId: "off-fail" });
     window.__ccDeliver({ type: "chatDone", tabId: "alpha-dev", revision: 11, savedRevision: 8 });
-    const offPending = structuredClone(window.__latestState); tabOf("alpha-dev", offPending).processState.approval = { state: "pending" };
+    const offPending = structuredClone(window.__latestState); tabOf("alpha-dev", offPending).pendingApprovals = [{ approvalId: "b2-approval-2", tool: "Write", summary: "C:/b2/second.ts", createdAt: 2 }];
     window.__ccDeliver({ ...offPending, type: "state" });
-    // The completion sound is its own switch now: with Notifications off, no desktop notice shows, but the chime still plays on the same events (a failed run, a finished reply, a look to approve) while the sound is on; a worker start is none of them.
+    // The completion sound is its own switch now: with Notifications off, no desktop notice shows, but the chime still plays on the same events (a failed run, a finished reply, a new tool approval) while the sound is on; a worker start is none of them.
     const soundSwitch = () => requireElement('#setBody [data-setting="bellEnabled"]');
     const offTones = window.__tones - noSound;
     const disabledPolicy = window.__notified.length === noNotifications && offTones === 24 && window.__latestState.clientPrefs.notificationsEnabled === false && window.__latestState.clientPrefs.bellEnabled === true

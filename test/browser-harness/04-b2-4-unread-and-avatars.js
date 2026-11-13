@@ -1,6 +1,6 @@
 (() => {
-  const { check, waitFor, $, requireElement, openSeatCard, pickProject, openInbox, pressEscape } = window.__ccHarness;
-  // Unread dot, looks, Dismiss, your avatar, seat avatar.
+  const { check, waitFor, $, requireElement, pickProject, openInbox, pressEscape } = window.__ccHarness;
+  // Unread dot, looks, Dismiss, your avatar.
   const b2UnreadAndAvatars = async (ctx) => {
     const { tabOf } = ctx;
     // Unread: a finished reply in a project that is not shown dots that project's tab and says "unread"; one in the shown project, or a user message, does not; opening the project clears it.
@@ -119,15 +119,6 @@
     await waitFor(() => document.querySelector("#view .msg.mine .uav"), "a user message with the picture");
     const messagePic = document.querySelector("#view .msg.mine .uav").getAttribute("src");
     check("your uploaded picture is referenced once in each message, never copied into its HTML", messagePic === $("meImg").getAttribute("src") && messagePic.startsWith("blob:") && !$("view").innerHTML.includes("data:image") && !$("top").innerHTML.includes("data:image"), { messagePic: messagePic.slice(0, 40), meImg: $("meImg").getAttribute("src").slice(0, 40), dataUrlInChat: $("view").innerHTML.includes("data:image") });
-    requireElement("[data-seat-picture]", openSeatCard("coder")).click(); requireElement('#avModal[aria-hidden="false"]');
-    const seatChoices = document.querySelectorAll("#avgrid [data-avatar]").length; const seatUploadVisible = !$("avUpload").hidden;
-    const seatAvatarStart = window.__sent.length;
-    requireElement('#avgrid [data-avatar="ziggy"]').click();
-    const seatAvatarRequest = window.__sent.slice(seatAvatarStart).find((message) => message.type === "updateSeat");
-    window.__ccDeliver({ ...structuredClone(window.__latestState), type: "state" });
-    pressEscape();
-    const seatAvatarFocus = document.activeElement?.matches('#view [data-seat-more="coder"]') === true;
-    check("seat avatar presets and upload control render, send the selected picture and return focus after a state re-render", seatChoices === 20 && seatUploadVisible && seatAvatarRequest?.tabId === "alpha-dev" && seatAvatarRequest.slot === "coder" && seatAvatarRequest.pic === "avatars/ziggy.svg" && seatAvatarFocus, { seatChoices, seatUploadVisible, seatAvatarRequest, seatAvatarFocus, focusedSeat: document.activeElement?.getAttribute("aria-label") });
     Object.assign(ctx, { uploadBytes });
   };
   Object.assign(window.__ccHarness, { b2UnreadAndAvatars });

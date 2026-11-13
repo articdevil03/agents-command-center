@@ -1,5 +1,5 @@
 (() => {
-  const { check, waitFor, text, $, requireElement, latestTab, openSeatView, sleep, tabId, deliverSeed, sentSince } = window.__ccHarness;
+  const { check, waitFor, text, $, requireElement, openSeatView, tabId, deliverSeed, sentSince } = window.__ccHarness;
   const runPackThreeC = async (part) => {
     // Settings > Folders > New tabs.
     await part("New tabs Browse", async () => {
@@ -11,35 +11,6 @@
       const sent = sentSince(from, "changeProjectFolder")[0];
       const project = window.__latestState.projects.find((item) => item.tabs.some((tab) => tab.id === tabId));
       check("Settings New tabs Browse sends changeProjectFolder for the shown project with the picked folder", sent.projectId === project.id && sent.folder === "C:/picked/for-new-tabs", { sent, projectId: project.id });
-    });
-
-    // The Who fixes this round radio: shown for any round pair with two or more fixers, whatever the step is called.
-    await part("fixer radio", async () => {
-      const marketing = structuredClone(window.__ccSeed); const tab = latestTab(tabId, marketing);
-      const coder = tab.crew.find((seat) => seat.slot === "coder"), coderState = tab.processState.seats.find((seat) => seat.slotId === "coder");
-      for (const [slot, name] of [["socialMedia", "Social"], ["image", "Pixel"], ["videoAndMotion", "Motion"]]) {
-        tab.crew.push({ ...structuredClone(coder), slot, name, seatKey: `${tabId}.${slot}`, status: "idle", runs: [] });
-        tab.processState.seats.push({ ...structuredClone(coderState), slotId: slot, seatName: name, status: "idle" });
-      }
-      tab.steps = [{ id: "qa", label: "QA", type: "rounds", pairs: [{ reviewer: "reviewer1", fixers: ["socialMedia", "image", "videoAndMotion"] }] }];
-      tab.derived.stepBar = [{ stepId: "qa", type: "rounds", label: "QA", owners: ["reviewer1"], state: "current" }];
-      tab.processState.approval = { state: "approved" }; tab.processState.phase = "fix"; tab.processState.round = 1; tab.processState.selectedFixer = "socialMedia";
-      tab.pendingApprovals = []; tab.derived.leaderTurnActive = false;
-      window.__ccDeliver({ ...marketing, type: "state" }); await sleep(30);
-      const radios = () => [...document.querySelectorAll("#stepActs [data-fixer]")];
-      const checkedSlot = () => radios().find((radio) => radio.getAttribute("aria-checked") === "true")?.dataset.fixer;
-      const initial = { slots: radios().map((radio) => radio.dataset.fixer), checked: checkedSlot() };
-      const from = window.__sent.length;
-      requireElement('#stepActs [data-fixer="image"]').click();
-      requireElement('#stepActs [data-fixer="videoAndMotion"]').click(); // the first pick is still waiting for the server
-      const picks = sentSince(from, "selectFixer");
-      tab.processState.selectedFixer = "image"; window.__ccDeliver({ ...marketing, type: "state" }); await sleep(30);
-      const afterServer = { checked: checkedSlot(), disabled: radios().some((radio) => radio.disabled) };
-      const again = window.__sent.length;
-      requireElement('#stepActs [data-fixer="image"]').click();
-      const repeat = sentSince(again, "selectFixer").length;
-      check("the fixer radios choose who fixes the round: a pick sends selectFixer once, the checked one follows the server, and picking the checked one sends nothing",
-        initial.slots.join() === "socialMedia,image,videoAndMotion" && initial.checked === "socialMedia" && picks.length === 1 && picks[0].tabId === tabId && picks[0].slot === "image" && afterServer.checked === "image" && !afterServer.disabled && repeat === 0, { initial, picks, afterServer, repeat });
     });
 
     // The Details panel's width grip.

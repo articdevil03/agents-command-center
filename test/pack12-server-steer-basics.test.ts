@@ -174,13 +174,15 @@ test("the sweep: every leader implementation has steer, sendLeaderTurn has exact
   }
   assert.match(read("server/leader-common.ts"), /steer: \(text: string, images: string\[\]\) => boolean;/);
   const index = sourceText("server/index.ts");
-  // The definition, then the places that start a turn: a normal chat, Save, the planner's leader job, and the resend of a steer the CLI handed back.
+  // The definition, then the places that start a turn: a normal chat, Save, the resend of a steer the CLI handed back,
+  // and the two fixed-crew task turns (an owner-requested execution, and an owner's run request: both refuse while a reply runs; the saved request awaits delivery and records failure without replay).
   const calls = index.split("\n").map((line, at) => ({ line: line.trim().replace(/^export /, ""), at })).filter(({ line }) => /\bsendLeaderTurn\(/.test(line) && !line.startsWith("//"));
   assert.deepEqual(calls.map(({ line }) => line.slice(0, 68)).sort(), [
-    "const turn = sendLeaderTurn(tabId, text, [], [], noticeRevision, onR",
     "function sendLeaderTurn(tabId: string, text: string, images: string[",
     "const turn = sendLeaderTurn(tabId, `Save a concise handover of this ",
     "void sendLeaderTurn(tabId, steer.text, steer.images).catch((err) => ",
+    "const delivered = await sendLeaderTurn(tabId, `The owner requested $",
+    "void sendLeaderTurn(message.tabId, `The owner requests work from ${m",
     "void sendLeaderTurn(message.tabId, message.text, images, files, user",
   ].sort(), "a new sendLeaderTurn call site needs its own handling of a running reply");
   const steerStart = index.indexOf("function steerLeaderTurn(");
@@ -190,7 +192,9 @@ test("the sweep: every leader implementation has steer, sendLeaderTurn has exact
   assert.equal(index.split("\n").filter((line) => line.includes("onSteerMissed:")).length, 1, "the tab hands a missed steer back in one place");
   // Every way a steered reply can end without an answer says so: a failed finish and a Stop both write the notice (a Clear empties the chat and does not).
   const finish = index.slice(index.indexOf("function finishLeaderTurn("), index.indexOf("function noteUnansweredSteer("));
-  const stop = index.slice(index.indexOf("function stopLeaderSession("), index.indexOf("// Runs when an answer ends"));
+  const stopStart = index.indexOf("function stopLeaderSession(");
+  const stop = index.slice(stopStart, index.indexOf("\n}\n", stopStart) + 2);
+  assert.ok(stopStart >= 0 && stop.length > 500, "the stop function was found whole");
   assert.ok(finish.includes("(steeredTurns.delete(tabId) || waitingBehind) && failed) noteUnansweredSteer(tabId)"), "a failed reply notes an unanswered steer, also one waiting behind it in lateSteers");
   assert.ok(stop.includes("(steeredTurns.has(tabId) || waitingBehind) && !clearUsage) noteUnansweredSteer(tabId)"), "a stopped reply notes an unanswered steer, also one waiting behind it in lateSteers");
   assert.ok(index.includes("steeredTurns.add(tabId)"), "and a taken steer marks its reply");

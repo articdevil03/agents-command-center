@@ -10,20 +10,27 @@
   <link rel="stylesheet" href="/styles/01-base-bar-rail.css">
   <link rel="stylesheet" href="/styles/02-chat-panels.css">
   <link rel="stylesheet" href="/styles/03-popovers-settings.css">
-  <link rel="stylesheet" href="/setup-editor.css">
+  <link rel="stylesheet" href="/fixed-crew/crew.css">
   <script defer src="/logos.js"></script>
-  <script defer src="/setup-editor.js"></script>
-  <script defer src="/setup-editor-draw.js"></script>
-  <script defer src="/setup-editor-events.js"></script>
   <script defer src="/model-picker.js"></script>
+  <script defer src="/fixed-crew/state.js"></script>
+  <script defer src="/fixed-crew/view.js"></script>
+  <script defer src="/fixed-crew/task-state.js"></script>
+  <script defer src="/fixed-crew/task-archive-view.js"></script>
+  <script defer src="/fixed-crew/task-view.js"></script>
+  <script defer src="/fixed-crew/task-events.js"></script>
+  <script defer src="/fixed-crew/events.js"></script>
+  <script defer src="/fixed-crew/project-dialog.js"></script>
   <script defer src="/app/01-markdown-state.js"></script>
   <script defer src="/app/02-selectors-format.js"></script>
   <script defer src="/app/03-state-sync.js"></script>
   <script defer src="/app/04-messages.js"></script>
   <script defer src="/app/05-layers-approvals.js"></script>
   <script defer src="/app/06-crew-rail.js"></script>
+  <script defer src="/app/06a-tab-status.js"></script>
   <script defer src="/app/07-chat.js"></script>
   <script defer src="/app/08-seat-view-details.js"></script>
+  <script defer src="/app/08a-sidebar-details.js"></script>
   <script defer src="/app/09-needs-you-stopping.js"></script>
   <script defer src="/app/10-dialogs-seat-card.js"></script>
   <script defer src="/app/11-settings-render.js"></script>
@@ -71,14 +78,15 @@
           <button class="soft" id="sideBtn" type="button" aria-pressed="false" aria-controls="side" aria-label="Details: activity, changes, notes and usage" title="Activity, changes, notes and usage"><svg width="15" height="15" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="2" y="3" width="14" height="12" rx="2.2" stroke="currentColor" stroke-width="1.4"/><path d="M11.5 3v12" stroke="currentColor" stroke-width="1.4"/></svg><span class="lbl2">Details</span></button>
         </div>
         <div class="sline" id="sline">
-          <button id="statusBtn" type="button" aria-expanded="false" aria-controls="stepsWrap"></button>
+          <div id="statusBtn" role="status"></div>
           <div class="spacer"></div>
           <span class="savest" id="saveSt" role="status" data-saved-state></span>
           <button class="soft" id="saveBtn" type="button" data-session-action="save"></button>
           <button class="soft ico" id="chatMore" type="button" aria-haspopup="dialog" aria-expanded="false" aria-label="Chat options: past sessions, clear" title="Past sessions, clear"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="3" cy="7" r="1.3" fill="currentColor"/><circle cx="7" cy="7" r="1.3" fill="currentColor"/><circle cx="11" cy="7" r="1.3" fill="currentColor"/></svg></button>
         </div>
-        <div class="stepsWrap" id="stepsWrap" role="region" aria-label="Steps" inert><div><div class="steps" id="pipe" aria-label="Process"></div><div class="stepacts" id="stepActs"></div><div class="rounds" id="rounds"></div><div class="stepnote" id="stepnote"></div></div></div>
-        <div id="view"></div>
+        <div id="view">
+          <div id="fixedView" hidden></div>
+        </div>
         <div class="composer" id="composer">
           <section class="apv" id="approvalPanel" role="region" aria-labelledby="approvalTitle" tabindex="-1" hidden>
             <div class="h"><svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 4v3.5M7 9.6v.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg><h2 id="approvalTitle">Waiting for your answer</h2><span class="n" id="approvalCount"></span></div>
@@ -121,7 +129,6 @@
 <div class="pop" id="seatPop" role="dialog" aria-label="Seat" hidden inert aria-hidden="true"></div>
 <div class="pop" id="projPop" role="dialog" aria-label="All projects" hidden inert aria-hidden="true"></div>
 <div class="pop" id="ctxPop" role="dialog" aria-label="Options" hidden inert aria-hidden="true"></div>
-<div class="pop" id="setupPop" role="dialog" aria-label="Crew choices" hidden inert aria-hidden="true"></div>
 <div class="pop permpop" id="permPop" role="dialog" aria-label="Choose permission mode" hidden inert aria-hidden="true"></div>
 <div class="pop" id="inboxPop" role="dialog" aria-label="Needs you" tabindex="-1" hidden inert aria-hidden="true">
   <div class="grp" id="inboxHead">Needs you</div>
@@ -149,8 +156,7 @@
 <div class="modal" id="modal" role="dialog" aria-label="Add a tab" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
   <h2>Add a tab to <span id="mProj">Project</span></h2>
   <div class="field"><label class="lbl" for="tName">Name</label><input id="tName" maxlength="64" placeholder="e.g. Automation"></div>
-  <div class="field"><span class="lbl">Kind</span><div class="choice" role="radiogroup" aria-label="Kind" id="kindBox"></div></div>
-  <div class="field"><span class="lbl">Crew</span><div class="choice" role="radiogroup" aria-label="Crew" id="tplBox"></div></div>
+  <div class="field fc-create" id="tCrew" hidden></div>
   <div class="field"><span class="lbl">Home folder</span><div class="pathrow"><span class="path" id="tDir" title="No folder chosen">No folder chosen</span><button class="btn" id="browse" type="button">Browse</button><span class="inline-warn" id="tFolderWarn" role="alert" hidden>Choose a folder first</span></div></div>
   <p class="faint" style="font-size:12.5px">Starts in the project folder. Its crew works in the folder you pick; no CLI is held to it by a sandbox, they are only asked to stay inside.</p>
   <label class="onlybox" for="tOnly"><input type="checkbox" id="tOnly" checked><span>Work on this project only</span><small>Adds an AGENTS.md to the folder so the leader stays on this project.</small></label>
@@ -158,10 +164,9 @@
 </div>
 <div class="modal" id="projModal" role="dialog" aria-label="New project" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
   <h2>New project</h2>
-  <div class="field"><label class="lbl" for="pName">Name</label><input id="pName" placeholder="e.g. Swimeroo" maxlength="64"></div>
+  <div class="field"><label class="lbl" for="pName">Name</label><input id="pName" placeholder="e.g. My project" maxlength="64"></div>
   <div class="field"><span class="lbl">Project folder</span><div class="pathrow"><span class="path" id="pDir" title="No folder chosen">No folder chosen</span><button class="btn" id="pBrowse" type="button">Browse</button><span class="inline-warn" id="pFolderWarn" role="alert" hidden>Choose a folder first</span></div><p class="faint" id="pFolderHelp" style="font-size:12.5px"></p></div>
-  <div class="field"><span class="lbl">First tab Kind</span><div class="kseg" role="radiogroup" aria-label="Kind" id="pKind" style="margin:0"></div></div>
-  <div class="field"><span class="lbl">Crew</span><div class="choice" role="radiogroup" aria-label="Crew" id="pTpl"></div></div>
+  <div class="field fc-create" id="pCrew" hidden></div>
   <label class="onlybox" for="pOnly"><input type="checkbox" id="pOnly" checked><span>Work on this project only</span><small>Adds an AGENTS.md to the folder so the leader stays on this project.</small></label>
   <div class="mfoot"><p class="mstat" id="npStat" role="status">Choose a name and a folder to create it.</p><button class="btn" data-close type="button">Cancel</button><button class="btn primary" id="createProj" type="button" disabled>Create project</button></div>
 </div>
@@ -187,8 +192,6 @@
   <button class="dialog-close" data-close aria-label="Close settings" type="button"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
   <nav id="setNav" aria-label="Settings sections"><h2>Settings</h2></nav>
   <div class="sbody" id="setBody"></div>
-  <div class="se-dock" id="setFoot" data-setup-editor-foot></div>
-  <p class="se-live" id="setLive" role="status" aria-live="polite" aria-atomic="true"></p>
 </div>
 <div class="modal" id="runModal" role="dialog" aria-label="Run a seat" aria-modal="true" tabindex="-1" hidden inert aria-hidden="true">
   <h2 id="runTitle">Run a seat</h2>

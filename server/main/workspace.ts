@@ -15,6 +15,7 @@ import {
   activeLeaderTurns, blockedSeatKeys, changeGeneration, changesByTab, chatClearGenerations, chatStore, cliRunner, describeError, expiredClearUndos,
   handoverReadTurns, launchSafety, notesByTab, pendingClearUndos, pendingHandoverReads, requestActions, requestsStore, runContexts, savingTabs,
   selectedTabId, setSelectedTabId, setWorkspaces, settingsService, tabs, workspaces, type WorkspacesShape,
+  dataRoot,
 } from "./state.ts";
 import { clone, runtimeFor, tabLocation, watchTabFolders } from "./tabs.ts";
 
@@ -120,7 +121,7 @@ export function tabHasActiveWork(tabId: string, allowApprovalStop = false): bool
   // A process from an earlier session that was never confirmed closed may still be working in this tab's folder.
   return launchSafety.uncertain.some((row) => row.seatId.startsWith(`${tabId}.`)) || savingTabs.has(tabId) || (activeLeaderTurns.has(tabId) && !(allowApprovalStop && hasPendingApproval(tabId))) || [...runContexts.values()].some((context) => context.tabId === tabId && isRunning(context.run.runId)) || (runtime?.state.runs.some((run) => run.status === "working") ?? false);
 }
-// A launch counts from the moment it starts (runContexts), the engine's working run from its start event; a stall relaunch is queued (pendingRelaunch) while the old run still holds the lock, and the replacement launches only after the old run's close, so pendingRelaunch needs no check.
+// A launch counts from the moment it starts (runContexts), the engine's working run from its start event.
 // A stop that was not confirmed may still be running, so its seat stays locked until the exit is confirmed or the owner releases it (a legacy row with no "." names no seat).
 export function seatIsWorking(tabId: string, slot: string): boolean {
   return launchSafety.uncertain.some((row) => row.seatId === `${tabId}.${slot}`) || [...runContexts.values()].some((context) => context.tabId === tabId && context.slot === slot && isRunning(context.run.runId)) || (tabs.get(tabId)?.state.runs.some((run) => run.seatSlotId === slot && run.status === "working") ?? false);
@@ -128,6 +129,7 @@ export function seatIsWorking(tabId: string, slot: string): boolean {
 function allTabIds(): Set<string> { return new Set(workspaces.projects.flatMap((project) => project.tabs.map((tab) => tab.id.toLowerCase()))); }
 // An id that already has a saved chat or run history belongs to that history: handing it to a new tab would show the old chat and logs there.
 function tabIdHasHistory(id: string): boolean {
+  for (const folder of ["tasks", "executions"]) { try { statSync(join(dataRoot, folder, `${id}.json`)); return true; } catch { /* no task history */ } }
   try { statSync(join(chatStore.directory, `${id}.jsonl`)); return true; } catch { /* no chat file */ }
   try { return readdirSync(logsDir).some((name) => name.toLowerCase().startsWith(`${id.toLowerCase()}.`)); } catch { return false; }
 }

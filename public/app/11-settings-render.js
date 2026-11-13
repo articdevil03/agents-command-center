@@ -140,26 +140,33 @@
       toggle.disabled = settingsActionRunning("vault-save") || (!selected && !saved);
     }
   }
-  // The crew is the setup editor's (public/setup-editor*.js): one list of seats, drawn into this mount by renderSettings.
-  function settingsCrewSection() {
-    const tab = currentTab(); if (!tab) return "";
-    return `<section class="settings-section" id="s-crew" data-section="crew"><h3>Crew and models · ${esc(tabLabel(tab.id))}</h3><div data-setup-editor></div></section>`;
+  // The fixed crew's section (fillSettingsBody) is the only crew editor. Without the fixed crew UI or its usable definitions this plain message stands in, and the other sections stay.
+  const fixedCrewReady = (tab) => Boolean(tab?.fixedCrew && fixedCrewUi?.creationReady());
+  function settingsCrewUnavailable() {
+    const tab = currentTab(); if (!tab || fixedCrewReady(tab)) return "";
+    const notice = tab.fixedCrew?.notice ? ` ${esc(tab.fixedCrew.notice)}` : "";
+    return `<section class="settings-section" id="s-crew" data-section="crew"><h3>Crew and models · ${esc(tabLabel(tab.id))}</h3><p class="settings-help" data-crew-unavailable>Crew and models unavailable.${notice}</p></section>`;
   }
+  // The fixed crew's section is one element kept across draws: what is typed, the caret, focus and open Instructions survive every broadcast.
+  function fillSettingsBody(body, content) {
+    const tab = currentTab(), fixed = fixedCrewReady(tab) ? fixedCrewUi.section(tab) : null, set = body.firstElementChild;
+    if (fixed && set?.classList.contains("set") && fixed.parentNode === set) {
+      for (const child of [...set.children]) if (child !== fixed) child.remove();
+      fixed.insertAdjacentHTML("afterend", content);
+      return;
+    }
+    body.innerHTML = `<div class="set">${content}</div>`;
+    if (fixed) body.firstElementChild.prepend(fixed);
+  }
+  const fixedCrewUi = window.CC_FIXED_CREW?.init?.({
+    $, esc, logo, cliCap, cliLabel, isAcpCli, formatModel, modelLine, effortOptions, tabLabel, findTab, icons: ICONS,
+    send: (message) => send(message), newRequestId, togglePopover, confirmAction, setLayer, openModelPicker: (...args) => openModelPicker(...args),
+    openSettings: (...args) => openSettings(...args), renderSettings: () => renderSettings(), renderStatus: () => { const tab = currentTab(); if (tab) renderStatusLine(tab); }, connected: () => connState === "on", get state() { return serverState; }, askForChanges: () => askForChanges(),
+  }) ?? null;
   // CLIs added by their start command (Agent Client Protocol). Each can take any seat from the model menu, in Full access only.
   function settingsAcpSection() {
     const rows = (serverState?.acpClis ?? []).map((cli) => `<div class="crow" data-acp-row="${esc(cli.id)}"><span class="logo">${logo(cli.kind, 18, 0)}</span><div class="d"><b title="${esc(cli.name)}">${esc(cli.name)}</b><small title="${esc([cli.program, ...cli.args].join(" "))}">${esc([cli.program, ...cli.args].join(" "))}</small></div><div class="tool-row-action"><button type="button" class="btn sm danger" data-setting-action="acp-remove" data-id="${esc(cli.id)}" data-name="${esc(cli.name)}" data-focus-key="acp-remove-${esc(cli.id)}">Remove</button>${actionStatusMarkup(`acp-remove-${cli.id}`)}</div></div>`).join("") || '<div class="crow note"><span class="muted">No ACP CLIs added yet.</span></div>';
     return `<section class="settings-section" id="s-acp" data-section="acp"><h3>ACP CLIs</h3><p class="settings-help" style="margin:-4px 2px 10px">Any CLI that speaks the Agent Client Protocol can take any seat. Type the command that starts it, like gemini --acp, then pick it from a seat's model menu. It runs with Full access: it may edit files and run commands without asking, and Command Center cannot make it ask yet.</p><div class="card">${rows}</div><form class="settings-form" data-acp-form><input class="settings-input" name="name" maxlength="40" data-focus-key="acp-name" placeholder="Name, like Gemini" aria-label="CLI name" required><input class="settings-input" name="command" maxlength="300" data-focus-key="acp-command" placeholder="Start command, like gemini --acp" aria-label="Start command" required><div class="settings-actions"><button class="btn sm primary" type="submit" data-focus-key="acp-submit"${settingsActionRunning("acp-add") ? " disabled" : ""}>Add CLI</button>${actionStatusMarkup("acp-add")}</div></form></section>`;
-  }
-  // The crew editor (public/setup-editor*.js) draws the crew into its mount and its Save bar into #setFoot, the strip under the Settings body.
-  function renderCrewEditor(body) {
-    const tab = currentTab(), mount = body.querySelector("[data-setup-editor]");
-    if (!tab || !mount || !window.CC_SETUP_EDITOR) { $("setFoot").replaceChildren(); return; }
-    window.CC_SETUP_EDITOR.render(mount, {
-      tab, state: serverState, send, dock: $("setFoot"),
-      openModel: (seat, anchor, draft) => togglePopover($("pop"), anchor, () => openModelPicker(tab, seat, anchor, false, draft)),
-      openAdvisor: (seat, anchor, draft) => togglePopover($("pop"), anchor, () => openAdvisor(tab, seat, anchor, false, draft)),
-      modelLine: (cli, model, effort) => modelLine(cli, model, effort, tab), seatLocked: (seat) => seatLocked(tab, seat),
-    });
   }
   function renderSettings(fresh = false) {
     const nav = $("setNav"); const body = $("setBody");
@@ -190,7 +197,7 @@
     const refreshing = refreshState?.status === "running";
     const permission = "Notification" in window ? Notification.permission : "unsupported";
     const notificationsOn = Boolean(settingValue("notificationsEnabled"));
-    const content = `${settingsCrewSection()}
+    const content = `${settingsCrewUnavailable()}
       <section class="settings-section" id="s-tools" data-section="tools"><h3>AI tools<button type="button" class="btn sm" data-settings-refresh data-focus-key="settings-refresh"${refreshing ? " disabled" : ""}>${refreshing ? "Checking…" : "Check again"}</button></h3><div class="card tool-card">${toolRows}</div><p class="settings-help">${refreshing ? "Checking every CLI…" : refreshState?.status === "done" ? `Checked ${esc(agoText(refreshState.at))}. ` : refreshState?.status === "failed" ? "Could not check just now. Try again. " : ""}Installed and signed in are checked separately; Install runs npm in the background and asks first.</p></section>
       ${settingsAcpSection()}
       <section class="settings-section" id="s-github" data-section="github"><h3>GitHub</h3><div class="card"><div class="crow github-row"><span class="logo">${logo("github", 18, 0)}</span><div class="d"><b title="${esc(githubTitle)}">${esc(githubTitle)}</b><small class="wrap">${esc(githubSubtitle)}</small></div><div class="ra"><button type="button" class="btn sm" data-setting-action="github-login" data-focus-key="github-login" ${settingsActionRunning("github-login") ? "disabled" : ""}>${github.connected === true ? "Reconnect" : "Connect"}</button>${actionStatusMarkup("github-login")}</div></div></div></section>
@@ -199,9 +206,8 @@
       <section class="settings-section" id="s-skills" data-section="skills"><h3>Skills and MCP</h3><p class="settings-help sintro" style="margin:-4px 2px 10px">Tools available to your agents, and the instruction files each CLI found. MCP and plugin Add and Remove run the CLI's own command and ask first.</p><div class="skills-grid">${["claude", "codex", "opencode", "gemini"].map((cli) => skillBlock(cli, settings.skills?.[cli])).join("")}</div></section>
       <section class="settings-section" id="s-appearance" data-section="appearance"><h3>Appearance</h3><div class="theme" role="radiogroup" aria-label="Appearance">${themes.map(([value, label, background, side]) => `<button type="button" role="radio" data-theme="${value}" aria-checked="${String(activeTheme === value)}" data-focus-key="theme-${value}"><span class="sw" style="background:${background}"><i style="background:${side}"></i><i></i></span>${label}</button>`).join("")}</div><p class="settings-help">${activeTheme === "system" ? "Following your PC: it switches by itself when Windows does." : "Remembered on this PC."}</p></section>
       <section class="settings-section" id="s-behaviour" data-section="behaviour"><h3>Behaviour</h3><div class="card">${settingSwitch("notificationsEnabled", "Notifications", "A desktop notice when a seat finishes, fails or needs you", settingValue("notificationsEnabled"), false, notificationsOn && permission === "denied" ? '<small class="wrap" style="color:var(--danger-text)">Blocked by the browser for this page. Allow notifications in the site settings, or nothing will show.</small>' : notificationsOn && permission === "unsupported" ? '<small class="wrap">This window cannot show desktop notices.</small>' : "")}${settingSwitch("bellEnabled", "Completion sound", "A short chime when a seat finishes, fails or needs you, with Notifications on or off. The speaker in the top bar switches it too and sets its volume", settingValue("bellEnabled"))}</div></section>`;
-    body.innerHTML = `<div class="set">${content}</div>`;
-    // The crew editor draws before the scroll position is put back: until then Settings is shorter, and the old position would be cut to fit.
-    renderCrewEditor(body);
+    fillSettingsBody(body, content);
+    // Order matters: the content (with the fixed crew section) is in place first, so the scroll position is put back on the full height, not cut to a shorter Settings.
     restoreSettingsDrafts(body, drafts);
     updateVaultControls();
     restoreSettingsFocus(body, snapshot);

@@ -4,7 +4,6 @@ import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { once } from "node:events";
 import { join } from "node:path";
-import { getProcessDefinition } from "../server/process.ts";
 import { importWithTempDataRoot } from "./temp-root.ts";
 import { crashCatcherDisabled } from "./crash-catcher.ts";
 import * as overlap from "./overlap-helpers.ts";
@@ -113,7 +112,7 @@ test("body passed", () => { after(() => removeWithRetry("child-owned", 2, 0)); }
 
 test("P24 overlap actual callback keeps startup error and unconditional cleanup", async () => {
   const f = fixture();
-  Object.assign(f.context, overlap, { getProcessDefinition, once, SERVER_START_MS: 1000, attachCrashCatcher: () => {} });
+  Object.assign(f.context, overlap, { once, SERVER_START_MS: 1000, attachCrashCatcher: () => {} });
   f.put(overlap.CHROME, "file");
   let spawned = 0;
   f.context.spawn = () => {
@@ -123,8 +122,11 @@ test("P24 overlap actual callback keeps startup error and unconditional cleanup"
   };
   f.fail((p) => p.includes("cc-overlap-") ? "EPERM" : undefined);
   f.evaluate(source("test/overlap.test.ts"));
-  assert.equal(f.tests.length, 1, "real overlap callback registered");
-  await assert.rejects(f.tests[0].fn({ skip: () => assert.fail("must execute") }), /server exited early \(23\)/, "original startup failure survives");
+  const audit = f.tests.filter((entry) => entry.name.startsWith("overlap audit"));
+  assert.equal(audit.length, 1, "real overlap audit callback registered");
+  const names = f.tests.map((entry) => entry.name);
+  for (const focused of ["overlap fixed Settings proof", "overlap fixed rail proof", "overlap fixed requests proof"]) assert.ok(names.includes(focused), `${focused} registered`);
+  await assert.rejects(audit[0].fn({ skip: () => assert.fail("must execute") }), /server exited early \(23\)/, "original startup failure survives");
   assert.equal(spawned, 1, "only fake startup server, no Chrome");
   assert.equal(f.proc.exitCode, 1, "real finally cleanup makes run unsuccessful");
   assert.ok(f.logs.some((line) => line.startsWith("OVERLAP_TEMP_ROOT: ")));

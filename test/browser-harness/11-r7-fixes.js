@@ -1,5 +1,5 @@
 (() => {
-  const { check, dropSocket, waitFor, text, $, requireElement, latestTab, leaderNameOf, openSeatView, openSeatCard, openInbox, openRequests, confirmIfAsked } = window.__ccHarness;
+  const { check, dropSocket, waitFor, text, $, requireElement, latestTab, leaderNameOf, openSeatView, openInbox, openRequests, confirmIfAsked } = window.__ccHarness;
   const runR7Fixes = async () => {
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const tabId = "alpha-dev";
@@ -14,26 +14,22 @@
     seedTab().pendingApprovals = []; seedTab().derived.leaderTurnActive = false;
     deliverSeed(); await sleep(30);
 
-    // An uploaded seat picture is shown in the crew row and the stage header; the dialog ticks no preset while it is active.
+    // Seat pictures are read-only facts: a preset or an uploaded route is shown in the crew row and the stage header; an invalid route or a remote URL falls back.
     const uploaded = "/api/avatar/avatar-7e2e1c3a-0b1d-4c5e-8f00-123456789abc.png";
     const coder = () => seedTab().crew.find((seat) => seat.slot === "coder");
     const crewImage = () => requireElement('#crew [data-seat-id="coder"] .av img').getAttribute("src");
-    const ticked = async () => {
-      requireElement("[data-seat-picture]", openSeatCard("coder")).click(); requireElement('#avModal[aria-hidden="false"]');
-      const keys = [...document.querySelectorAll('#avgrid [aria-checked="true"]')].map((node) => node.dataset.avatar);
-      closeAll(); await sleep(20); return keys;
-    };
+    const headImage = () => requireElement("#stagehead .av.big img").getAttribute("src");
     coder().pic = "avatars/sonny.svg"; deliverSeed();
-    const presetShown = crewImage(); const presetTicks = await ticked();
-    coder().pic = uploaded; deliverSeed();
     openSeatView("coder");
-    const uploadedCrew = crewImage(); const uploadedHead = requireElement("#stagehead .av.big img").getAttribute("src"); const uploadedTicks = await ticked();
+    const presetCrew = crewImage(), presetHead = headImage();
+    coder().pic = uploaded; deliverSeed();
+    const uploadedCrew = crewImage(), uploadedHead = headImage();
     coder().pic = "/api/avatar/avatar-not-a-uuid.png"; deliverSeed();
-    const oddShown = crewImage();
+    const oddCrew = crewImage(), oddHead = headImage();
     coder().pic = "https://example.test/avatar.png"; deliverSeed();
-    const remoteShown = crewImage();
+    const remoteCrew = crewImage(), remoteHead = headImage();
     delete coder().pic; deliverSeed();
-    check("an uploaded seat picture is displayed in the crew row and the stage header, and no preset is ticked while it is active", presetShown === "/avatars/sonny.svg" && presetTicks.join() === "sonny" && uploadedCrew === uploaded && uploadedHead === uploaded && uploadedTicks.length === 0 && !oddShown.includes("avatar-not-a-uuid") && !remoteShown.includes("example.test"), { presetShown, presetTicks, uploadedCrew, uploadedHead, uploadedTicks, oddShown, remoteShown });
+    check("a preset or uploaded seat picture is displayed in the crew row and the stage header, and an invalid route or a remote URL falls back", presetCrew === "/avatars/sonny.svg" && presetHead === "/avatars/sonny.svg" && uploadedCrew === uploaded && uploadedHead === uploaded && [oddCrew, oddHead, remoteCrew, remoteHead].every((src) => src.startsWith("/avatars/") && !src.includes("avatar-not-a-uuid") && !src.includes("example.test")), { presetCrew, presetHead, uploadedCrew, uploadedHead, oddCrew, oddHead, remoteCrew, remoteHead });
 
     // The permission picker closes on a click outside it.
     $("permBtn").click(); const permOpened = !$("permPop").hidden;
@@ -150,11 +146,11 @@
     window.__ccSeed.settings.skills.claude.mcpServers = [{ name: "claude_mcp" }];
     deliverSeed(); await sleep(30);
 
-    // A launch approval reads "Atlas wants to launch <seat>" in the panel and on the Waiting card.
-    seedTab().pendingApprovals = [{ approvalId: "launch-1", tool: "launch:Sonny", summary: "Sonny (Coder): Fix the login bug", createdAt: 1 }];
+    // A fixed-action approval reads "Atlas wants to start fixed work" in the panel and on the Waiting card.
+    seedTab().pendingApprovals = [{ approvalId: "launch-1", tool: "fixed-action", summary: "Sonny (Coder): Fix the login bug", createdAt: 1 }];
     deliverSeed(); await waitFor(() => text("#approvalSummary") === "Sonny (Coder): Fix the login bug", "launch approval shown");
     const launchTitles = { panel: text("#approvalTitle"), card: text("#inboxList .ncard.apx > b") };
-    check("a seat launch approval reads <leader> wants to launch the seat", launchTitles.panel === `${leaderNameOf(window.__latestState.selectedTabId)} wants to launch Sonny` && launchTitles.card === launchTitles.panel, launchTitles);
+    check("a fixed-action approval reads <leader> wants to start fixed work", launchTitles.panel === `${leaderNameOf(window.__latestState.selectedTabId)} wants to start fixed work` && launchTitles.card === launchTitles.panel, launchTitles);
     seedTab().pendingApprovals = []; deliverSeed(); await waitFor(() => $("approvalPanel").hidden, "launch approval cleared");
 
     // The tool version is escaped once: a version with & and < reads as typed.

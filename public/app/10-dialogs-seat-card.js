@@ -11,7 +11,6 @@
     if (none) { sideOpen && ($("side").hidden = true); renderFirst(); }
     renderHeader(); renderTabs(); renderCrew(); renderStage(); renderSide(); renderUndo(); renderInbox();
     if (!$('setModal').hidden) renderSettings();
-    renderAvatarStatus();
     renderToolApproval();
     applySideWidth();
     refreshPopovers();
@@ -26,12 +25,12 @@
       else renderSeatCard(tab, seat);
     }
     refreshModelPicker();
-    for (const id of ["seatPop", "pop", "projPop", "ctxPop", "setupPop", "permPop", "inboxPop", "soundPop"]) { const pop = $(id); if (!pop.hidden) placePopover(pop); }
+    for (const id of ["seatPop", "pop", "projPop", "ctxPop", "permPop", "inboxPop", "soundPop"]) { const pop = $(id); if (!pop.hidden) placePopover(pop); }
   }
   function renderFirst() {
     const tools = serverState?.settings?.tools ?? {};
     const status = (cli) => { const tool = tools[cli]; return tool?.installed === false ? "Not installed" : tool?.installed === true ? (tool.signedIn === true ? "Signed in" : tool.signedIn === false ? "Installed, not signed in" : "Installed, sign-in status unknown") : "Install status unknown"; };
-    $("first").innerHTML = `<div class="fcard"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><path d="M42.2 46.6A19 19 0 1 1 42.2 17.4" fill="none" stroke="url(#orbitMark)" stroke-width="12" stroke-linecap="round"/><circle cx="50.5" cy="32" r="6.5" fill="#ffc94d"/></svg><h2>Add your first project</h2><p>A project is a folder on your PC. It starts with one Development tab and Our process; you can add Design or Marketing tabs and switch the crew later.</p><button type="button" class="btn primary" data-first-project>New project</button><div class="card checks">${["claude", "codex", "opencode", "gemini"].map((cli) => `<div class="crow"><span class="logo">${logo(cli, 16, 0)}</span><div class="d"><b>${esc(cliLabel(cli))}</b><small>${esc(status(cli))}</small></div>${tools[cli]?.signedIn === true ? '<span class="tool-connected"><i></i>Ready</span>' : `<button type="button" class="btn sm" data-first-setup>Set up</button>`}</div>`).join("")}</div><p class="faint" style="font-size:12.5px">Claude, Codex or OpenCode can run the leader, and so can any ACP CLI you add in Settings. You only need the ones your crew uses.</p></div>`;
+    $("first").innerHTML = `<div class="fcard"><svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><path d="M42.2 46.6A19 19 0 1 1 42.2 17.4" fill="none" stroke="url(#orbitMark)" stroke-width="12" stroke-linecap="round"/><circle cx="50.5" cy="32" r="6.5" fill="#ffc94d"/></svg><h2>Add your first project</h2><p>A project is a folder on your PC. It starts with one Development tab and a fixed crew of 18 positions; you choose which AI model each position uses in Settings.</p><button type="button" class="btn primary" data-first-project>New project</button><div class="card checks">${["claude", "codex", "opencode", "gemini"].map((cli) => `<div class="crow"><span class="logo">${logo(cli, 16, 0)}</span><div class="d"><b>${esc(cliLabel(cli))}</b><small>${esc(status(cli))}</small></div>${tools[cli]?.signedIn === true ? '<span class="tool-connected"><i></i>Ready</span>' : `<button type="button" class="btn sm" data-first-setup>Set up</button>`}</div>`).join("")}</div><p class="faint" style="font-size:12.5px">Claude, Codex or OpenCode can run the leader, and so can any ACP CLI you add in Settings. You only need the ones your crew uses.</p></div>`;
     $("first").querySelector("[data-first-project]")?.addEventListener("click", (event) => openProjectDialog(event.currentTarget));
     $("first").querySelectorAll("[data-first-setup]").forEach((button) => button.addEventListener("click", (event) => openSettings(event.currentTarget, "tools")));
   }
@@ -52,68 +51,45 @@
     if (!needsTicker()) { clearInterval(tickerTimer); tickerTimer = 0; }
   }
 
-  // ---------- creating tabs and projects, switching the crew ----------
-  function availableKindOptions(selected) {
-    return KINDS.map((kind) => `<button type="button" role="radio" aria-checked="${String(kind.id === selected)}" data-kind="${kind.id}"><b>${esc(kind.name)}</b><small>${esc(kind.desc)}</small></button>`).join("");
-  }
-  function kindSegments(selected) { return KINDS.map((kind) => `<button type="button" role="radio" data-kind="${kind.id}" aria-checked="${String(kind.id === selected)}">${esc(kind.name)}</button>`).join(""); }
-  // The setups the server offers: templates (in code) and the user's saved setups. A tab keeps its own copy of whichever it was switched to.
-  const templates = () => Array.isArray(serverState?.templates) ? serverState.templates : [];
-  const savedSetups = () => Array.isArray(serverState?.savedSetups) ? serverState.savedSetups : [];
-  const seatCount = (crew) => `${crew?.length ?? 0} seat${crew?.length === 1 ? "" : "s"}`;
-  // A new Development tab starts with Our process; any other kind starts with its own first template.
-  function defaultTemplate(kind) { const list = templates(); return (kind === "dev" ? list.find((item) => item.id === "our-process") : null) ?? list.find((item) => item.kind === kind) ?? list[0] ?? null; }
-  function templateOptions(selected) {
-    return templates().map((item) => `<button type="button" role="radio" aria-checked="${String(item.id === selected)}" data-template="${esc(item.id)}"><b>${esc(item.name)}</b><small>${esc(item.desc)} · ${seatCount(item.crew)}</small></button>`).join("");
-  }
-  function bindRadios(box, selector, callback) {
-    box.addEventListener("click", (event) => {
-      const button = event.target.closest(selector); if (!button || !box.contains(button)) return;
-      box.querySelectorAll(selector).forEach((item) => item.setAttribute("aria-checked", String(item === button)));
-      fixRadios(box.parentElement ?? box);
-      callback(button);
-    });
-    box.addEventListener("keydown", (event) => {
-      if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) return;
-      const items = $$(selector, box).filter((item) => !item.disabled); const index = items.indexOf(document.activeElement); if (index < 0) return;
-      event.preventDefault();
-      const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : (index + (["ArrowRight", "ArrowDown"].includes(event.key) ? 1 : -1) + items.length) % items.length;
-      items[next].focus(); items[next].click();
-    });
-  }
+  // ---------- creating tabs and projects ----------
   function openAddTab(opener) {
     const project = currentProject(); if (!project) return;
-    tabKind = "dev"; tabTemplate = defaultTemplate(tabKind)?.id ?? "";
     $("mProj").textContent = project.name; $("tName").value = "";
     $("tStat").textContent = ""; $("tStat").classList.remove("bad"); $("tOnly").checked = true;
     updateFolderDisplay("tab", project.folder);
-    $("kindBox").innerHTML = availableKindOptions(tabKind); $("tplBox").innerHTML = templateOptions(tabTemplate);
+    openCreationCrew("tab");
     openModal("modal", opener);
   }
   function openProjectDialog(opener) {
-    projectKind = "dev"; projectTemplate = defaultTemplate(projectKind)?.id ?? "";
     const defaultFolder = serverState?.settings?.folders?.defaultProjectFolder ?? "";
     $("pName").value = ""; $("pOnly").checked = true; updateFolderDisplay("project", defaultFolder);
     $("pFolderHelp").textContent = defaultFolder ? `Starts in your default folder, ${defaultFolder}. Browse to pick another.` : "No default folder is set. Browse to pick one, or set it in Settings, Folders.";
-    $("pKind").innerHTML = kindSegments(projectKind); $("pTpl").innerHTML = templateOptions(projectTemplate);
     $("npStat").classList.remove("bad");
+    openCreationCrew("project");
     updateProjectSubmit();
     openModal("projModal", opener);
   }
+  // Creation is fixed-crew only: the dialogs open on the 18 positions, or say plainly that they are unavailable. There is no kind or template fallback.
+  const creationReady = () => Boolean(fixedCrewUi?.creationReady());
+  function openCreationCrew(which) {
+    if (fixedCrewUi) { fixedCrewUi.openCreation(which); return; }
+    const box = $(which === "tab" ? "tCrew" : "pCrew"); box.hidden = false; box.textContent = "The crew positions are not available, so nothing can be created. Close this window and open it again.";
+  }
+  function creationUnavailable(statusId) { $(statusId).textContent = "Not created: the crew positions are not available."; $(statusId).classList.add("bad"); }
   let selectedTabFolder = "";
   let selectedProjectFolder = "";
   function updateFolderDisplay(which, folder) {
     const path = String(folder ?? "");
-    if (which === "tab") { selectedTabFolder = path; $("tDir").textContent = path || "No folder chosen"; $("tDir").title = path || "No folder chosen"; $("tFolderWarn").hidden = Boolean(path); $("createTab").disabled = !path || Boolean(pendingCreate); }
+    if (which === "tab") { selectedTabFolder = path; $("tDir").textContent = path || "No folder chosen"; $("tDir").title = path || "No folder chosen"; $("tFolderWarn").hidden = Boolean(path); $("createTab").disabled = !path || !creationReady() || Boolean(pendingCreate); }
     else { selectedProjectFolder = path; $("pDir").textContent = path || "No folder chosen"; $("pDir").title = path || "No folder chosen"; $("pFolderWarn").hidden = Boolean(path); updateProjectSubmit(); }
   }
   function updateProjectSubmit() {
     const ready = Boolean(selectedProjectFolder && $("pName").value.trim());
-    $("createProj").disabled = !ready || Boolean(pendingCreate);
+    $("createProj").disabled = !ready || !creationReady() || Boolean(pendingCreate);
     if (!pendingCreate && !$("npStat").classList.contains("bad")) $("npStat").textContent = ready ? "" : !selectedProjectFolder ? "Choose a folder to create it." : "Give it a name to create it.";
   }
   function updateCreateButtons() {
-    $("createTab").disabled = !selectedTabFolder || Boolean(pendingCreate); $("createTab").textContent = pendingCreate?.kind === "tab" ? "Creating…" : "Create tab";
+    $("createTab").disabled = !selectedTabFolder || !creationReady() || Boolean(pendingCreate); $("createTab").textContent = pendingCreate?.kind === "tab" ? "Creating…" : "Create tab";
     $("createProj").textContent = pendingCreate?.kind === "project" ? "Creating…" : "Create project"; updateProjectSubmit();
   }
   async function pickFolder(callback) {
@@ -121,44 +97,22 @@
     try { const folder = await window.cc.pickFolder(); if (folder) callback(folder); }
     catch (error) { showToast(error?.message ?? "Could not choose a folder"); }
   }
-  // The faces a setup brings, from its own seats, so the menu shows who comes with each choice before switching.
-  function setupFaces(crew) { return (crew ?? []).map((seat) => `<img src="/avatars/${avatarKeyFor(seat)}.svg" alt="">`).join(""); }
-  function processMenu(tab, anchor) {
-    const pop = $("setupPop");
-    const busy = activeTabBusy(tab);
-    const option = (attr, id, name, desc, crew) => {
-      const inUse = tab.setupName === name;
-      return `<button type="button" class="opt su" ${attr}="${esc(id)}" aria-pressed="${String(inUse)}"><span class="nm"><span>${esc(name)}</span><small>${esc(desc)} · ${seatCount(crew)}${inUse ? " · in use" : ""}</small></span><span class="faces">${setupFaces(crew)}</span>${ICONS.tick}</button>`;
-    };
-    const saved = savedSetups();
-    pop.innerHTML = `<div class="grp">Crew for ${esc(tab.name)}</div><div class="process-options">${templates().map((item) => option("data-use-template", item.id, item.name, item.desc, item.crew)).join("")}</div>${saved.length ? `<div class="grp">Saved setups</div><div class="process-options">${saved.map((item) => option("data-use-saved", item.id, item.name, `${kindLabel(item.kind)} · ${(item.steps ?? []).length} steps`, item.crew)).join("")}</div>` : ""}<div class="hint">${busy ? "The crew can change only while nothing runs in this tab: the server refuses a busy tab, and the change comes back. Stop its work first." : "Seats and steps come with the setup. A seat with the same id keeps its model, effort, name and picture. You can still change each seat afterwards."}</div>`;
-    fixRadios(pop);
-    pop.querySelectorAll("[data-use-template],[data-use-saved]").forEach((button) => button.addEventListener("click", () => {
-      const templateId = button.dataset.useTemplate, setupId = button.dataset.useSaved;
-      const item = templateId ? templates().find((other) => other.id === templateId) : savedSetups().find((other) => other.id === setupId);
-      if (!item) return;
-      // one waiting switch per tab: a new pick replaces the unsent one; picking the setup the tab already has cancels it
-      for (const held of [...pendingActions.values()]) if (!held.sent && held.message.type === "useSetup" && held.message.tabId === tab.id) finishPending(held.id);
-      if (item.name === tab.setupName && item.crew.length === tab.crew.length && item.crew.every((seat, at) => seat.slot === tab.crew[at].slot && seat.role === tab.crew[at].role && seat.canWrite === tab.crew[at].canWrite && (seat.orchestrates === true) === (tab.crew[at].orchestrates === true)) && (item.lookPause === true) === (tab.lookPause === true)) { setLayer(pop, false); renderAll(); return; }
-      setLayer(pop, false);
-      const message = { type: "useSetup", tabId: tab.id, ...(templateId ? { templateId } : { setupId }) };
-      holdAction(message, `${tab.name} will use ${item.name}`, { type: "useSetup", tabId: tab.id, message, setupName: item.name, crewGenerationId: tab.processState?.crewGenerationId });
-    }));
-    openPopover(pop, anchor, anchor === $("setupsBtn") && !railWide);
-    markCrewSwitcher();
-  }
   function createTab() {
     const project = currentProject(); if (!project || !selectedTabFolder || pendingCreate) return;
-    const name = $("tName").value.trim() || kindLabel(tabKind);
-    if (!send({ type: "addTab", projectId: project.id, name, kind: tabKind, ...(tabTemplate ? { template: tabTemplate } : {}), folder: selectedTabFolder, projectOnly: $("tOnly").checked })) return;
+    const fixed = fixedCrewUi?.creationFields("tab");
+    if (!fixed) { creationUnavailable("tStat"); return; }
+    const name = $("tName").value.trim() || "Development";
+    if (!send({ type: "addTab", projectId: project.id, name, ...fixed, folder: selectedTabFolder, projectOnly: $("tOnly").checked })) return;
     pendingCreate = { kind: "tab", projectId: project.id, knownTabIds: new Set(project.tabs.map((tab) => tab.id)) };
     $("tStat").textContent = "Creating…"; $("tStat").classList.remove("bad");
     updateCreateButtons();
   }
   function createProject() {
     const name = $("pName").value.trim(); if (!name || !selectedProjectFolder || pendingCreate) return;
+    const fixed = fixedCrewUi?.creationFields("project");
+    if (!fixed) { creationUnavailable("npStat"); return; }
     const id = `project-${slug(name)}-${Date.now().toString(36)}`;
-    if (!send({ type: "addProject", id, name, folder: selectedProjectFolder, tabFolder: selectedProjectFolder, kind: projectKind, ...(projectTemplate ? { template: projectTemplate } : {}), projectOnly: $("pOnly").checked })) return;
+    if (!send({ type: "addProject", id, name, folder: selectedProjectFolder, tabFolder: selectedProjectFolder, ...fixed, projectOnly: $("pOnly").checked })) return;
     pendingCreate = { kind: "project", id };
     $("npStat").textContent = "Creating…"; $("npStat").classList.remove("bad");
     updateCreateButtons();
@@ -175,22 +129,18 @@
   function renderSeatCard(tab, seat) {
     const pop = $("seatPop");
     const focusKey = document.activeElement?.closest?.("#seatPop") ? focusKeyOf(document.activeElement) : null;
-    const runs = liveRuns(tab, seat), line = seatLine(tab, seat), blocked = !seat.isLeader && seatBlocked(tab, seat), locked = seatLocked(tab, seat);
+    const runs = liveRuns(tab, seat), line = seatLine(tab, seat), blocked = !seat.isLeader && seatBlocked(tab, seat);
     const now = seat.isLeader && seat.status === "idle" && !tab.derived?.leaderTurnActive && line.cls !== "waiting" ? (tab.leaderStatus === "ready" ? "Ready for your next message" : "Ready. The session starts with your first message") : !seat.isLeader && (seat.status === "idle" || !seat.status) && !blocked ? `Ready. Starts when ${leaderName(tab)} hands over a brief, or when you press Run` : line.text;
     const alive = seat.isLeader && (tab.leaderStatus === "ready" || tab.derived?.leaderTurnActive || seat.status === "working" || seat.status === "waiting");
-    // The Advisor row is for any seat whose CLI can take one (CliCap.advisor); the advisor is that seat's own setting.
-    const advisorRow = cliCap(seat.cli)?.advisor ? `<button type="button" class="rowb" data-seat-advisor><span>Advisor</span><span class="v" style="color:var(--adv)"><span>✦ ${esc(seat.advisor ? formatModel(seat.cli, seat.advisor) : "Off")}</span></span>${ICONS.rchev}</button>` : "";
+    // The Advisor fact is for any seat whose CLI can take one (CliCap.advisor); it shows the seat's saved advisor, and this card has no control to change it.
+    const advisorRow = cliCap(seat.cli)?.advisor ? `<div class="rowb"><span>Advisor</span><span class="v" style="color:var(--adv)"><span>✦ ${esc(seat.advisor ? formatModel(seat.cli, seat.advisor) : "Off")}</span></span><span></span></div>` : "";
     pop.dataset.tabId = tab.id; pop.dataset.slot = seat.slot;
     pop.setAttribute("aria-label", `Seat ${seat.name}`);
-    pop.innerHTML = `<div class="sc"><div class="top">${seatImg(seat)}<div style="min-width:0;flex:1"><b><span title="${esc(seat.name)}">${esc(seat.name)}</span><button type="button" class="pen" data-seat-rename aria-label="Rename ${esc(seat.name)}" title="Rename">${ICONS.pencil}</button></b><small title="${esc(seatRole(tab, seat))}">${esc(seatRole(tab, seat))}${seat.isLeader && seatRole(tab, seat).toLowerCase() !== "leader" ? " · leader" : ""}</small></div><button type="button" class="dots" data-seat-picture aria-haspopup="dialog" aria-label="Change picture for ${esc(seat.name)}" title="Change picture">${ICONS.picture}</button></div><div class="now ${esc(line.cls)}"><i></i><span>${esc(now)}</span></div>${blocked ? `<div class="blk">${ICONS.warn}<span>Launch blocked after a stop. ${esc(seat.name)} cannot start until you allow it.</span><button type="button" class="btn sm" data-seat-unblock>Allow again</button></div>` : ""}${runs.length ? `<div class="rows">${runs.map((run) => { const state = runStopState(tab, run); return `<div class="sr"><span class="d"></span><button type="button" class="srl" data-watch-run="${esc(run.runId)}" title="Watch ${plainMd(run.label)}">${plainMd(run.label)}</button><span class="tm" data-run-time="${esc(run.runId)}">${esc(spanText(run.startedAt))}</span><button type="button" class="x" data-stop-run="${esc(run.runId)}" aria-label="Stop ${plainMd(run.label)}" title="Stop only this run"${state ? " disabled" : ""}>${state ? esc(stopLabel(state)) : ICONS.stop}</button></div>`; }).join("")}</div>` : ""}<div class="rows"><button type="button" class="rowb" data-seat-model${locked ? ` disabled aria-disabled="true" title="${LOCK_TIP}"` : ""}><span>Model</span><span class="v">${logo(seat.cli, 13, 0)}<span><span class="model-label">${esc(formatModel(seat.cli, seat.model, tab))}</span>${modelSupportsEffort(seat.cli, seat.model) ? ` <span class="faint eff">· ${esc(seat.effort)}</span>` : ""}</span></span>${ICONS.rchev}</button>${locked ? `<div class="hint" data-model-locked>Locked while working</div>` : ""}${advisorRow}${seat.isLeader ? `<div class="rowb"><span>Context</span><span class="v" data-context-meter title="${esc(contextLine(tab))}"><span>${esc(cap(contextLine(tab)))}</span></span><span></span></div>` : `<div class="rowb"><span>Access</span><span class="v" title="${esc(accessText(tab, seat))}"><span>${esc(accessText(tab, seat))}</span></span><span></span></div>`}<div class="rowb"><span>Usage</span><span class="v" title="${esc(seatUsageText(tab, seat))}"><span>${esc(seatUsageText(tab, seat))}</span></span><span></span></div></div>${seat.isLeader ? `<div class="acts"><button type="button" class="btn" data-seat-chat>Chat</button><button type="button" class="btn" data-seat-history>Past sessions</button></div>` : `<div class="acts"><button type="button" class="btn" data-seat-watch>Watch</button></div>`}<div class="acts">${seat.isLeader ? (alive ? `<button type="button" class="btn danger" data-stop-seat title="Stops ${esc(seat.name)}'s session and denies anything it is waiting on. Your next message starts a fresh one.">Stop ${esc(seat.name)}</button>` : "") : `<button type="button" class="btn primary" data-run-seat>${runs.length ? "Run another" : "Run"}</button><button type="button" class="btn danger" data-stop-seat title="${runs.length ? `Stops every run of ${esc(seat.name)} and blocks new launches` : `Blocks ${esc(seat.name)} from launching until you allow it again`}">${runs.length ? "Stop seat" : "Block launches"}</button>`}</div></div>`;
+    pop.innerHTML = `<div class="sc"><div class="top">${seatImg(seat)}<div style="min-width:0;flex:1"><b><span title="${esc(seat.name)}">${esc(seat.name)}</span></b><small title="${esc(seatRole(tab, seat))}">${esc(seatRole(tab, seat))}${seat.isLeader && seatRole(tab, seat).toLowerCase() !== "leader" ? " · leader" : ""}</small></div></div><div class="now ${esc(line.cls)}"><i></i><span>${esc(now)}</span></div>${blocked ? `<div class="blk">${ICONS.warn}<span>Launch blocked after a stop. ${esc(seat.name)} cannot start until you allow it.</span><button type="button" class="btn sm" data-seat-unblock>Allow again</button></div>` : ""}${runs.length ? `<div class="rows">${runs.map((run) => { const state = runStopState(tab, run); return `<div class="sr"><span class="d"></span><button type="button" class="srl" data-watch-run="${esc(run.runId)}" title="Watch ${plainMd(run.label)}">${plainMd(run.label)}</button><span class="tm" data-run-time="${esc(run.runId)}">${esc(spanText(run.startedAt))}</span><button type="button" class="x" data-stop-run="${esc(run.runId)}" aria-label="Stop ${plainMd(run.label)}" title="Stop only this run"${state ? " disabled" : ""}>${state ? esc(stopLabel(state)) : ICONS.stop}</button></div>`; }).join("")}</div>` : ""}<div class="rows"><div class="rowb"><span>Model</span><span class="v">${logo(seat.cli, 13, 0)}<span><span class="model-label">${esc(formatModel(seat.cli, seat.model, tab))}</span>${modelSupportsEffort(seat.cli, seat.model) ? ` <span class="faint eff">· ${esc(seat.effort)}</span>` : ""}</span></span><span></span></div>${advisorRow}${seat.isLeader ? `<div class="rowb"><span>Context</span><span class="v" data-context-meter title="${esc(contextLine(tab))}"><span>${esc(cap(contextLine(tab)))}</span></span><span></span></div>` : `<div class="rowb"><span>Access</span><span class="v" title="${esc(accessText(tab, seat))}"><span>${esc(accessText(tab, seat))}</span></span><span></span></div>`}<div class="rowb"><span>Usage</span><span class="v" title="${esc(seatUsageText(tab, seat))}"><span>${esc(seatUsageText(tab, seat))}</span></span><span></span></div></div>${seat.isLeader ? `<div class="acts"><button type="button" class="btn" data-seat-chat>Chat</button><button type="button" class="btn" data-seat-history>Past sessions</button></div>` : `<div class="acts"><button type="button" class="btn" data-seat-watch>Watch</button></div>`}<div class="acts">${seat.isLeader ? (alive ? `<button type="button" class="btn danger" data-stop-seat title="Stops ${esc(seat.name)}'s session and denies anything it is waiting on. Your next message starts a fresh one.">Stop ${esc(seat.name)}</button>` : "") : `<button type="button" class="btn primary" data-run-seat>${runs.length ? "Run another" : "Run"}</button><button type="button" class="btn danger" data-stop-seat title="${runs.length ? `Stops every run of ${esc(seat.name)} and blocks new launches` : `Blocks ${esc(seat.name)} from launching until you allow it again`}">${runs.length ? "Stop seat" : "Block launches"}</button>`}</div></div>`;
     const anchor = () => pop._anchor;
-    pop.querySelector("[data-seat-rename]").addEventListener("click", () => renameDialog(`Rename ${seat.name}`, seat.name, (name) => send({ type: "updateSeat", tabId: tab.id, slot: seat.slot, name }), anchor()));
-    pop.querySelector("[data-seat-picture]").addEventListener("click", () => openSeatAvatar(tab, seat, anchor()));
     pop.querySelector("[data-seat-unblock]")?.addEventListener("click", () => unblockWithConfirm(tab, seat, anchor()));
     pop.querySelectorAll("[data-watch-run]").forEach((button) => button.addEventListener("click", () => { selectedSeatByTab.set(tab.id, seat.slot); selectedRunBySeat.set(seat.slot, button.dataset.watchRun); selectedView = "live"; closePopovers(); renderStage(); renderCrew(); }));
     pop.querySelectorAll("[data-stop-run]").forEach((button) => button.addEventListener("click", () => killRun(button.dataset.stopRun)));
-    pop.querySelector("[data-seat-model]").addEventListener("click", () => openModelPicker(tab, seat, anchor(), true));
-    pop.querySelector("[data-seat-advisor]")?.addEventListener("click", () => openAdvisor(tab, seat, anchor(), true));
     pop.querySelector("[data-seat-chat]")?.addEventListener("click", () => { selectedSeatByTab.set(tab.id, seat.slot); selectedView = "live"; closePopovers(); renderStage(); renderCrew(); $("ci").focus(); });
     pop.querySelector("[data-seat-watch]")?.addEventListener("click", () => { selectedSeatByTab.set(tab.id, seat.slot); selectedView = "live"; historyRunRequested.delete(seatKeyOf(tab, seat)); closePopovers(); renderStage(); renderCrew(); });
     pop.querySelector("[data-seat-history]")?.addEventListener("click", () => { closePopovers(); showLeaderHistory(tab); });
@@ -205,43 +155,23 @@
     openPopover($("seatPop"), anchor, Boolean(anchor?.closest?.("#crew")));
     renderCrew();
   }
-  function reopenSeatCard(tab, seat, anchor) {
-    const live = findTab(tab.id), current = seatFor(live, seat.slot);
-    if (live && current) openSeatCard(live, current, anchor);
-  }
-  // The model and advisor menus live in public/model-picker.js (loaded before this file). The page reaches them through these names, and
-  // they reach the page through this object; what a test or a later line may replace (send, confirmAction, openPopover) is looked up per call.
-  const { pickerClis, modelRows, pickerHints, drawModelPicker, openModelPicker, openAdvisor, refreshModelPicker } = window.CC_PICKER?.({
-    $, esc, logo, cliCaps, cliCap, cliLabel, isAcpCli, acpShownModel, formatModel, modelOptions, customModelPattern, modelSupportsEffort, effortOptions,
-    seatLocked, fixRadios, focusKeyOf, placePopover, setLayer, reopenSeatCard, findTab, seatFor, icons: ICONS, lockTip: LOCK_TIP,
-    get state() { return serverState; },
-    send: (message) => send(message), confirmAction: (...args) => confirmAction(...args), openPopover: (...args) => openPopover(...args),
+  // The model menu lives in public/model-picker.js (loaded before this file) and only the fixed crew opens it. The page reaches it through these
+  // names, and it reaches the page through this object; what a test or a later line may replace (confirmAction, openPopover) is looked up per call.
+  const { pickerClis, modelRows, openModelPicker, refreshModelPicker } = window.CC_PICKER?.({
+    $, esc, logo, cliCaps, cliLabel, isAcpCli, acpShownModel, formatModel, modelOptions, customModelPattern, modelSupportsEffort, effortOptions,
+    fixRadios, focusKeyOf, placePopover, setLayer, icons: ICONS, lockTip: LOCK_TIP,
+    confirmAction: (...args) => confirmAction(...args), openPopover: (...args) => openPopover(...args),
   }) ?? {};
 
   // ---------- pictures ----------
-  function openSeatAvatar(tab, seat, anchor) { avatarTarget = { tabId: tab.id, slot: seat.slot }; drawAvatars(false, anchor); }
-  function openMeAvatar(anchor) { avatarTarget = null; drawAvatars(true, anchor); }
-  function drawAvatars(isMe, opener) {
-    avatarUploadRequestId = null;
-    const seat = isMe ? null : seatFor(findTab(avatarTarget.tabId), avatarTarget.slot);
-    $("avTitle").textContent = isMe ? "Your picture" : `Picture for ${seat?.name ?? "this seat"}`;
-    $("avatarStatus").textContent = isMe ? "Any PNG, JPEG or WebP picture. It stays on this PC." : "PNG, JPEG or WebP, up to 12 MiB.";
+  function openMeAvatar(opener) {
+    $("avTitle").textContent = "Your picture";
+    $("avatarStatus").textContent = "Any PNG, JPEG or WebP picture. It stays on this PC.";
     $("avatarStatus").dataset.status = "";
-    const choices = isMe ? AVATAR_PRESETS.map((file) => ({ key: file, src: `/avatars/${file}.svg`, selected: me.av === `${file}.svg` }))
-      : AVATAR_PRESETS.map((file) => {
-        const tab = findTab(avatarTarget.tabId);
-        const seat = seatFor(tab, avatarTarget.slot);
-        return { key: file, src: `/avatars/${file}.svg`, selected: !UPLOADED_PIC.test(String(seat?.pic ?? "")) && avatarKeyFor(seat) === file };
-      });
+    const choices = AVATAR_PRESETS.map((file) => ({ key: file, src: `/avatars/${file}.svg`, selected: me.av === `${file}.svg` }));
     $("avgrid").innerHTML = `${choices.map((choice) => `<button type="button" role="radio" aria-checked="${String(choice.selected)}" data-avatar="${esc(choice.key)}" aria-label="${esc(cap(choice.key))}" title="${esc(cap(choice.key))}"><img src="${esc(choice.src)}" alt=""></button>`).join("")}<button type="button" class="up" id="avUpload" aria-label="Upload a picture">Upload</button>`;
     $("avgrid").querySelectorAll("[data-avatar]").forEach((button) => button.addEventListener("click", () => {
-      if (isMe) { me = { av: `${button.dataset.avatar}.svg` }; saveMe(); $("meImg").dataset.fellBack = ""; $("meImg").src = mePic(); renderStage(); }
-      else {
-        const pic = `avatars/${button.dataset.avatar}.svg`;
-        if (!send({ type: "updateSeat", tabId: avatarTarget.tabId, slot: avatarTarget.slot, pic })) return;
-        avatarPending = { tabId: avatarTarget.tabId, slot: avatarTarget.slot, pic };
-        $("avatarStatus").textContent = "Saving…"; $("avatarStatus").dataset.status = "running";
-      }
+      me = { av: `${button.dataset.avatar}.svg` }; saveMe(); $("meImg").dataset.fellBack = ""; $("meImg").src = mePic(); renderStage();
       $("avgrid").querySelectorAll("[data-avatar]").forEach((item) => item.setAttribute("aria-checked", String(item === button)));
       fixRadios($("avModal"));
     }));
@@ -253,30 +183,6 @@
   function decodes(src) { return new Promise((resolve) => { const probe = new Image(); probe.onload = () => resolve(probe.naturalWidth > 0); probe.onerror = () => resolve(false); probe.src = src; }); }
   async function uploadMe(file) {
     if (!file || !file.type.startsWith("image/")) { showToast("Choose an image file"); return; }
-    if (avatarTarget) {
-      if (!/^image\/(?:png|jpeg|webp)$/.test(file.type)) { showToast("Seat pictures must be PNG, JPEG or WebP"); return; }
-      if (file.size > 12 * 1024 * 1024) { showToast("Pictures must be 12 MiB or smaller"); return; }
-      const target = { ...avatarTarget };
-      const requestId = newRequestId(); avatarUploadRequestId = requestId;
-      $("avatarStatus").textContent = "Uploading"; $("avatarStatus").dataset.status = "running"; $("avUpload").disabled = true;
-      try {
-        const bytes = await file.arrayBuffer();
-        if (avatarUploadRequestId !== requestId) return;
-        const response = await keyedFetch("/api/avatar", { method: "POST", headers: { "Content-Type": file.type, "X-Request-Id": requestId }, body: bytes });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error ?? `Picture upload failed (${response.status})`);
-        if (avatarUploadRequestId !== requestId || !findTab(target.tabId) || !seatFor(findTab(target.tabId), target.slot)) return;
-        if (!send({ type: "updateSeat", tabId: target.tabId, slot: target.slot, pic: result.path })) throw new Error("Seat picture could not be applied");
-        $("avatarStatus").textContent = "Done"; $("avatarStatus").dataset.status = "done";
-        // He chose the picture, so it is applied either way; only close the dialog if it is still the open layer.
-        closeLayerOf($("avModal"));
-      } catch (error) {
-        avatarUploadRequestId = null;
-        $("avatarStatus").textContent = error?.message ?? "Picture upload failed"; $("avatarStatus").dataset.status = "failed";
-        if ($("avUpload")) $("avUpload").disabled = false;
-      }
-      return;
-    }
     const reader = new FileReader();
     reader.onload = async () => {
       if (typeof reader.result !== "string") return;
@@ -286,14 +192,6 @@
     };
     reader.onerror = () => showToast("Could not load that picture");
     reader.readAsDataURL(file);
-  }
-  function renderAvatarStatus() {
-    if (!avatarUploadRequestId || $("avModal").hidden) return;
-    const status = serverState?.settings?.uploads?.[avatarUploadRequestId];
-    if (!status || status.requestId !== avatarUploadRequestId) return;
-    $("avatarStatus").textContent = status.message ?? status.status;
-    $("avatarStatus").dataset.status = status.status;
-    if ($("avUpload")) $("avUpload").disabled = status.status === "running";
   }
 
   // ---------- running a seat ----------

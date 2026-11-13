@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isRunning } from "../runner.ts";
 import { broadcast, stateMessage } from "./broadcast.ts";
-import { noteRunActivity } from "./crew-tools.ts";
 import { settleLeaderTurnWaiters } from "./leader-turn.ts";
 import { approvalSettledListeners, leaderInstances, pendingApprovals, runContexts, type Origin } from "./state.ts";
-import { leaderSeatOf, tabLocation } from "./tabs.ts";
+import { crewDefinition, leaderSeatOf, tabLocation } from "./tabs.ts";
 
 // The tab's leader seat name, as the page shows it ("The leader" only if the tab has no leader seat).
 export function leaderNameOf(tabId: string): string {
@@ -14,7 +13,7 @@ export function leaderNameOf(tabId: string): string {
 // Who is asking, as the page shows it.
 export function askerOf(tabId: string, origin: Origin): { kind: "leader" | "seat"; slot: string; name: string } {
   const location = tabLocation(tabId);
-  if (origin.kind === "seat") return { kind: "seat", slot: origin.slot, name: location?.tab.crew.find((member) => member.slot === origin.slot)?.name ?? origin.slot };
+  if (origin.kind === "seat") return { kind: "seat", slot: origin.slot, name: location && crewDefinition(location.tab, origin.slot)?.name || origin.slot };
   return { kind: "leader", slot: (location && leaderSeatOf(location.tab))?.slot ?? "leader", name: leaderNameOf(tabId) };
 }
 export function approvalWaitMessage(tabId: string, leaderOnly = false): string {
@@ -93,7 +92,6 @@ export function askApproval(tabId: string, origin: Origin, tool: string, input: 
     const abort = () => settle(false);
     const settle = (allow: boolean) => {
       if (!pendingApprovals.delete(approvalId)) return;
-      if (origin.kind === "seat") noteRunActivity(tabId, origin.runId);
       for (const reset of approvalSettledListeners.get(tabId) ?? []) reset();
       signal?.removeEventListener("abort", abort);
       resolveApproval(allow);

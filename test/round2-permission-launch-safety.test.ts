@@ -5,8 +5,8 @@ import { writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { tempRoot } from "./temp-root.ts";
 import { config } from "./round2-setup.ts";
-import { source, loadServer, connect, lastState, tick, waitFor, flushMicrotasks } from "./round2-helpers.ts";
-import { launchGateServer, pendingFor } from "./round2-gate-helpers.ts";
+import { source, loadServer, loadFixed, fixedGateServer, startHelper, endRun, connect, lastState, tick, waitFor, flushMicrotasks } from "./round2-helpers.ts";
+import { pendingFor } from "./round2-gate-helpers.ts";
 
 test("permission mode persists per tab, applies live, requires bypass confirmation, and reaches a new session", async () => {
   const server = await loadServer({ skipHealth: true }), ws = connect(server);
@@ -91,7 +91,7 @@ test("a failed stale permission request does not stop a replacement leader", asy
 });
 
 test("a permission failure saves the partial answer and makes the next leader read the handover", async () => {
-  const server = await loadServer({ skipHealth: true, hangLeader: true, setPermissionResult: false }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, hangLeader: true, setPermissionResult: false }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "start a long answer" });
   await waitFor(() => server.leaderHandles.length === 1, "leader created");
   server.leaderHandles[0].callbacks.onDelta("partial answer");
@@ -103,7 +103,7 @@ test("a permission failure saves the partial answer and makes the next leader re
   assert.equal(server.pendingHandoverReads.has("alpha-dev"), true, "the next session is marked to read RESUME.md");
 
   ws.message({ type: "chat", tabId: "alpha-dev", text: "continue" });
-  await waitFor(() => server.chats.some((entry: any) => entry.text.startsWith("Before replying, first read the existing handover")), "next turn handover read");
+  await waitFor(() => server.chats.some((entry: any) => entry.text.includes("Before replying, first read the existing handover")), "next turn handover read");
   assert.match(server.chats.findLast((entry: any) => entry.tabId === "alpha-dev").text, /\.command-center[\\/]alpha-dev[\\/]RESUME\.md/);
 });
 
@@ -128,59 +128,54 @@ test("removing a tab during a live permission request deletes its saved mode and
   assert.equal(Object.hasOwn(server.stateMessage().settings.permissionActions, "alpha-design"), false, "the removed tab has no orphaned action state");
 });
 
+const refusal = (promise: Promise<unknown>) => promise.then(() => "launched", (error: Error) => error.message);
+const confirmRelease = "release may leave a process running and editing files";
+
 test("leader launch budget is durable and a failed durable reservation prevents spawn", async () => {
   let fail = true;
-  const server = await loadServer({ skipHealth: true, failSafety: () => fail });
-  const ws = connect(server);
-  ws.message({ type: "chat", tabId: "alpha-dev", text: "create leader" });
-  await tick();
-  const deps = server.leaderDeps.get("Development");
-  assert.equal((await deps.launch("coder", "run")).ok, false);
+  const server = await loadFixed({ skipHealth: true, failSafety: () => fail });
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "run")), /could not persist launch safety/);
   assert.equal(server.launched.length, 0);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the failed save left no reservation");
   fail = false;
-  for (let i = 0; i < 8; i++) assert.equal((await deps.launch("coder", `run ${i}`)).ok, true);
-  assert.equal((await deps.launch("coder", "over budget")).ok, false);
+  for (let i = 0; i < 8; i++) await endRun(server, (await startHelper(server, "alpha-dev", "helper", `run ${i}`)).runId);
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "over budget")), /budget/);
   assert.equal(server.safety().timestamps.length, 8);
 });
 
-test("client, leader, and stall relaunches persist pending launch notices with their source", async () => {
+test("a leader launch persists its pending notice with the leader as its source", async () => {
   const writes: config.LaunchSafety[] = [];
-  const server = await loadServer({ skipHealth: true, onSafetyWrite: (value) => writes.push(value) });
+  const server = await loadFixed({ skipHealth: true, onSafetyWrite: (value) => writes.push(value) });
   const ws = connect(server);
-  const client = server.launchWorker("alpha-dev", "reviewer2", "client work");
-  assert.equal(client.ok, true);
-  assert.deepEqual([writes[0].notices.at(-1)?.source, writes[0].notices.at(-1)?.pending], ["Local client", true]);
-  assert.deepEqual([server.safety().notices.at(-1)?.source, server.safety().notices.at(-1)?.pending], ["Local client", false]);
-  assert.ok(ws.messages.some((message: any) => message.type === "leaderLaunch" && message.source === "Local client"));
-  server.leaderLaunch("alpha-dev", "coder", "leader work");
-  assert.equal(writes.at(-2)?.notices.at(-1)?.source, "Atlas");
-  assert.equal(writes.at(-2)?.notices.at(-1)?.pending, true);
-  assert.equal(server.safety().notices.at(-1)?.source, "Atlas");
-  assert.ok(ws.messages.some((message: any) => message.type === "leaderLaunch" && message.source === "Atlas"));
+  const started = await startHelper(server, "alpha-dev", "helper", "leader work");
+  const source = writes[0].notices.at(-1)?.source;
+  assert.ok(source, "a source is recorded");
+  assert.equal(writes[0].notices.at(-1)?.pending, true);
+  assert.deepEqual([server.safety().notices.at(-1)?.source, server.safety().notices.at(-1)?.pending], [source, false]);
+  assert.ok(ws.messages.some((message: any) => message.type === "leaderLaunch" && message.source === source));
+  await endRun(server, started.runId);
 });
 
-test("a renamed leader is named in the approval-wait refusal and in the launch notice, never a hard-coded name", async () => {
-  const { server, ws, deps } = await launchGateServer("ask");
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", name: "Ada" }); await tick();
-  assert.equal(lastState(ws).projects[0].tabs[0].crew.find((seat: any) => seat.slot === "leader").name, "Ada", "control: the leader is renamed");
-  const waiting = deps.launch("coder", "Needs an answer");
+test("the approval-wait refusal and the launch notice name the same leader", async () => {
+  const { server, ws, deps } = await fixedGateServer("ask");
+  const waiting = deps.launch("helper", "Needs an answer");
   await waitFor(() => pendingFor(server).length === 1, "launch approval");
   ws.message({ type: "save", tabId: "alpha-dev" });
   await tick();
-  assert.equal(ws.messages.filter((message: any) => message.type === "error").at(-1)?.message, "Ada is waiting for your answer on a change", "the save refusal names the renamed leader");
+  const waitingName = ws.messages.filter((message: any) => message.type === "error").at(-1)?.message.replace(/ is waiting for your answer on a change$/, "");
+  assert.match(ws.messages.filter((message: any) => message.type === "error").at(-1)?.message, / is waiting for your answer on a change$/);
   ws.message({ type: "answerApproval", requestId: "rename_allow", tabId: "alpha-dev", approvalId: pendingFor(server)[0].approvalId, allow: true });
-  assert.equal((await waiting).ok, true);
-  assert.equal(server.safety().notices.at(-1)?.source, "Ada", "the launch notice names the renamed leader");
+  const result = await waiting;
+  assert.equal(result.ok, true);
+  assert.equal(server.safety().notices.at(-1)?.source, waitingName, "the launch notice names the same leader the refusal names");
+  await endRun(server, result.runId);
 });
 
 test("a launch-safety disk failure never suppresses a requested Kill", async () => {
   let fail = false;
-  const server = await loadServer({ skipHealth: true, failSafety: () => fail });
+  const server = await loadFixed({ skipHealth: true, failSafety: () => fail });
   const ws = connect(server);
-  ws.message({ type: "chat", tabId: "alpha-dev", text: "create leader" });
-  await tick();
-  await server.leaderDeps.get("Development").launch("coder", "work");
-  const runId = server.launched[0].run.runId;
+  const runId = (await startHelper(server, "alpha-dev", "helper", "work")).runId;
   fail = true;
   ws.message({ type: "killRun", runId });
   assert.deepEqual(server.kills, [runId]);
@@ -189,18 +184,16 @@ test("a launch-safety disk failure never suppresses a requested Kill", async () 
 
 test("leader launch budget and seat stop block survive a fresh server instance", async () => {
   const safetyPath = path.join(tempRoot(), "launch-safety.json");
-  const first = await loadServer({ skipHealth: true, safetyPath });
+  const first = await loadFixed({ skipHealth: true, safetyPath });
   const ws = connect(first);
-  assert.equal(first.leaderLaunch("alpha-dev", "coder", "first task").ok, true);
-  const runId = first.launched[0].run.runId;
+  const runId = (await startHelper(first, "alpha-dev", "helper", "first task")).runId;
   ws.message({ type: "killRun", runId });
-  assert.deepEqual(config.readLaunchSafety(safetyPath).blocked, ["alpha-dev.coder"]);
+  assert.deepEqual(config.readLaunchSafety(safetyPath).blocked, ["alpha-dev.helper"]);
   assert.equal(config.readLaunchSafety(safetyPath).timestamps.length, 1);
-  assert.equal(config.readLaunchSafety(safetyPath).notices[0].seatId, "alpha-dev.coder");
+  assert.equal(config.readLaunchSafety(safetyPath).notices[0].seatId, "alpha-dev.helper");
 
-  const restarted = await loadServer({ skipHealth: true, safetyPath });
-  const rejected = restarted.leaderLaunch("alpha-dev", "coder", "must stay blocked");
-  assert.match(rejected.ok ? "unexpected launch" : rejected.error, /launch blocked/);
+  const restarted = await loadFixed({ skipHealth: true, safetyPath });
+  assert.match(await refusal(startHelper(restarted, "alpha-dev", "helper", "must stay blocked")), /launch blocked/);
   assert.equal(restarted.launched.length, 0);
   assert.equal(restarted.safety().timestamps.length, 1);
 });
@@ -213,33 +206,30 @@ test("legacy bare-id launch safety stays visible while new records use tab-scope
     nextNoticeId: 2, released: [], uncertain: [{ seatId: "sonny", pid: 9876 }],
   };
   config.writeLaunchSafety(old, safetyPath);
-  const server = await loadServer({ skipHealth: true, safetyPath });
+  const server = await loadFixed({ skipHealth: true, safetyPath });
   const state = server.stateMessage().launchSafety as config.LaunchSafety;
   assert.deepEqual(state.blocked, ["sonny"]);
   assert.deepEqual(state.uncertain, [{ seatId: "sonny", pid: 9876 }]);
   assert.equal(state.notices[0].seatId, "sonny");
 
-  const rejectedClient = server.launchWorker("alpha-dev", "coder", "new work");
-  const rejectedLeader = server.leaderLaunch("alpha-dev", "reviewer2", "new work");
-  assert.equal(rejectedClient.ok, false);
-  assert.equal(rejectedLeader.ok, false);
-  assert.match(rejectedClient.error, /unconfirmed process/);
-  assert.match(rejectedLeader.error, /unconfirmed process/);
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "new work")), /unconfirmed process/);
   assert.equal(server.launched.length, 0);
-  const unblocked = await loadServer({ skipHealth: true, safetyPath });
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the refused launch left no reservation");
+  const unblocked = await loadFixed({ skipHealth: true, safetyPath });
   const unblockWs = connect(unblocked);
   unblockWs.message({ type: "clearLaunchBlock", seatKey: "sonny", confirm: "allow this seat to launch again" });
-  assert.equal(unblocked.leaderLaunch("alpha-dev", "reviewer2", "still uncertain").ok, false);
+  assert.match(await refusal(startHelper(unblocked, "alpha-dev", "helper", "still uncertain")), /unconfirmed process/);
   assert.equal(unblocked.launched.length, 0);
-  unblockWs.message({ type: "releaseUnconfirmedSeat", seatId: "sonny", confirm: "release may leave a process running and editing files" });
+  unblockWs.message({ type: "releaseUnconfirmedSeat", seatId: "sonny", confirm: confirmRelease });
   unblockWs.message({ type: "clearLaunchBlock", seatKey: "sonny", confirm: "allow this seat to launch again" });
-  const released = await loadServer({ skipHealth: true, safetyPath });
-  assert.equal(released.leaderLaunch("alpha-dev", "reviewer2", "released bare id").ok, true);
+  const released = await loadFixed({ skipHealth: true, safetyPath });
+  const started = await startHelper(released, "alpha-dev", "helper", "released bare id");
   const saved = config.readLaunchSafety(safetyPath);
   assert.deepEqual(saved.blocked, []);
   assert.deepEqual(saved.uncertain, []);
   assert.deepEqual(saved.released, [{ seatId: "sonny", pid: 9876 }]);
-  assert.equal(saved.notices.at(-1)?.seatId, "alpha-dev.reviewer2");
+  assert.equal(saved.notices.at(-1)?.seatId, "alpha-dev.helper");
+  await endRun(released, started.runId);
 });
 
 test("corrupt launch safety refuses server startup instead of resetting brakes", async () => {

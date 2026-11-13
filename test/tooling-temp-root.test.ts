@@ -63,10 +63,6 @@ test("tempRoot isolates copied directories and removes them afterwards", async (
 
 test("temporary test directories are gitignored", () => {
   assert.ok(readFileSync(join(root, ".gitignore"), "utf8").split(/\r?\n/).includes(".cc-test-*/"));
-  const proof = readFileSync(join(root, "scripts/electron-process-proof.mjs"), "utf8");
-  const statement = proof.match(/const screenshotPath = .*;/)?.[0];
-  assert.ok(statement);
-  assert.equal(runInNewContext(`${statement}; screenshotPath`, { dir: "temporary", root: "repository", join }), join("temporary", "electron-process-proof.png"));
 });
 
 test("tempRoot rejects repository and parent paths before registering destructive cleanup", () => {

@@ -45,27 +45,45 @@ export async function seatPointerProbes(page: DialogPage) {
   await realClick(name(upper));
   await realClick(pic(lower)); await realClick(pic(lower));
   assert.deepEqual(await evaluate(`({hidden:document.getElementById("seatPop").hidden,upperOn:document.querySelector('#crew [data-seat-id="${upper}"]').classList.contains("on"),lowerOn:document.querySelector('#crew [data-seat-id="${lower}"]').classList.contains("on")})`), { hidden: true, upperOn: true, lowerOn: false }, "after the card closes, the seat whose work is showing keeps its highlight");
-  // Picture -> Model -> Escape with the real keyboard: opening the card redraws the crew, and focus still lands on the visible picture. Back -> Escape too.
+  // The card is read-only: the model is chosen in fixed Settings, so the old editing controls are gone and its facts stay.
   const visibleFocus = (slot: string) => evaluate(`(()=>{const a=document.activeElement,r=a?.getClientRects?.().length>0&&!a.closest("[hidden],[inert]");return {pic:a?.dataset?.seatPic??null,visible:Boolean(r),want:${JSON.stringify(slot)}}})()`);
   await realClick(pic(lower));
-  await evaluate(`document.querySelector('#seatPop [data-seat-model]').click();true`);
-  assert.equal(await evaluate('!document.getElementById("pop").hidden && document.getElementById("seatPop").hidden'), true, "Model opens the picker in place of the card");
+  assert.deepEqual(await evaluate(`({model:Boolean(document.querySelector("#seatPop .model-label")?.textContent.trim()),editing:document.querySelectorAll("#seatPop [data-seat-model],#seatPop [data-seat-rename],#seatPop [data-pop-back],#seatPop [data-advisor]").length})`), { model: true, editing: 0 }, "the open card shows the model as a fact and has no editing control");
   await escape("keyDown"); await escape("keyUp");
-  assert.deepEqual(await visibleFocus(lower), { pic: lower, visible: true, want: lower }, "Picture, Model, Escape: focus returns to the seat's visible picture");
-  await realClick(pic(lower));
-  await evaluate(`document.querySelector('#seatPop [data-seat-model]').click();true`);
-  await evaluate(`document.querySelector('#pop [data-pop-back]').click();true`);
-  assert.equal(await evaluate('!document.getElementById("seatPop").hidden'), true, "Back returns to the card");
+  assert.deepEqual(await visibleFocus(lower), { pic: lower, visible: true, want: lower }, "Picture, Escape: focus returns to the seat's visible picture");
+  // Fixed Settings -> model picker -> Escape with the real keyboard: focus returns to the enabled chip; when the position got busy meanwhile, to an enabled control in Settings, never the page body.
+  const chip = '#setBody section.fc[data-fc-tab] [data-fc-row="coder"] [data-fc-model]';
+  const settingsFocus = () => evaluate(`(()=>{const a=document.activeElement;return {chip:Boolean(a?.matches?.(${JSON.stringify(chip)})),inSettings:Boolean(a?.closest?.("#setModal")),enabled:Boolean(a)&&a!==document.body&&!a.disabled,popHidden:document.getElementById("pop").hidden,settingsOpen:!document.getElementById("setModal").hidden}})()`);
+  const setCoderBusy = (busy: boolean) => evaluate(`(()=>{const s=structuredClone(window.__ccSeed),t=s.projects.flatMap((p)=>p.tabs).find((x)=>x.id===s.selectedTabId);t.fixedCrew.busy.coder=${busy};t.derived.busy=Object.values(t.fixedCrew.busy).some(Boolean);window.__ccSeed=s;window.__ccDeliver({...structuredClone(s),type:"state"});return true})()`);
+  const openChip = async () => { await evaluate(`document.querySelector(${JSON.stringify(chip)}).scrollIntoView({block:"center"});true`); await realClick(chip); };
+  await evaluate('document.getElementById("setBtn").click();true');
+  await page.waitForPage(`Boolean(document.querySelector(${JSON.stringify(chip)}))`, "the fixed Settings coder chip");
+  await openChip();
+  assert.equal(await evaluate('!document.getElementById("pop").hidden && document.activeElement?.id==="mq"'), true, "a real click on the Settings model chip opens the picker with its search focused");
   await escape("keyDown"); await escape("keyUp");
-  assert.deepEqual(await visibleFocus(lower), { pic: lower, visible: true, want: lower }, "Picture, Model, Back, Escape: focus is on the visible picture");
+  assert.deepEqual(await settingsFocus(), { chip: true, inSettings: true, enabled: true, popHidden: true, settingsOpen: true }, "Settings, model chip, Escape: the picker closes and focus is on the enabled chip");
+  await openChip();
+  await setCoderBusy(true);
+  await escape("keyDown"); await escape("keyUp");
+  const lockedFocus = await settingsFocus();
+  assert.deepEqual([lockedFocus.inSettings, lockedFocus.enabled, lockedFocus.popHidden, lockedFocus.settingsOpen], [true, true, true, true], `Escape on a picker whose chip locked meanwhile leaves focus on an enabled control in Settings: ${JSON.stringify(lockedFocus)}`);
+  await setCoderBusy(false);
+  await escape("keyDown"); await escape("keyUp");
+  assert.equal(await evaluate('document.getElementById("setModal").hidden'), true, "Escape closes Settings once the picker is gone");
   // A state broadcast redraws the open card: keyboard focus on Watch stays on Watch.
   await realClick(pic(lower));
   await evaluate(`document.querySelector('#seatPop [data-seat-watch]').focus();true`);
   await evaluate(`(()=>{const s=structuredClone(window.__ccSeed);window.__ccDeliver({...s,type:"state"});return true})()`);
   assert.equal(await evaluate(`document.activeElement?.hasAttribute("data-seat-watch") && !document.getElementById("seatPop").hidden`), true, "focus on Watch survives a broadcast");
   await escape("keyDown"); await escape("keyUp");
-  // The same control in the work view and in the open card: a broadcast keeps focus in the one that had it.
-  await evaluate(`(()=>{const s=window.__ccSeed,t=s.projects.flatMap(p=>p.tabs).find(t=>t.id===s.selectedTabId);const seat=(t.seats??t.crew??[]).find(x=>x.slot==="coder");seat.status="working";s.launchSafety={blocked:[seat.seatKey??t.id+".coder"],uncertain:[],released:[],notices:[]};window.__ccDeliver({...structuredClone(s),type:"state"});document.querySelector(${JSON.stringify(name("coder"))}).click();return true})()`);
+  // The same control in the work view and in the open card: a broadcast keeps focus in the one that had it. One consistent state: a working run, the busy flag and a blocked launch.
+  await evaluate(`(()=>{const s=structuredClone(window.__ccSeed),t=s.projects.flatMap((p)=>p.tabs).find((x)=>x.id===s.selectedTabId),seat=t.crew.find((x)=>x.slot==="coder"),id="pointer-run-1";
+    const base={id,crewGenerationId:t.processState.crewGenerationId,seatSlotId:"coder",seatName:seat.name,seatIsLeader:false,label:"Pointer run",status:"working",outcome:null,cli:seat.cli,model:seat.model,effort:seat.effort,folderPath:t.folder,startedAt:Date.now(),endedAt:null};
+    t.runs.push({...base,runId:id,seatKey:t.id+".coder",output:"pointer run output",launchedBy:null}); t.processState.runs.push(base);
+    Object.assign(seat,{status:"working",task:"Working · Pointer run",runs:[id]}); t.processState.seats.find((x)=>x.slotId==="coder").status="working";
+    t.derived.runViews={liveBySeat:{coder:[base]},history:[],retiredHistory:[]}; t.derived.workingSeats=[{slotId:"coder",name:seat.name,isLeader:false}]; t.activeWork=true;
+    t.fixedCrew.busy.coder=true; t.derived.busy=true; s.launchSafety={blocked:[t.id+".coder"],uncertain:[],released:[],notices:[]};
+    window.__ccSeed=s; window.__ccDeliver({...structuredClone(s),type:"state"}); document.querySelector(${JSON.stringify(name("coder"))}).click(); return true})()`);
   await evaluate(`document.querySelector(${JSON.stringify(pic("coder"))}).click();true`);
   for (const attr of ["data-seat-unblock", "data-run-seat", "data-stop-seat"]) {
     const twins = await evaluate(`({view:document.querySelectorAll("#view ["+${JSON.stringify(attr)}+"]").length,card:document.querySelectorAll("#seatPop ["+${JSON.stringify(attr)}+"]").length})`);

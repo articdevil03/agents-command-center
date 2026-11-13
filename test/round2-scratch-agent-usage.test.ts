@@ -6,7 +6,7 @@ import * as usage from "../server/usage.ts";
 import * as stall from "../server/stall.ts";
 import * as agentUsage from "../server/agent-usage.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
-import { fixtureWorkspaces, loadServer, loadRunnerHarness, isolatedRunnerProc, isolatedRunnerCapture, isolatedRun, connect, lastState, tick } from "./round2-helpers.ts";
+import { loadServer, loadFixed, waitFor, setAssignment, startHelper, endRun, loadRunnerHarness, isolatedRunnerProc, isolatedRunnerCapture, isolatedRun, connect, lastState, tick } from "./round2-helpers.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
 
 test("cleanScratch removes expired uploads while preserving fresh files", async () => {
@@ -65,61 +65,49 @@ test("start-up cleans the scratch folder itself: an old generated upload is dele
   assert.equal(existsSync(path.join(dir, names.oldForeign)), true, "an old file that is not a generated upload name stays");
 });
 
-test("MONEY GUARD 1: a rejected runner start preserves the active run's relaunch allowance and next prompt", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "reviewer2", prompt: "active brief" });
-  const active = server.launched[0]; server.stallTrackers.markRelaunched(active.run.runId, active.run.startedAt);
+const refusal = (promise: Promise<unknown>) => promise.then(() => "launched", (error: Error) => error.message);
+
+test("MONEY GUARD 1: a rejected runner start rolls back its reservation, budget slot and notice, and the next start is clean", async () => {
+  const server = await loadFixed({ skipHealth: true });
+  server.createTabLeader("alpha-dev");
   const priorTimestamps = [...server.safety().timestamps], priorNotices = [...server.safety().notices];
   server.rejectRun();
-  const refused = server.launchWorker("alpha-dev", "reviewer2", "refused brief");
-  assert.equal(refused.ok, false);
+  assert.equal(await refusal(startHelper(server, "alpha-dev", "helper", "refused brief")), "injected runner refusal");
   assert.deepEqual(server.safety().timestamps, priorTimestamps, "a runner refusal rolls back its launch-budget reservation");
   assert.deepEqual(server.safety().notices, priorNotices, "a runner refusal removes its pending notice");
-  assert.equal(server.runContexts.get(active.run.runId).prompt, "active brief");
-  assert.equal(server.stallTrackers.trackers.get(active.run.runId).relaunched, true);
-  const accepted = server.launchWorker("alpha-dev", "reviewer2", "next brief");
-  assert.equal(accepted.ok, true);
-  assert.equal(server.launched.at(-1).prompt, "next brief");
+  assert.equal(server.runContexts.size, 0);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "a runner refusal frees the heavy slot");
+  const accepted = await startHelper(server, "alpha-dev", "helper", "next brief");
+  assert.ok(server.launched.at(-1).prompt.includes("next brief"), "the brief reaches the worker");
+  assert.equal(server.launched.at(-1).run.runId, accepted.runId);
   assert.equal(server.safety().timestamps.length, priorTimestamps.length + 1);
+  await endRun(server, accepted.runId);
 });
 
-test("MONEY GUARD 1c: a rejected second start leaves the active tab, slot, and prompt context unchanged", async () => {
-  const server = await loadServer({ skipHealth: true });
-  server.launchWorker("alpha-design", "designer", "design the page");
-  const active = server.launched[0]; server.rejectRun();
-  const refused = server.launchWorker("alpha-design", "designer", "must not replace it");
-  assert.equal(refused.ok, false);
-  assert.deepEqual([server.runContexts.get(active.run.runId).tabId, server.runContexts.get(active.run.runId).slot, server.runContexts.get(active.run.runId).prompt], ["alpha-design", "designer", "design the page"]);
-});
-
-test("MONEY GUARD 3 (call site): any actual output before the stall causes escalation and no relaunch", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "has started real work"); const active = server.launched[0];
+test("MONEY GUARD 3 (call site): a stall after actual output is escalated; the run is never stopped or restarted", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "has started real work"); const active = server.launched[0];
   server.emitOutput(active.run.runId, "made progress");
   server.stallTrackers.trackers.get(active.run.runId).lastGrowthAt = Date.now() - stall.STALL_THRESHOLD_MS - 1; server.tick();
-  assert.equal(server.launched.length, 1); assert.equal(server.kills.length, 0);
+  assert.equal(server.launched.length, 1); assert.equal(server.kills.length, 0); assert.equal(server.isRunning(active.run.runId), true);
   assert.ok(ws.messages.some((item: any) => item.type === "runStalled" && item.action === "escalate"));
+  await endRun(server, active.run.runId);
 });
 
-test("MONEY GUARD 4: a writable Claude crew slot is escalated, never automatically rerun", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  server.launchWorker("alpha-design", "designer", "design task"); const active = server.launched[0];
-  assert.equal(active.run.cli, "claude"); assert.equal(active.run.canWrite, true);
+for (const [label, assignment, expectedCli] of [
+  ["Claude", { cli: "claude", model: "claude-sonnet-5-5[1m]", effort: "medium" }, "claude"],
+  ["OpenCode", { cli: "opencode", model: "vendor/model-a", effort: "max" }, "opencode"],
+] as const) test(`MONEY GUARD 4: a ${label} position assigned in Settings is escalated and keeps running: the timer never stops or restarts it`, async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  server.settingsService.state.tools.opencode.installed = true;
+  const saved = await setAssignment(ws, "alpha-dev", "helper", assignment);
+  assert.equal(saved.type, "actionResult", JSON.stringify(saved));
+  await startHelper(server, "alpha-dev", "helper", "assigned task"); const active = server.launched[0];
+  assert.equal(active.run.cli, expectedCli); assert.equal(active.run.canWrite, false);
   server.stallTrackers.startRun(active.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1); server.tick();
-  assert.equal(server.launched.length, 1); assert.equal(server.kills.length, 0);
+  assert.equal(server.launched.length, 1); assert.equal(server.kills.length, 0); assert.equal(server.isRunning(active.run.runId), true);
   assert.ok(ws.messages.some((item: any) => item.type === "runStalled" && item.action === "escalate"));
-});
-
-test("MONEY GUARD 4: an OpenCode worker is unsafe for automatic relaunch even when its slot is read-only", async () => {
-  const workspaces = fixtureWorkspaces();
-  const reviewer = workspaces.projects[0].tabs[0].crew.find((seat) => seat.slot === "reviewer2")!;
-  reviewer.cli = "opencode"; reviewer.model = "vendor/model-a"; reviewer.effort = "max";
-  const server = await loadServer({ skipHealth: true, workspaces }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "review task"); const active = server.launched[0];
-  assert.equal(active.run.cli, "opencode"); assert.equal(active.run.canWrite, false);
-  server.stallTrackers.startRun(active.run.runId, Date.now() - stall.STALL_THRESHOLD_MS - 1); server.tick();
-  assert.equal(server.launched.length, 1); assert.equal(server.kills.length, 0);
-  assert.ok(ws.messages.some((item: any) => item.type === "runStalled" && item.action === "escalate"));
+  await endRun(server, active.run.runId);
 });
 
 test("WS call site: client preference updates validate, persist to the isolated file, and broadcast", async () => {
@@ -133,12 +121,13 @@ test("WS call site: client preference updates validate, persist to the isolated 
   assert.equal(lastState(ws).clientPrefs.sidebarCollapsed, true);
 });
 
-test("an Atlas-started run can be killed immediately by its real run ID", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  assert.equal(server.leaderLaunch("alpha-dev", "coder", "Atlas task").ok, true);
+test("a leader-started run can be killed immediately by its real run ID", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "helper", "Atlas task");
   const run = server.launched[0].run;
   ws.message({ type: "killRun", runId: run.runId });
   assert.deepEqual(server.kills, [run.runId]);
+  await waitFor(() => server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId === null, "the killed run to end");
   assert.equal(server.active.has(run.runId), false);
   assert.ok(ws.messages.some((item: any) => item.type === "runStop" && item.runId === run.runId));
 });

@@ -77,33 +77,6 @@ test("killSeat: unknown and already-closed run IDs are not accepted", () => {
   assert.equal(runner.killRun("not-running", (() => new FakeProc()) as any), false);
 });
 
-test("migrateSeatsForward: a malformed legacy project file remains byte-for-byte intact", () => {
-  const { dir } = configFolder(), projects = path.join(dir, "old-projects.json"), destination = path.join(dir, "new-workspaces.json");
-  const original = "{ broken legacy data"; writeFileSync(projects, original);
-  assert.throws(() => config.migrateWorkspaces(projects, destination), /valid JSON/);
-  assert.equal(readFileSync(projects, "utf8"), original);
-  assert.equal(existsSync(destination), false);
-});
-
-test("migrateSeatsForward: legacy projects upcast to a default Development tab with validated crew", () => {
-  const { dir } = configFolder(), projects = path.join(dir, "old-projects.json"), destination = path.join(dir, "new-workspaces.json");
-  writeFileSync(projects, JSON.stringify([{ id: "legacy", name: "Legacy", dir: "C:/legacy" }]));
-  assert.equal(config.migrateWorkspaces(projects, destination), true);
-  const migrated = config.readWorkspaces(destination).projects[0];
-  assert.equal(migrated.tabs[0].kind, "dev");
-  const template = config.templateCopy("our-process");
-  assert.equal(migrated.tabs[0].crew.length, template.crew.length, "a legacy project starts on Our process");
-  assert.equal(migrated.tabs[0].steps.length, template.steps.length);
-});
-
-test("migrateSeatsForward: a second migration leaves the existing workspace bytes untouched", () => {
-  const { dir } = configFolder(), projects = path.join(dir, "old-projects.json"), destination = path.join(dir, "new-workspaces.json");
-  writeFileSync(projects, JSON.stringify([{ id: "legacy", name: "Legacy", dir: "C:/legacy" }]));
-  config.migrateWorkspaces(projects, destination); const original = readFileSync(destination, "utf8");
-  assert.equal(config.migrateWorkspaces(projects, destination), false);
-  assert.equal(readFileSync(destination, "utf8"), original);
-});
-
 test("opencodeExtraEnv: a writable OpenCode slot and other CLIs receive no deny override", () => {
   const codex = new FakeProc(); let env: any;
   const spawn = ((_: string, options: any) => { env = options.env; return codex; }) as any;
@@ -156,9 +129,8 @@ test("refreshDiscovery: a configured workspace Codex model survives a successful
   const configuredModel = "gpt-6-workspace-custom";
   try {
     const workspaces = config.readWorkspaces();
-    const codexSeat = workspaces.projects.flatMap((project) => project.tabs.flatMap((tab) => tab.crew)).find((seat) => seat.cli === "codex");
-    assert.ok(codexSeat, "test workspace must contain a Codex slot");
-    codexSeat.model = configuredModel;
+    const preferences = workspaces.projects[0].tabs[0].fixedCrew!.preferences;
+    preferences.coder = { assignment: { cli: "codex", model: configuredModel, effort: "low" }, source: "user" };
     config.writeWorkspaces(workspaces, config.workspacesPath);
     await config.refreshDiscovery(
       async (fallback) => ({ values: [...fallback], fallback: true }),
@@ -182,9 +154,8 @@ test("refreshDiscovery: a saved OpenCode model that discovery omits is offered u
   );
   try {
     const workspaces = config.readWorkspaces();
-    const seat = workspaces.projects.flatMap((project) => project.tabs.flatMap((tab) => tab.crew)).find((member) => !member.isLeader && !member.advisor);
-    assert.ok(seat, "test workspace must contain a seat without an advisor");
-    seat.cli = "opencode"; seat.model = saved; seat.effort = "max"; config.writeWorkspaces(workspaces, config.workspacesPath);
+    workspaces.projects[0].tabs[0].fixedCrew!.preferences.coder = { assignment: { cli: "opencode", model: saved, effort: "max" }, source: "user" };
+    config.writeWorkspaces(workspaces, config.workspacesPath);
     await refresh();
     assert.ok(config.OPENCODE_MODEL_SUGGESTIONS.includes(saved)); assert.ok(config.OPENCODE_MODEL_SUGGESTIONS.includes("vendor/model-current"));
     writeFileSync(config.workspacesPath, original);

@@ -1,22 +1,7 @@
 // Command Center page script, part 3 of 12: applying a server state. Ordered classic scripts (index.html loads public/app/*.js in name order) share one scope.
   "use strict";
-  // Server-confirmed facts settle the client-side waits: a new tab or project appearing, a preset picture saved, a Save confirmed after a reconnect, every stopped run exiting.
+  // Server-confirmed facts settle the client-side waits: a new tab or project appearing, a Save confirmed after a reconnect, every stopped run exiting.
   function settleFromState() {
-    // The next step's button appears in the same spot as the one just clicked: it ignores clicks for a moment so a fast multi-click cannot walk several steps.
-    // The guard starts when the step (or look approval) of a tab with a sent step action actually changes, however late that state arrives.
-    const seen = new Set();
-    for (const { tab } of allTabs()) {
-      seen.add(tab.id);
-      const steps = tab.derived?.stepBar ?? [], signature = `${steps.findIndex((step) => step.state === "current")}|${tab.processState?.approval?.state ?? ""}|${tab.processState?.phase ?? ""}|${tab.processState?.round ?? ""}|${tab.processState?.selectedFixer ?? ""}`;
-      const moved = tabStepSignature.has(tab.id) && tabStepSignature.get(tab.id) !== signature;
-      if (moved && stepActionSent.delete(tab.id)) stepClickGuard.set(tab.id, Date.now() + STEP_CLICK_GUARD_MS);
-      tabStepSignature.set(tab.id, signature);
-      // A step button stays "Sending…" until the server's state shows the step moved (or its refusal arrives, or a few seconds pass): a state that
-      // was already on its way when the button was clicked must not turn it back on before the server has acted, or a double-click skips a step.
-      if (processPending.has(tab.id) && (moved || Date.now() - (processPendingSince.get(tab.id) ?? 0) > PROCESS_PENDING_MS)) { processPending.delete(tab.id); processPendingSince.delete(tab.id); }
-    }
-    for (const tabId of [...tabStepSignature.keys()]) if (!seen.has(tabId)) { tabStepSignature.delete(tabId); stepActionSent.delete(tabId); }
-    for (const tabId of [...processPending.keys()]) if (!seen.has(tabId)) { processPending.delete(tabId); processPendingSince.delete(tabId); }
     if (pendingCreate?.kind === "tab") {
       const project = findProject(pendingCreate.projectId);
       const added = project?.tabs.find((tab) => !pendingCreate.knownTabIds.has(tab.id));
@@ -30,11 +15,6 @@
       pendingCreate = null;
       $(statusId).textContent = "Not sure it was created. Check the tabs, then try again"; $(statusId).classList.add("bad");
       updateCreateButtons();
-    }
-    if (avatarPending) {
-      const seat = seatFor(findTab(avatarPending.tabId), avatarPending.slot);
-      if (!seat) avatarPending = null;
-      else if (seat.pic === avatarPending.pic) { avatarPending = null; if ($("avatarStatus")) { $("avatarStatus").textContent = ""; $("avatarStatus").dataset.status = "done"; } }
     }
     for (const [tabId, state] of saveStates) {
       const tab = findTab(tabId);
@@ -61,7 +41,6 @@
       }
     }
     for (const runId of [...outputByRun.keys()]) if (!live.has(runId)) outputByRun.delete(runId);
-    for (const runId of [...stallActions.keys()]) if (!live.has(runId)) stallActions.delete(runId);
   }
   // Appends one chunk; true when the front of the log had to be cut to stay within the cap (the shown text then cannot just be extended).
   function appendOutput(runId, chunk) {

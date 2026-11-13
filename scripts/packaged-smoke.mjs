@@ -12,8 +12,7 @@
 //      node_modules rescuing the import.
 //
 // It proves startup readiness only. CLI discovery is disabled for this smoke,
-// so this does not claim that external CLIs or their discovery work. The
-// leader health check is also skipped to avoid live API work.
+// so this does not claim that external CLIs or their discovery work.
 //
 // Keep all writes inside this run's temp data directory and remove the exact
 // temp workspace in finally, including when allocation or copying fails.

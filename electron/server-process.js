@@ -8,7 +8,10 @@ import { root, smokeReadyFile } from "./config.js";
 
 // Must stay above the server's start-up sweep cap (SWEEP_CAP_MS, 41 s) plus start-up work: the server waits for that sweep before it listens.
 export const READY_TIMEOUT_MS = 60_000;
-const KILL_GRACE_MS = 3_000;
+// The server drains its Git work (73 s, then 41 s of helpers), its workers (about 52 s) and its HTTP close (7 s) in parallel, so a normal
+// shutdown can take up to about 114 s: the parent only force-kills a server that is still alive after that, with a margin.
+// A server that exits on its own still finishes at once (see stopServer).
+export const KILL_GRACE_MS = 125_000;
 
 // Reads the accumulated stdout text from the spawned server, not a single
 // chunk: a line can arrive split across two `data` events, and the caller
@@ -124,7 +127,7 @@ export function stopServer() {
   const proc = serverProcess;
   serverStopPromise = new Promise((resolveStopped) => {
     // The server stops its own workers on "shutdown", so a server that is gone is done at once: taskkill on a dead pid finds nothing (or
-    // hits a new process that reused it), and always waiting the grace would hold the quit, and a relaunch, for 3 s every time.
+    // hits a new process that reused it), and always waiting the grace would hold the quit, and a relaunch, for the kill grace every time.
     if (proc.exitCode != null || proc.signalCode != null) { resolveStopped(); return; }
     let backstop = 0;
     const gone = () => { clearTimeout(backstop); resolveStopped(); };

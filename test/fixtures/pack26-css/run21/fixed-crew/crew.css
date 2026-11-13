@@ -1,0 +1,101 @@
+/* Pack 26: the fixed crew (public/fixed-crew/*.js) in Settings, in New project and Add a tab, and a fixed tab's rail and work view.
+   Only the page's own tokens, type and radii (public/styles/*.css). Nothing has a fixed width: it wraps or shortens to what it is given,
+   so nothing scrolls sideways. No new motion: the one turn of the Instructions arrow follows the page's reduced-motion rule. */
+.fc{display:grid;gap:14px;min-width:0}
+.fc h3{flex-wrap:wrap}
+.fc h3 .fc-title{min-width:0;flex:1 1 220px}
+.fc-intro{margin:-10px 2px 0}
+.fc-status{margin:0 2px;font-size:12.5px;color:var(--text-2);overflow-wrap:anywhere}
+.fc-status:empty{display:none}
+.fc-recovery{margin:0;padding:9px 12px;border-radius:11px;background:var(--t-orange);color:var(--warn-text);font-size:13px;overflow-wrap:anywhere}
+.fc-group{display:grid;gap:8px;min-width:0}
+.fc-ghead{display:flex;align-items:baseline;gap:4px 10px;padding:0 2px;flex-wrap:wrap;min-width:0}
+.fc-ghead h4{margin:0;font-size:13.5px;font-weight:600}
+.fc-ghead small{font-size:12.5px;color:var(--text-3)}
+.fc-row{display:grid;gap:6px;padding:11px 14px;border-bottom:1px solid var(--line);min-width:0}
+.fc-row:last-child{border-bottom:0}
+.fc-main,.fc-crow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:center;min-width:0}
+.fc-main .d,.fc-crow .d{display:grid;gap:1px;min-width:0}
+.fc-label{font-weight:600;overflow-wrap:anywhere}
+.fc-source{color:var(--text-3);font-size:12.5px;overflow-wrap:anywhere}
+.fc-model{max-width:min(280px,46vw)}
+.fc-model .fc-logo:empty{display:none}
+.fc-model .fc-logo .lg{border-radius:4px}
+.unassigned .fc-model,.fc-crow .fc-model[data-empty]{background:none;box-shadow:inset 0 0 0 1px var(--line-3);color:var(--text-2)}
+.fc-note{margin:0;font-size:12.5px;color:var(--text-2);overflow-wrap:anywhere}
+.fc-notice[data-status="same-model"],.fc-notice[data-status="same-company"],.fc-notice[data-status="unknown"],.fc-check,.fc-busy{color:var(--warn-text)}
+.fc-notice[data-status="unassigned"]{color:var(--text-3)}
+.fc-more{justify-self:start;display:inline-flex;align-items:center;gap:4px;padding:3px 6px;margin-left:-6px;border-radius:7px;font-size:12.5px;color:var(--text-2)}
+.fc-more:hover{background:var(--sf2);color:var(--text)}
+.fc-chev svg{display:block;transition:transform .2s var(--ease)}
+.fc-more[aria-expanded="true"] .fc-chev svg{transform:rotate(180deg)}
+.fc-panel{display:grid;gap:8px;padding:10px 12px 12px;border-radius:12px;background:var(--sf2);min-width:0}
+.fc-core{display:grid;gap:4px;min-width:0}
+.fc-core p{margin:0;font-size:12.5px;color:var(--text-2);overflow-wrap:anywhere;white-space:pre-wrap}
+.fc-core p:empty{display:none}
+.fc-panel .inp.fc-extra{background:var(--sf);resize:vertical;min-height:72px;line-height:1.5}
+.fc-panel .inp.fc-extra:focus{background:var(--sf);box-shadow:0 0 0 1px var(--accent),0 0 0 4px var(--focus-glow)}
+.fc-acts{display:flex;gap:6px;align-items:center;justify-content:flex-end;flex-wrap:wrap;min-width:0}
+.fc-acts .action-status{margin-right:auto}
+
+/* New project and Add a tab: the list scrolls inside the dialog, so Cancel and Create always stay in view */
+.modal.fc-wide{width:560px}
+.fc-create{gap:8px}
+.fc-chead{display:flex;align-items:flex-end;gap:12px;min-width:0}
+.fc-chead .d{display:grid;gap:2px;min-width:0;flex:1}
+.fc-cstatus{font-size:12.5px;color:var(--text-3);overflow-wrap:anywhere}
+.fc-chead [aria-pressed="true"]{background:var(--text);color:var(--sf);box-shadow:none}
+.fc-clist{max-height:min(46vh,430px);overflow:auto;padding:4px 0}
+.fc-cgroup{padding:10px 14px 4px;font-size:12px;font-weight:600;color:var(--text-3)}
+.fc-crow{padding:7px 14px}
+.fc-crow .fc-check{grid-column:1/-1}
+
+/* a fixed tab: the leader's chat and runs as usual, no legacy step bar; a crew this version cannot read shows only its notice */
+#stage.fixed-unavailable #view>:not(#fixedView),#stage.fixed-unavailable #composer,#stage.fixed-unavailable #sline{display:none}
+/* The task and chat share one scroll area; the composer stays outside it. */
+#stage.fixed-crew #view{padding-top:14px;scrollbar-gutter:stable}
+#fixedView{padding:0 0 14px;min-width:0}
+#stage.fixed-crew .empty-chat{padding-top:12px;padding-bottom:20px}
+#stage.fixed-unavailable #fixedView{flex:1;max-height:none}
+.fct{max-width:760px;margin:0 auto;display:grid;gap:10px;min-width:0}
+.fct-head{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;min-width:0}
+.fct-ttl{flex:1 1 160px;min-width:0;font-size:12.5px;font-weight:600;color:var(--text-3);overflow-wrap:anywhere}
+.fct p{margin:0;overflow-wrap:anywhere}
+.fct-banner{padding:8px 12px;border-radius:11px;background:var(--t-orange);color:var(--warn-text);font-size:13px}
+.fct-need{display:flex;align-items:center;gap:6px 12px;flex-wrap:wrap;padding:8px 12px;border-radius:11px;background:var(--t-orange);color:var(--warn-text);font-size:13px;min-width:0}
+.fct-need span{flex:1 1 220px;min-width:0;overflow-wrap:anywhere}
+.fct-empty{color:var(--text-2);font-size:13.5px}
+.fct-decision{display:grid;gap:4px;padding:10px 14px 12px;min-width:0;overflow:visible}
+.fct-dhead{margin:0;min-width:0}
+.fct-toggle{display:flex;align-items:center;gap:8px;width:100%;padding:4px 6px;margin:0 -6px;border-radius:8px;font-size:13.5px;font-weight:600;color:var(--text);text-align:left;min-width:0}
+.fct-toggle:hover{background:var(--sf2)}
+.fct-dt{min-width:0;margin-right:auto}
+.fct-toggle .fc-chev svg{display:block}
+.fct-toggle[aria-expanded="true"] .fc-chev svg{transform:rotate(180deg)}
+.fct-line{font-size:13.5px;color:var(--text)}
+.fct-reason,.fct-faint{font-size:12.5px;color:var(--text-2)}
+.fct-note{font-size:12.5px;color:var(--text-3)} .fct-note.warn,.fct-warn{color:var(--warn-text)}
+.fct-more{padding-top:8px;min-width:0}
+.fct-dl{margin:0;display:grid;gap:10px;min-width:0}
+.fct-row{display:grid;grid-template-columns:minmax(0,150px) minmax(0,1fr);gap:4px 14px;min-width:0}
+.fct-row dt{font-size:12px;font-weight:600;color:var(--text-3);padding-top:1px}
+.fct-row dd{margin:0;display:grid;gap:6px;font-size:13px;color:var(--text);min-width:0;overflow-wrap:anywhere}
+.fct-row ul,.fct-blocks{margin:0;padding-left:18px;display:grid;gap:2px}
+.fct-row li.ok{color:var(--working-text)}
+.fct-block,.fct-seat,.fct-finding{display:grid;gap:3px;min-width:0}
+.fct-seat small,.fct-why{font-size:12px;color:var(--text-2)}
+.fct-chips{display:flex;gap:5px;flex-wrap:wrap;min-width:0}
+.fct-chip{font-family:var(--mono);font-size:11.5px;padding:2px 7px;border-radius:6px;background:var(--sf2);color:var(--text-2);min-width:0;overflow-wrap:anywhere}
+.fct-badge{justify-self:start;font-size:11px;font-weight:600;padding:2px 7px;border-radius:6px;background:var(--sf2);color:var(--text-2)}
+.fct-badge.fix{background:var(--t-orange);color:var(--warn-text)}
+.fct-card{max-width:none;outline:none}
+.fct-card h3.h{margin:0}
+.fct-card:focus-visible{box-shadow:0 0 0 2px var(--accent)}
+.fct-evidence{display:grid;gap:4px;min-width:0}
+.fct-status{font-size:12.5px;color:var(--text-2)} .fct-status:empty{display:none} .fct-status[data-status="failed"]{color:var(--danger-text)}
+@media (max-width:1000px){.fct-row{grid-template-columns:minmax(0,1fr)}}
+.fc-rail{display:grid;gap:4px;justify-items:start;padding:6px 12px;min-width:0}
+.fc-rail b{font-size:13px;font-weight:600}
+.fc-rail small{font-size:12px;color:var(--text-3);overflow-wrap:anywhere}
+.fc-rail .btn{margin-top:4px}
+#stage:not(.wide) .fc-rail{display:none}

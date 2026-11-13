@@ -5,7 +5,7 @@ import { LEADER_START_TIMEOUT_MS } from "../server/leader-common.ts";
 import * as path from "node:path";
 import { SERVER_START_MS } from "./server-start.ts";
 import { LIST_TIMEOUT_MS } from "../server/leader-common/types.ts";
-import { opencodeRules, opencodeApprovalRequest, LEADER, WORKER, TAB, OPENCODE_LEADER, sleep, NO_FAKE_CLI_ALIVE_MS, withServer, script, bridgePost } from "./any-cli-helpers.ts";
+import { opencodeRules, opencodeApprovalRequest, LEADER, TAB, OPENCODE_LEADER, sleep, NO_FAKE_CLI_ALIVE_MS, withServer, script, bridgePost } from "./any-cli-helpers.ts";
 
 // ---- OpenCode leader ----
 
@@ -20,7 +20,7 @@ test("OpenCode leader: answer text only (no reasoning, no echo of the user), one
     const entries = h.cliEntries();
     assert.ok(entries.filter((e) => e.path).every((e) => e.authorized === true), "every request carried the password");
     assert.ok(entries.filter((e) => e.path && e.path !== "/global/health").every((e) => e.directory === h.work), "every call carries the tab folder");
-    assert.ok(entries.some((e) => e.bridgeInit === 200 && e.bridgeTools.length === 4), "the bridge served initialize and the four tools");
+    assert.deepEqual(entries.find((e) => e.bridgeInit === 200)?.bridgeTools.slice().sort(), ["accept_planner_report", "begin_planning", "finish_fixed_task", "get_fixed_task", "get_task_archive", "list_task_archives", "reconcile_task_execution", "request_task_action", "verify_task_evidence"], "the bridge served initialize and the nine fixed tools");
     const session = entries.find((e) => e.method === "POST" && e.path === "/session").body;
     assert.deepEqual(session.permission, opencodeRules("accept"));
     const prompt = entries.find((e) => e.path?.endsWith("/prompt_async")).body;
@@ -32,18 +32,18 @@ test("OpenCode leader: answer text only (no reasoning, no echo of the user), one
   });
 });
 
-test("OpenCode leader: crew tools come through the bridge; mode changes patch the session", { timeout: 60000 }, async () => {
+test("OpenCode leader: the fixed task tools come through the bridge; mode changes patch the session", { timeout: 60000 }, async () => {
   await withServer({ leader: OPENCODE_LEADER }, async (h) => {
-    let start = h.chat(script({ tool: "get_crew_status" }));
+    let start = h.chat(script({ tool: "get_fixed_task" }));
     await h.wait(() => h.turnEnded(start).length === 1, "tool turn"); await h.idle();
-    assert.match(h.deltas(start), /^\[tool ok: \{"tab":"anycli-dev","crew":\[/);
+    assert.equal(h.deltas(start), '[tool ok: {"task":null,"executions":[]}]');
     await h.action({ type: "setPermissionMode", tabId: TAB, mode: "plan", confirm: true });
     const patch = h.cliEntries().find((e) => e.method === "PATCH");
     assert.deepEqual(patch.body.permission, opencodeRules("plan"));
-    // Plan mode through the bridge: the same gate refuses a writing seat.
-    start = h.chat(script({ tool: "launch_seat", args: { slot: WORKER.slotId, brief: "write" } }));
+    // Plan mode through the bridge: the same gate refuses to start fixed work.
+    start = h.chat(script({ tool: "begin_planning", args: { expected: null, brief: "plan" } }));
     await h.wait(() => h.turnEnded(start).length === 1, "plan launch"); await h.idle();
-    assert.match(h.deltas(start), /\[tool failed: launch failed: this tab is in Plan mode/);
+    assert.match(h.deltas(start), /\[tool failed: begin_planning failed: Switch out of Plan mode before starting fixed work\./);
     // Last match wins: looking is allowed, a .env read asks again after that, the crew tools come last.
     const looking = ["*:*:ask", "read:*:allow", "glob:*:allow", "grep:*:allow", "list:*:allow", "read:*.env:ask", "read:*.env.*:ask"];
     const flat = (mode: Parameters<typeof opencodeRules>[0]) => opencodeRules(mode).map((r) => `${r.permission}:${r.pattern}:${r.action}`);

@@ -181,7 +181,7 @@ export async function discoverClaudeModels(
   queryFn: QueryFn = query
 ): Promise<DiscoveredClaudeModels> {
   if (!cliPath) return { values: [...fallback], fallback: true };
-  // Same refusal as the leaders and the health check: a CLI inside a tab or project folder is never started.
+  // Same refusal as the leaders: a CLI inside a tab or project folder is never started.
   const folder = cliSkipFolders().find((f) => isInsideFolder(cliPath, f));
   if (folder) { console.error(`Claude model discovery skipped: the Claude CLI (${cliPath}) lies inside the workspace folder (${folder})`); return { values: [...fallback], fallback: true }; }
   return new Promise((resolvePromise) => {

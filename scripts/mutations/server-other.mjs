@@ -1,211 +1,6 @@
+import { serverOtherCoreMutations } from "./server-other-core.mjs";
 export const serverOtherMutations = [
-  ["guard-round2-codex-stdout-invalidates", "server/runner.ts", 'if (!text) return;\n    if (claudeState) {', 'if (!text) return;\n    if (codexState) Object.assign(codexState, createAgentUsageState());\n    if (claudeState) {'],
-  ["guard-round2-stderr-output-wiring","server/runner.ts","    emit(text, errHider);\n    if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, text));","    if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, text));"],
-  ["guard-round2-claude-flush-call-site", "server/runner.ts", 'if (claudeState) emitClaudeEvents(flushClaudeOutput(claudeState));', ''],
-  ["guard-round2-system-case", "server/agent-usage.ts", 'case "system": {', 'case "system": return { text: "" }; case "unused": {'],
-  ["guard-round2-system-exit", "server/agent-usage.ts", '(parsed.exit_code !== undefined && parsed.exit_code !== 0)', 'false'],
-  ["guard-round2-system-stderr", "server/agent-usage.ts", '|| stderr;', '|| false;'],
-  ["guard-round2-system-subtype", "server/agent-usage.ts", '/error|fail|abort|timeout/i.test(subtype)', 'false'],
-  ["guard-round2-system-unknown-shown", "server/agent-usage.ts", 'return { text: capSystemLine(`[system] ${subtype}`) + "\\n" };', 'return { text: "" };'],
-  ["guard-round2-system-cap", "server/agent-usage.ts", 'line.length > SYSTEM_LINE_CAP', 'false'],
-  ["guard-round2-codex-terminal-pair", "server/agent-usage.ts", 'state.codexHeldTokens = null;', ''],
-  ["guard-usage-model-payload", "server/usage.ts", 'modelId: modelId ?? null, contextTokens,', 'modelId: null, contextTokens,'],
-  ["guard-usage-model-accumulator", "server/usage.ts", 'modelId: delta.modelId,', 'modelId: null,'],
-  ["guard-usage-model-snapshot", "server/usage.ts", 'modelId: totals.modelId,', 'modelId: null,'],
-  ["guard-usage-context-excludes-output", "server/usage.ts", 'contextTokens = toNumber(u.input_tokens)', 'contextTokens = toNumber(u.output_tokens) + toNumber(u.input_tokens)'],
-  ["guard-usage-cost-carry-forward", "server/usage.ts", 'currentCostUsd: delta.costUsd ?? totals.currentCostUsd,', 'currentCostUsd: delta.costUsd,'],
-  // ---- killSeatAndConfirm (server/runner.ts): the one signal removal is
-  // allowed to trust is the process's own real close, never a guess ----
-  ["guard-confirm-kill-not-running-is-confirmed", "server/runner.ts", "if (!entry || !entry.proc.pid) return false;", "if (!entry) return true;\n  if (!entry.proc.pid) return false;"],
-  ["guard-confirm-kill-real-close-confirms", "server/runner.ts", "  entry.stopRequested = true;\n", ""],
-  ["guard-confirm-kill-timeout-unconfirmed", "server/runner.ts", "const grace = setTimeout(() => reportUnconfirmedKill(runId, entry, \"process did not exit within the grace period; it may still be running -- press Kill to try again\"), KILL_GRACE_MS);", "const grace = setTimeout(() => {}, KILL_GRACE_MS);"],
-  // ---- P1 fix 1: the stall monitor judges a RUNNING process by the
-  // permission it was launched with, never a live re-read of its current
-  // role -- an edit to an Underground agent's role mid-run must never flip
-  // the safety gate under an already-running process (server/index.ts) ----
-  ["guard-run-record-frozen-at-launch", "server/runner.ts", "  run = Object.freeze({ ...run });\n", "  run = run;\n"],
-  ["disk-model", "server/config.ts", ": isSafeShape(member.model) && isSafeShape(member.effort))) {", ": isSafeShape(member.effort))) {"],
-  ["disk-effort", "server/config.ts", ": isSafeShape(member.model) && isSafeShape(member.effort))) {", ": isSafeShape(member.model))) {"],
-  ["disk-seat-unsafe-id", "server/config.ts", "if (!isObject(tab) || !validSlug(tab.id) || !validText(tab.name)", "if (!isObject(tab) || !validText(tab.name)"],
-  ["disk-seat-duplicate-id", "server/config.ts", "if (tabIds.has(tab.id.toLowerCase())) throw", "if (false) throw"],
-  ["disk-seat-id-length-cap","server/process-types.ts","if (id.trim().length === 0 || id.length > MAX_SEAT_ID_LENGTH) return false;","if (id.trim().length === 0) return false;"],
-  ["disk-seat-id-no-ascii-only-regression","server/process-types.ts","return !id.endsWith(\".\") && !id.endsWith(\" \");\n}","return !id.endsWith(\".\") && !id.endsWith(\" \") && /^[\\x00-\\x7f]*$/.test(id);\n}"],
-  ["disk-seat-id-no-device-name-regression","server/process-types.ts","return !id.endsWith(\".\") && !id.endsWith(\" \");\n}","return !id.endsWith(\".\") && !id.endsWith(\" \") && ![\"CON\", \"PRN\", \"AUX\", \"NUL\", \"COM1\", \"LPT1\"].includes(id.toUpperCase());\n}"],
-  ["raw-prompt", "server/runner.ts", "...commandEnv(run, briefPath)", "...commandEnv(run, prompt)"],
-  ["origin", "server/security.ts", 'ALLOWED_ORIGINS.has(origin)', 'origin.startsWith("http://")'],
-  ["host", "server/security.ts", 'ALLOWED_HOSTS.has(host)', 'true'],
-  ["running-close", "server/runner.ts", "  running.delete(runId);\n", ""],
-  ["working-status", "server/runner.ts", "try { cb.onStatus(run, \"working\"); }", "try { }"],
-  ["stderr", "server/runner.ts", "proc.stderr?.on(\"data\", (chunk: Buffer) => {", "proc.stderr?.on(\"data-disabled\", (chunk: Buffer) => {"],
-  ["shared-decoder", "server/runner.ts", 'const stderrDecoder = new StringDecoder("utf8");', 'const stderrDecoder = stdoutDecoder;'],
-  ["seat-array", "server/config.ts", "if (!isObject(data) || !Array.isArray(data.projects)) throw", "if (!isObject(data)) throw"],
-  ["seat-kind","server/setup.ts","    if (!caps) throw new Error(`seat ${slot}: unknown CLI`);\n",""],
-  ["empty-seats","server/config.ts","  return data as unknown as Workspaces;\n}\n\n// A new Development tab starts on Our process.","  return { projects: [] };\n}\n\n// A new Development tab starts on Our process."],
-  ["guard-sidebar-zero", "server/config-prefs.ts", "crewRailOpen: typeof raw.crewRailOpen === \"boolean\" ? raw.crewRailOpen : DEFAULT_CLIENT_PREFS.crewRailOpen,", "crewRailOpen: DEFAULT_CLIENT_PREFS.crewRailOpen,"],
-  ["guard-usage-parse-tokens", "server/usage.ts", 'if (typeof usage === "object" && usage !== null) {', 'if (false) {'],
-  ["guard-usage-parse-safety", "server/usage.ts", 'if (typeof result !== "object" || result === null) {', 'if (false) {'],
-  ["guard-usage-accumulate-turns", "server/usage.ts", 'turns: totals.turns + 1,', 'turns: totals.turns,'],
-  // ---- usage panel fix (P2 double-counted spend, traffic-not-occupancy
-  // context, misleading zeroes, wrong-model window, fake/negative costs) ----
-  ["guard-usage-cost-latest-not-sum", "server/usage.ts", 'currentCostUsd: delta.costUsd ?? totals.currentCostUsd,', 'currentCostUsd: (totals.currentCostUsd ?? 0) + (delta.costUsd ?? 0),'],
-  ["guard-usage-context-latest-not-sum", "server/usage.ts", 'contextTokens: delta.contextTokens,', 'contextTokens: (totals.contextTokens ?? 0) + (delta.contextTokens ?? 0),'],
-  ["guard-usage-window-no-carryover", "server/usage.ts", 'contextWindow: delta.contextWindow,', 'contextWindow: delta.contextWindow ?? totals.contextWindow,'],
-  ["guard-usage-window-model-scoped", "server/usage.ts", 'const entry = (modelUsage as Record<string, unknown>)[modelId];', 'const entry = Object.values(modelUsage as Record<string, unknown>)[0];'],
-  ["guard-usage-window-positive-check", "server/usage.ts", 'Number.isFinite(window) && window > 0) contextWindow = window;', 'Number.isFinite(window)) contextWindow = window;'],
-  ["guard-usage-cost-negative-rejected", "server/usage.ts", 'Number.isFinite(value) && value >= 0 ? value : null;', 'Number.isFinite(value) ? value : null;'],
-  ["guard-usage-bank-on-restart", "server/usage.ts", 'bankedCostUsd: totals.bankedCostUsd + (totals.currentCostUsd ?? 0),', 'bankedCostUsd: totals.bankedCostUsd,'],
-  ["guard-usage-snapshot-measured", "server/usage.ts", 'const measured = totals.currentCostUsd !== null || totals.bankedCostUsd > 0;', 'const measured = true;'],
-  // guard-usage-cost-tiny-floor and guard-usage-cost-negative-frontend
-  // (formatCostUsd's tiny-floor and negative-cost checks) removed: spend was
-  // deleted from public/app/*.js entirely, formatCostUsd included (see the
-  // brief: "no need for spend count" -- delete the code, don't hide it).
-  // Nothing left in usageBadgeText to mutate a cost check out of; see
-  // frontend-*.test.ts's "usageBadgeText never references cost/spend"
-  // structural guard instead.
-  ["guard-usage-bank-model-clear", "server/usage.ts", 'export function bankUsage(totals: UsageTotals): UsageTotals {\n  return {\n    modelId: null,', 'export function bankUsage(totals: UsageTotals): UsageTotals {\n  return {\n    modelId: totals.modelId,'],
-
-  // ---- Underground: the user's own independent roster, no Atlas leader ----
-  // Guard 2 (the role list is closed), at all three places a role is ever
-  // checked: the shared add/update validator, the add-flow's own early
-  // check, and the disk loader.
-  // Guard: the agent id is checked for Windows-filename safety on load, and
-  // never allowed to collide with the "underground-" namespace itself.
-  // Guard 5 (add/remove persist correctly, a removed agent's running process
-  // is handled, not orphaned) at the real WS call sites.
-  // Removal is always routed through killSeatAndConfirm now, running or not
-  // (see server/index.ts's own comment on this) -- deleting the call itself
-  // is what guard-underground-remove-dispatch-through-confirm below proves;
-  // killSeatAndConfirm's own "nothing running" branch is proven at its real
-  // call site by guard-confirm-kill-not-running-is-confirmed further down.
-  // P1 fix 2: removal is refused (agent left fully in place) unless the kill
-  // was actually confirmed -- reverting this is exactly the old orphan-risk
-  // bug, restored (finishRemoval runs regardless of `confirmed`).
-  // Defect 5 (P2): sandbox mode follows the role, not the kind -- an
-  // Underground coder needs write access, a reviewer stays read-only.
-  ["guard-codex-sandbox-follows-canwrite", "server/runner.ts", "--sandbox ${run.canWrite ? \"workspace-write\" : \"read-only\"}", "--sandbox read-only"],
-  // Round 2 defects: a name denylist alone is bypassable through a custom
-  // opencode model id, an opencode reviewer was always write-enabled, a
-  // kind-change to opencode could submit a stale/invalid effort, and the
-  // coder-vs-reviewer sandbox split was only proven at the helper level.
-  ["guard-opencode-reviewer-permission","server/runner-crew.ts","...(run.canWrite ? {} : { permission: { edit: \"deny\", bash: \"deny\" } }),","...({}),"],
-  ["guard-opencode-reviewer-env-wiring","server/runner.ts","...(run.cli === \"opencode\" && opencode ? { OPENCODE_CONFIG_CONTENT: opencode } : {})","...({})"],
-  // ---- roster/CLI-picker pack: permission follows the ROLE on every CLI kind
-  // (guard 1), the sidebar kind picker cascades a stale model/effort (guard
-  // 3), and spend is gone structurally (guard 6). See test/runner-*.test.ts's
-  // "canSeatWrite:"/"buildCommand: claude"/"applySeatKindUpdate:" tests. ----
-  // Guard 1, the most important guard in the pack: a claude seat used to run
-  // acceptEdits unconditionally with no role check -- dropping this ternary
-  // reverts exactly that P1 (a reviewer switched to claude silently writes).
-  ["guard-buildcommand-claude-role-check","server/runner.ts","const mode = run.canWrite ? CLAUDE_WRITE_FLAGS : run.crewTools ? CLAUDE_READ_ONLY_CREW_FLAGS : CLAUDE_READ_ONLY_FLAGS;","const mode = CLAUDE_WRITE_FLAGS;"],
-  ["guard-claude-readonly-no-prompts", "server/runner.ts",
-    'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";',
-    'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";'],
-  // Guard 4: discovery's call site never claims a real result on a parse
-  // failure -- proven directly by test/cli-discovery.test.ts's injected-fake
-  // "degrades to the fallback list, marked as such" tests, never just the
-  // pure parser in isolation (the parser can be correct while the caller
-  // still mislabels a null result as a live one).
-  ["guard-discovery-claude-effort-honest-fallback", "server/cli-discovery.ts",
-    'return parsed ? { values: parsed, fallback: false } : { values: [...fallback], fallback: true };\n}\n\nexport async function discoverOpencodeModels',
-    'return { values: parsed ?? [...fallback], fallback: false };\n}\n\nexport async function discoverOpencodeModels'],
-  ["guard-discovery-opencode-models-honest-fallback", "server/cli-discovery.ts",
-    'const parsed = out ? parseOpencodeModels(out) : null;\n  return parsed ? { values: parsed, fallback: false } : { values: [...fallback], fallback: true };\n}',
-    'const parsed = out ? parseOpencodeModels(out) : null;\n  return { values: parsed ?? [...fallback], fallback: false };\n}'],
-  // ---- stall detection (server/stall.ts): the pure decision, guard 2 ----
-  ["guard-stall-status-gate", "server/stall.ts", 'return status === "working" && currentByteCount === lastByteCount && elapsedMs >= thresholdMs;', 'return currentByteCount === lastByteCount && elapsedMs >= thresholdMs;'],
-  ["guard-stall-byte-equality", "server/stall.ts", 'currentByteCount === lastByteCount && elapsedMs >= thresholdMs;', 'elapsedMs >= thresholdMs;'],
-  ["guard-stall-threshold-gate", "server/stall.ts", 'elapsedMs >= thresholdMs;', 'elapsedMs >= 0;'],
-  // ---- auto-relaunch policy (server/stall.ts): guard 3, the money guard.
-  // Every refusal is its own mutation; each must turn test/stall.test.ts red
-  // on its own, independent of the other four. See test/round2-*.test.ts's
-  // "stall:" tests for the real runSeat/killSeat call-site proof (not just
-  // this pure function) -- especially "a second stall... escalates instead
-  // of relaunching again", which a mutation here would let loop. ----
-  ["guard-relaunch-enabled-check", "server/stall.ts", 'if (!input.autoRelaunchEnabled) return false;', ''],
-  ["guard-relaunch-already-check", "server/stall.ts", 'if (input.alreadyRelaunched) return false;', ''],
-  ["guard-relaunch-killed-check", "server/stall.ts", 'if (input.wasKilled) return false;', ''],
-  ["guard-relaunch-content-check", "server/stall.ts", 'if (input.logHasContent) return false;', ''],
-  // MONEY GUARD 4: a seat that can edit files must never be auto-relaunched,
-  // full stop -- see stall.ts's own top comment on why this can never be a
-  // byte threshold. Dropping this line must let a writable seat (sonny, or a
-  // seat switched to opencode via updateSeat in test/round2-*.test.ts, or the
-  // pure "seatCanWrite: true" cases in test/stall.test.ts) auto-relaunch,
-  // turning both suites red.
-  ["guard-relaunch-writable-check", "server/stall.ts", 'if (input.seatCanWrite) return false;', ''],
-  // Safety classification: Claude/opencode reviewers remain potentially writable.
-  // Both branches are also exercised through real WS launch + tickStall in round2-*.test.ts.
-  ["guard-canrunwrite-codex-always-true", "server/runner.ts", "  void run;\n  return true;", "  return run.cli === \"codex\" ? run.canWrite : true;"],
-  ["guard-canrunwrite-opencode-always-true", "server/runner.ts", "  void run;\n  return true;", "  return run.cli === \"opencode\" ? run.canWrite : true;"],
-  ["guard-canrunwrite-claude-always-true", "server/runner.ts", "  void run;\n  return true;", "  return run.cli === \"claude\" ? run.canWrite : true;"],
-  // ---- run history (server/history.ts): guard 4, pure listing/tail-reading
-  // over fabricated directory data (test/history.test.ts) plus real files on
-  // disk for the exit marker (test/runner-*.test.ts) ----
-  ["guard-history-sort-order", "server/history.ts", 'return entries.sort((a, b) => b.timestamp - a.timestamp);', 'return entries.sort((a, b) => a.timestamp - b.timestamp);'],
-  ["guard-history-seat-filter", "server/history.ts", 'if (!parsed || parsed.seatId !== seatId) continue;', 'if (!parsed) continue;'],
-  ["guard-history-stats-skip", "server/history.ts", '    if (!info) continue;', ''],
-  ["guard-readtail-start-calc", "server/history.ts", 'const start = Math.max(0, size - maxBytes);', 'const start = 0;'],
-  ["guard-readtail-truncated-flag", "server/history.ts", 'truncated: start > 0, totalBytes: size };', 'truncated: false, totalBytes: size };'],
-  ["guard-runner-exit-marker", "server/runner.ts", "      appendLog(formatExitMarker(status, code));\n", ""],
-  // ---- an unconfirmed kill must never be treated as a confirmed one (server/
-  // runner.ts's reportUnconfirmedKill, the P1 fix replacing the old
-  // forceIdle): the seat must stay tracked and killable, not silently
-  // dropped from `running` on a guess. Proven through the real runSeat +
-  // killSeat call site in test/runner-*.test.ts and test/round2-*.test.ts, never
-  // the helper in isolation. ----
-  ["guard-unconfirmed-kill-no-delete", "server/runner.ts", "  if (!ownsRun(runId, entry)) return;\n  entry.unconfirmed = true;", "  if (!ownsRun(runId, entry)) return;\n  running.delete(runId);\n  entry.unconfirmed = true;"],
-  // Item 3 (P1): any real output at all disqualifies an auto-relaunch, not
-  // just output above some old byte threshold -- see test/stall.test.ts's
-  // "MONEY GUARD 3" tests and test/round2-*.test.ts's call-site version.
-  ["guard-stall-content-threshold-zero", "server/stall.ts", "export const STALL_CONTENT_THRESHOLD_BYTES = 0;", "export const STALL_CONTENT_THRESHOLD_BYTES = 2048;"],
-  // Guard 1: a claude worker's command must carry the flags that make
-  // per-turn usage/cost/context/rate-limit numbers available at all.
-  ["guard-agentusage-stream-json-flags","server/runner.ts","${advisor} ${mode}${crew} --output-format stream-json --verbose`;","${advisor} ${mode}${crew}`;"],
-  // A real bug found by hand during manual verification: onUsage's full state
-  // broadcast must never fire before this event's own text has been appended
-  // to seatOutput, or the broadcast state is one line behind and a later
-  // status-only resync can wipe the line that was just shown (see the real
-  // "a result line's text lands in seatOutput before its usage broadcast
-  // fires" test in test/round2-*.test.ts).
-  ["guard-agentusage-text-before-usage-broadcast","server/runner.ts","      if (event.text) emit(event.text, outHider);\n      if (event.usage) cb.onUsage?.(run, event.usage);","      if (event.usage) cb.onUsage?.(run, event.usage);\n      if (event.text) emit(event.text, outHider);"],
-  // Guard 2 (call site): removing the onUsage/onRateLimit forwarding from the
-  // tee must turn the real runSeat-driven suite red, not just a pure-parser test.
-  ["guard-agentusage-onusage-claude-wiring", "server/runner.ts", "      if (event.usage) cb.onUsage?.(run, event.usage);\n", ""],
-  ["guard-agentusage-onusage-codex-wiring", "server/runner.ts", "for (const delta of deltas) cb.onUsage?.(run, delta);", "for (const delta of deltas) void delta;"],
-  ["guard-agentusage-onratelimit-wiring", "server/runner.ts", 'if (event.rateLimit) cb.onRateLimit?.(event.rateLimit);', ''],
-  // Guard 3: a JSON object split across two chunks must be parsed exactly
-  // once, from the reassembled whole line -- dropping the append silently
-  // truncates whatever was held from the previous chunk.
-  ["guard-agentusage-claude-buffer-append", "server/agent-usage.ts", 'state.buffer += chunk;\n  const events: AgentUsageEvent[] = [];', 'state.buffer = chunk;\n  const events: AgentUsageEvent[] = [];'],
-  // Guard 4: the degradation guarantee -- unparseable/unrecognised output must
-  // reach the pane verbatim, never silently disappear.
-  ["guard-agentusage-claude-passthrough-catch", "server/agent-usage.ts", '} catch {\n    return { text: rawLine + nl }; // degrade to raw text: never dropped, never silent (guard 4)\n  }', '} catch {\n    return { text: "" };\n  }'],
-  ["guard-agentusage-claude-flush-return", "server/agent-usage.ts", 'return [parseClaudeLine(state, rawLine, "")];', 'return [];'],
-  // Guard 5: thinking blocks and empty system/user noise stay quiet.
-  ["guard-agentusage-thinking-suppressed", "server/agent-usage.ts",
-    '    if (block.type === "text" && typeof block.text === "string") parts.push(block.text);\n    else if (block.type === "tool_use" && typeof block.name === "string") parts.push(`[tool: ${block.name}]`);',
-    '    if (block.type === "text" && typeof block.text === "string") parts.push(block.text);\n    else if (block.type === "tool_use" && typeof block.name === "string") parts.push(`[tool: ${block.name}]`);\n    else if (block.type === "thinking" && typeof block.thinking === "string") parts.push(block.thinking);'],
-  // guard-agentusage-system-suppressed and guard-agentusage-unknown-event-passthrough
-  // (below, in the P2 fix 3 block) together replace the old single "default
-  // case hides everything" guard, now that the default case is a known-noise
-  // allow-list rather than a blanket hide.
-  // Guard 6: codex's only instrument -- the thousands separator must be
-  // stripped, and the marker line must actually arm the flag that makes the
-  // following line count as the number.
-  ["guard-agentusage-codex-comma-strip", "server/agent-usage.ts", 'const digits = trimmedLine.replace(/,/g, "");', 'const digits = trimmedLine;'],
-  ["guard-agentusage-codex-pending-flag-set", "server/agent-usage.ts", 'if (trimmedLine === "tokens used") state.codexPendingTokens = true;', 'if (false) state.codexPendingTokens = true;'],
-  ["guard-agentusage-codex-flush-leftover", "server/agent-usage.ts", 'return state.codexHeldTokens ? [state.codexHeldTokens] : [];', 'return [];'],
-  // P2 fix 4: a codex match must be HELD, never surfaced the moment it's
-  // found mid-stream -- only flushCodexTokens (process close) may report a
-  // delta, so a later real footer always overwrites an earlier one printed
-  // as part of the agent's own prose.
-  ["guard-agentusage-codex-hold-not-immediate", "server/agent-usage.ts",
-    '    const delta = codexLineTokens(state, rawLine.trim());\n    if (delta) state.codexHeldTokens = delta;\n  }\n  return [];\n}',
-    '    const delta = codexLineTokens(state, rawLine.trim());\n    if (delta) return [delta];\n  }\n  return [];\n}'],
-  // P1 fix 1: codex's token footer is on stderr, not stdout -- the scan call
-  // site itself, both the live-stream one and the close-time tail one.
-  ["guard-agentusage-codex-stderr-scan-wiring", "server/runner.ts", 'if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, text));', ''],
-  ["guard-round2-codex-stderrtail-scan-wiring", "server/runner.ts", 'if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, stderrTail));', ''],
-  ["guard-agentusage-codex-flush-call-site", "server/runner.ts", 'if (codexState) emitCodexTokenDeltas(flushCodexTokens(codexState));', ''],
+  ...serverOtherCoreMutations,
   // Known-quiet lifecycle events (init, thinking_tokens, hook_started, a
   // successful hook_response) stay quiet; anything else still gets a short line.
   ["guard-round2-system-suppressed", "server/agent-usage.ts", 'if (isSilentSystemEvent(subtype, parsed)) return { text: "" };', 'if (false) return { text: "" };'],
@@ -328,7 +123,7 @@ export const serverOtherMutations = [
   ["guard-claude-readonly-disallowed-tools", "server/runner.ts",
     'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";',
     'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none";'],
-  ["guard-opencode-reviewer-deny-bash", "server/runner-crew.ts", "permission: { edit: \"deny\", bash: \"deny\" } }", "permission: { edit: \"deny\" } }"],
+  ["guard-opencode-reviewer-deny-bash", "server/runner-crew.ts", "permission: { edit: \"deny\", bash: \"deny\" },", "permission: { edit: \"deny\" },"],
   // Item 3, guard 4: the cascade must produce a model that is actually valid
   // for the TARGET kind -- opencode requires a "provider_id/model_id" shape,
   // not just a safe character set.
@@ -364,19 +159,16 @@ export const serverOtherMutations = [
   // ---- Atlas knows the crew and can put them to work: leader-tools.ts's
   // pure crew snapshot, and index.ts's leaderLaunchSeat wrapper -- the ONE
   // path Atlas's own launch_seat MCP tool is allowed to reach. ----
-  ["guard-leader-crew-live-status", "server/leader-tools.ts", "status: deps.statusOf(seat.seatKey),", "status: \"idle\","],
-  ["guard-crew-status-marks-leader-not-runnable","server/leader-tools.ts","runnable: (!seat.isLeader || deps.leaderTakesJobs === true) && seat.slot !== deps.callerSlot","runnable: seat.slot !== deps.callerSlot"],
   // ---- the roster must never go stale mid-conversation (guard from the
   // "Atlas knows the crew" brief): a launch that runs against a seat whose
   // config changed since the leader's last get_crew_status call says so. ----
-  ["guard-launch-notes-config-drift", "server/leader-tools.ts", "const changed = live && before && (before.model !== live.model || before.effort !== live.effort || before.cli !== live.cli);", "const changed = false;"],
   ["guard-kill-unconfirmed-setter", "server/runner.ts", "entry.unconfirmed = true;", ""],
   ["guard-kill-unconfirmed-callback", "server/runner.ts", "  entry.cb.onUnconfirmedKill?.(entry.run, entry.proc.pid);\n", ""],
   ["guard-packc-test-cli-runner-env-gate", "server/test-cli-runner.ts", 'if (env.CC_TEST_FAKE_CLI !== "1") return undefined;', 'if (false) return undefined;'],
   ["guard-packc-r1-git-no-optional-locks","server/changes.ts","\"--no-optional-locks\", \"-C\", folder, \"status\", \"--porcelain=v1\", \"-z\", \"-b\", \"--no-renames\"","\"-C\", folder, \"status\", \"--porcelain=v1\", \"-z\", \"-b\", \"--no-renames\""],
   ["guard-packc-r1-requests-pending-cap", "server/requests.ts", '.length >= MAX_PENDING_PER_SOURCE) {', '.length >= Infinity) {'],
   ["guard-packc-r1-requests-resolved-trim", "server/requests.ts", 'Math.max(0, resolved.length - MAX_RESOLVED_KEPT)', '0'],
-  ["guard-packc-r7-launch-tool-awaits", "server/leader-tools.ts", 'const result = await deps.launch(slot, brief);', 'const result = deps.launch(slot, brief) as LaunchResult;'],
+  ["guard-packc-r7-launch-tool-awaits", "server/leader-tools.ts", 'const result = await found.handler(parsed.data);', 'const result = found.handler(parsed.data) as unknown as ToolContent;'],
   ["guard-topbar-srv-sound-update-clears-on-notifications-off","server/config-prefs.ts","    return { ok: true, prefs: { ...prefs, [key]: value } };\n  }\n  if (key === \"rightPanelWidth\") {","    return { ok: true, prefs: { ...prefs, [key]: value, ...(key === \"notificationsEnabled\" && !value ? { bellEnabled: false } : {}) } };\n  }\n  if (key === \"rightPanelWidth\") {"],
   ["guard-topbar-srv-sound-refused-when-notifications-off","server/config-prefs.ts","    return { ok: true, prefs: { ...prefs, [key]: value } };\n  }\n  if (key === \"rightPanelWidth\") {","    if (key === \"bellEnabled\" && value && !prefs.notificationsEnabled) return { ok: false, error: \"cannot enable the bell while notifications are off\" };\n    return { ok: true, prefs: { ...prefs, [key]: value } };\n  }\n  if (key === \"rightPanelWidth\") {"],
   ["guard-topbar-srv-sound-read-clamp","server/config-prefs.ts","bellEnabled: typeof raw.bellEnabled === \"boolean\" ? raw.bellEnabled : DEFAULT_CLIENT_PREFS.bellEnabled,","bellEnabled: raw.notificationsEnabled !== false && typeof raw.bellEnabled === \"boolean\" ? raw.bellEnabled : DEFAULT_CLIENT_PREFS.bellEnabled,"],
@@ -415,10 +207,10 @@ export const serverOtherMutations = [
   ["guard-pack2-damaged-chat-opens-empty","server/chat-store.ts","    catch { return { messages: [], revision: 0, savedRevision: 0 }; }","    catch (err) { throw err; }"],
   ["guard-pack2-damaged-chat-clear-sets-file-aside","server/chat-store.ts","    keepBadCopy(path);\n    unlinkSync(path);\n","    return false;\n"],
   ["guard-pack2-r1-runner-unchecked-cleanup-says-so", "server/runner.ts", "if (killed === null) return unchecked();\n", "if (killed === null) return;\n"],
-  ["guard-runner-stderr-tail-logged","server/runner.ts","    if (shown) { appendLog(shown); cb.onOutput(run, shown); }","    if (shown) { cb.onOutput(run, shown); }"],
+  ["guard-runner-stderr-tail-logged","server/runner.ts","    if (text) { appendLog(text); cb.onOutput(run, text); }","    if (text) { cb.onOutput(run, text); }"],
   ["guard-dismissed-runs-201-retained","server/config-prefs.ts","return { ok: true, prefs: { ...prefs, dismissedRuns: [...value] } };","return { ok: true, prefs: { ...prefs, dismissedRuns: value.length === 201 ? [] : [...value] } };"],
-  ["guard-runner-stdouttail-log-and-output","server/runner.ts","      else emit(stdoutTail, outHider);\n","      else { void stdoutTail; }\n"],
-  ["guard-runner-stderrtail-log-and-output","server/runner.ts","      emit(stderrTail, errHider);\n      if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, stderrTail));","      if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, stderrTail));"],
+  ["guard-runner-stdouttail-log-and-output","server/runner.ts","      else emit(stdoutTail);\n","      else { void stdoutTail; }\n"],
+  ["guard-runner-stderrtail-log-and-output","server/runner.ts","      emit(stderrTail);\n      if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, stderrTail));","      if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, stderrTail));"],
   ["guard-killrun-no-pid-refused", "server/runner.ts", "if (!entry || !entry.proc.pid) return false;", "if (!entry) return false;\n  if (!entry.proc.pid) return true;"],
   ["disk-seat-id-control-char","server/process-types.ts","    if (code < 0x20 || code === 0x7f) return false;\n",""],
   ["seat-id", "server/config.ts", "if (!isObject(project) || !validSlug(project.id) ||", "if (!isObject(project) ||"],
@@ -433,8 +225,6 @@ export const serverOtherMutations = [
   ["guard-pack6-codex-sweep-failure-callback", "server/leader-codex.ts", "trackLeaderChild(child, watchesLeaderChild(deps.spawnFn), () => unconfirmedKill());", "trackLeaderChild(child, watchesLeaderChild(deps.spawnFn));"],
   ["guard-pack6-r3-codex-kill-notice-once", "server/leader-codex.ts", "if (!said) cb.onNotice?.(", "cb.onNotice?.("],
   // Pack 8 round 1: each `to` reintroduces the reviewed bug. -- export-public.test.ts, workspaces.test.ts ----
-  ["guard-pack8-r1-migrate-slash-svg","server/config.ts"," || seat.pic === `/avatars/${LEGACY_LEADER}.svg`",""],
-  ["guard-pack8-r1-migrate-slash-photo","server/config.ts",String.raw`seat.pic.match(/^\/?avatars\/`,String.raw`seat.pic.match(/^avatars\/`],
   ["guard-pack9-own-id-excluded","server/folder-activity.ts","  if (own.ids.has(seen.sessionKey)) return true;\n",""],
   ["guard-pack9-own-window-folder","server/folder-activity.ts","seen.touches(window.folder)) return true;","true) return true;"],
   ["guard-pack9-own-window-end","server/folder-activity.ts","&& at <= end + OWN_SLACK_MS;","; "],
@@ -495,7 +285,7 @@ export const serverOtherMutations = [
   ["guard-pack14-codex-dynamic-tool-shown","server/leader-codex.ts","      case \"dynamicToolCall\": return null;\n","      case \"dynamicToolCall\": return make(ACTIVITY.tool);\n"],
   ["guard-pack14-codex-reset-at-send","server/leader-codex.ts","    activity.reset(); paragraphs.reset();\n","    paragraphs.reset();\n"],
   ["guard-pack14-codex-quiet-on-answer","server/leader-codex.ts","    else if (type === \"agentMessage\") activity.quiet();\n","    else if (type === \"agentMessage\") void 0;\n"],
-  ["guard-pack15-sweep-wait-covers-list-and-kill","server/runner.ts","const SWEEP_WAIT_MS = LIST_TIMEOUT_MS + KILL_TIMEOUT_MS + 1000;","const SWEEP_WAIT_MS = 4000;"],
+  ["guard-pack15-sweep-wait-covers-list-and-kill","server/runner/lifecycle.ts","const SWEEP_WAIT_MS = LIST_TIMEOUT_MS + KILL_TIMEOUT_MS + 1000;","const SWEEP_WAIT_MS = 4000;"],
   ["guard-pack15-sweep-wait-call-site","server/runner.ts","setTimeout(resolveBound, SWEEP_WAIT_MS)","setTimeout(resolveBound, 4000)"],
   ["guard-pack15-unreadable-list-says-unchecked","server/runner.ts","if (killed === null) return unchecked();",""],
   ["guard-pack17-adapter-mode-bypass-only","server/leader-acp.ts","mode === \"bypass\"),","true),"],
@@ -522,79 +312,31 @@ export const serverOtherMutations = [
   ["guard-pack17-default-spawn-untested","server/leader-acp.ts","(deps.spawnFn ?? spawnAcpChild)(deps.cli.program","(deps.spawnFn ?? ((): never => { throw new Error(\"mutated\"); }))(deps.cli.program"],
   ["guard-pack17-token-redacted-per-chunk","server/leader-acp.ts","return out + redact(raw.slice(pos, upto));","return out + raw.slice(pos, upto);"],
   ["guard-pack17-break-kept","server/leader-acp.ts","gaps = gaps.filter((g) => g.at > cut).map((g) => ({ at: g.at - cut, gap: g.gap }));","gaps = [];"],
-  ["p18-r1-f3", "server/crew-setup.ts", "    refuseRemovingBusySeats(message.tabId, location.tab, setup.crew);\n    // The live leader", "    // The live leader"],
   ["p18-r1-f4", "server/runner.ts", "    writeFileSync(briefPath, prompt, \"utf8\");\n    leader = createAcpLeader", "    leader = createAcpLeader"],
-  ["p18-pair-index","server/process-core.ts","return step.pairs[(round - 1) % step.pairs.length];","return step.pairs[0];"],
-  ["p18-select-fixer-ignored","server/process-core.ts","return state.selectedFixer && pair.fixers.includes(state.selectedFixer) ? state.selectedFixer : pair.fixers[0];","return pair.fixers[0];"],
-  ["p18-default-template","server/setup-templates.ts","kind === \"mkt\" ? \"marketing\" : \"our-process\"","kind === \"mkt\" ? \"marketing\" : \"duo\""],
-  ["p18-set-initial-fixer","server/process-core.ts","    selectedFixer: initialFixer(setup.steps),","    selectedFixer: null,"],
-  ["p18-set-select-fixer","server/process-engine.ts","  next.selectedFixer = seatSlotId;","  void 0;"],
-  ["p18-one-leader","server/setup.ts","if (leaders !== 1) throw new Error(\"a crew needs exactly one leader\");","if (false) throw new Error(\"a crew needs exactly one leader\");"],
-  ["p18-migrate-keep-model","server/config-migrate.ts","cli: old.cli, model: old.model, effort: old.effort","cli: old.cli, model: seat.model, effort: old.effort"],
-  ["p18-migrate-advisor","server/config-migrate.ts","if (seat.isLeader && isObject(tab.advisor) && old.cli === \"claude\") next.advisor = tab.advisor.model;","if (false) next.advisor = tab.advisor.model;"],
-  ["p18-migrate-backup","server/config.ts","  keepConfigBackups(target);","  void 0;"],
   ["p18-fallback-sonnet","server/config.ts","  { value: \"claude-sonnet-5-5[1m]\", displayName: \"Sonnet 5.5 (1M context)\", supportsEffort: true },",""],
-  ["p18-keep-template-models","server/config.ts","  const models = (kind: SeatKind) => [...SAVED_MODELS[kind], ...fromTemplates.models[kind]];","  const models = (kind: SeatKind) => [...SAVED_MODELS[kind]];"],
   ["p18-sweep-control","server/process-types.ts","// CLI-CAPABILITIES-TABLE (the one place","// CLI table (the one place"],
-  ["p18-acp-orch-write","server/setup.ts","if (isAcpCli(raw.cli) && !raw.canWrite) throw","if (false) throw"],
-  ["p18-crew-tools-cap","server/setup.ts","if (!caps.crewTools) throw","if (false) throw"],
-  ["p18-set-migrate-pic","server/config-migrate.ts","...(old.pic !== undefined ? { pic: old.pic } : {})",""],
-  ["p18-set-migrate-setupname","server/config-migrate.ts","return { ...rest, setupName: base.name, crew, lookPause: base.lookPause, steps: base.steps };","return { ...rest, setupName: \"\", crew, lookPause: base.lookPause, steps: base.steps };"],
-  ["p18-set-adopt-setups","server/config.ts","...setups.map((setup) => setup.crew)]","...[]]"],
   ["p18-gate-caps","server/process-types.ts","label: cli.slice(4), advisor: false, readOnlyEnforced: false","label: cli.slice(4), advisor: false, readOnlyEnforced: true"],
-  ["p18-crew-steps","server/leader-tools.ts","steps: deps.steps?.() ?? [], process: deps.processView?.() ?? null })","steps: [], process: deps.processView?.() ?? null })"],
-  ["p18-crew-role","server/leader-tools.ts","name: seat.name, role: seat.role, cli: seat.cli,","name: seat.name, cli: seat.cli,"],
-  ["p18-use-carry","server/crew-setup.ts","name: was.name, ...(was.pic ? { pic: was.pic } : {})","name: seat.name, ...(was.pic ? { pic: was.pic } : {})"],
-  ["p18-advance-waits-runs","server/process-engine.ts","slotId !== \"user\" && slotId !== callerSlot && runIsWorkingForSeat(next, slotId)","false"],
-  ["p18-set-commit-setupname","server/crew-setup.ts","  if (meta.setupName) tab.setupName = meta.setupName;",""],
-  ["p18-set-commit-kind","server/crew-setup.ts","  if (meta.kind) tab.kind = meta.kind;",""],
-  ["p18-set-commit-restart","server/crew-setup.ts","  if (restart) { runtime.state = switchProcess(runtime.state, setup); runtime.stalledRuns.clear(); }","  if (false) { runtime.state = switchProcess(runtime.state, setup); runtime.stalledRuns.clear(); }"],
-  ["p18-set-save-setups","server/crew-setup.ts","deps.setSavedSetups(next); adoptSavedValues(deps.workspaces(), next);","adoptSavedValues(deps.workspaces(), next);"],
-  ["p18-set-remove-setups","server/crew-setup.ts","deps.setSavedSetups(remaining); adoptSavedValues(deps.workspaces(), remaining);","adoptSavedValues(deps.workspaces(), remaining);"],
   ["p18-bridge-keeps-alive","server/leader-bridge.ts","    try { entry.onCall?.(); } catch { /* noting a call never changes its answer */ }\n","\n"],
   ["p18-bridge-per-run","server/leader-bridge.ts","    entries.set(key, entry);","    entries.clear(); entries.set(key, entry);"],
-  ["p18-orchestrator-not-a-worker","server/process-core.ts"," && !findSeat(state, run.seatSlotId)?.orchestrates);",");"],
   ["p18-runner-advisor-flag","server/runner.ts","--effort ${run.effort}${advisor} ${mode}","--effort ${run.effort} ${mode}"],
   ["p18-runner-advisor-check","server/runner.ts","run.advisor !== undefined && !isValidModel(\"claude\", run.advisor)","false"],
   ["p18-acp-worker-done","server/runner.ts","entry.outcome ??= \"done\"; leader?.stop();","leader?.stop();"],
   ["p18-acp-worker-log","server/runner.ts","const note = (text: string): void => { appendLog(text); cb.onOutput(run, text); };","const note = (text: string): void => { cb.onOutput(run, text); };"],
   ["p18-acp-worker-noshell","server/runner.ts","(spawnFn as unknown as AcpSpawn)(program, args, options)","(spawnFn as any)([program, ...args].join(\" \"), { ...options, shell: true })"],
   ["p18-acp-worker-readonly","server/runner.ts","denyPermissions: !run.canWrite","denyPermissions: false"],
-  ["p18-claude-mcp-flag","server/runner.ts","--mcp-config \"%${MCP_VAR}%\" --allowedTools","--allowedTools"],
-  ["p18-claude-orch-mode","server/runner.ts","run.crewTools ? CLAUDE_READ_ONLY_CREW_FLAGS : CLAUDE_READ_ONLY_FLAGS","run.crewTools ? CLAUDE_READ_ONLY_FLAGS : CLAUDE_READ_ONLY_CREW_FLAGS"],
-  ["p18-mcp-file-deleted","server/runner.ts","    removeMcp();\n    try { flush(); }","    try { flush(); }"],
-  ["p18-mcp-file-deleted-released","server/runner.ts","      removeMcp();\n      void watch?.sweep","      void watch?.sweep"],
-  ["p18-codex-mcp-flag","server/runner.ts"," -c mcp_servers.${CREW_SERVER}.default_tools_approval_mode=approve",""],
-  ["p18-token-not-argv","server/runner.ts",".bearer_token_env_var=${CREW_TOKEN_VAR}",".bearer_token_env_var=${CREW_TOKEN_VAR} -c tab_token=${run.crewTools.token}"],
-  ["p18-opencode-merge","server/runner-crew.ts","...(run.canWrite ? {} : { permission: { edit: \"deny\", bash: \"deny\" } }),",""],
-  ["p18-worker-token-redacted","server/runner.ts","const clean = (held + text).split(secret).join(HIDDEN);","const clean = held + text;"],
   ["p18-acp-orch-nohttp","server/leader-acp.ts","if (deps.bridge && deps.needHttp && !http) throw","if (false) throw"],
-  ["p18-no-tools-for-workers","server/runner.ts","const crew = (run.crewTools ?","const crew = (true ?"],
-  ["p18-int-backup-first-write","server/config.ts","  keepConfigBackups(target);","  void target;"],
   ["p18-int-acp-done","server/runner.ts","entry.outcome ??= \"done\"; leader?.stop();","leader?.stop();"],
-  ["rw-fill-leader","server/setup.ts","const review = reviewers.length ? reviewers : [standIn(finals)];","const review = reviewers.length ? reviewers : build;"],
-  ["rw-fixer-falls-to-coder","server/setup.ts","const fix = fixers.length ? fixers : build;","const fix = fixers.length ? fixers : [lead.slot];"],
-  ["rw-pair-cycle","server/setup.ts","({ reviewer: review[i % review.length], fixers: [fix[i % fix.length]] })","({ reviewer: review[0], fixers: [fix[i % fix.length]] })"],
-  ["rw-planner-owns-gate","server/setup.ts","const planner = withRole(\"Planner\")[0] ?? lead.slot;","const planner = lead.slot;"],
-  ["rw-no-look-round-start","server/process-engine.ts","next.approval = { state: \"approved\", reviewWaits: true };","void next;"],
-  ["rw-orch-planner-only","server/setup.ts","if (role !== \"Planner\") throw new Error(`seat ${slot}: only a Planner can run the process`);","void role;"],
-  ["rw-one-planner","server/setup.ts","if (role === \"Planner\" && ++planners > 1) throw new Error(\"a crew has at most one Planner\");","void planners;"],
-  ["rw-migrate-role-map","server/config-migrate.ts","if (pairs.some((pair) => pair.reviewer === seat.slot)) return \"Reviewer\";","if (pairs.some((pair) => pair.reviewer === seat.slot)) return \"Helper\";"],
-  ["rw-migrate-backup","server/config-migrate.ts","keepBackup(target, \"workspaces.before-roles.json\", (data) => tabsOf(data).some(","keepBackup(target, \"workspaces.before-roles.json\", (data) => false && tabsOf(data).some("],
-  ["rw-role-once","server/setup.ts","return !instruction || prompt.startsWith(instruction) ? prompt","return !instruction ? prompt"],
-  ["rw-template-our-process","server/setup-templates.ts","seat(\"fixer2\", \"Nova\", \"Fixer\", \"claude\", SONNET, \"medium\", true),","seat(\"fixer2\", \"Nova\", \"Helper\", \"claude\", SONNET, \"medium\", true),"],
-  ["p18-lj-runnable", "server/leader-tools.ts", "(!seat.isLeader || deps.leaderTakesJobs === true) && seat.slot", "!seat.isLeader && seat.slot"],
-  ["ow-review-falls-to-leader", "server/setup.ts", "const review = reviewers.length ? reviewers : [standIn(finals)];", "const review = reviewers.length ? reviewers : [lead.slot];"],
-  ["ow-final-falls-to-leader", "server/setup.ts", "const final = finals.length ? finals : [standIn(reviewers)];", "const final = finals.length ? finals : [lead.slot];"],
-  ["ow-refuse-use", "server/crew-setup.ts", "const setup = checkNewCrew({ crew: carrySeats(location.tab.crew, source.crew), lookPause: source.lookPause });", "const setup = validateSetup({ crew: carrySeats(location.tab.crew, source.crew), lookPause: source.lookPause });"],
-  ["ow-refuse-save", "server/crew-setup.ts", "if (!sameSteps) checkNewCrew(setup);", ""],
-  ["ow-refuse-seat", "server/crew-setup.ts", "if (changed) checkNewCrew({ crew, lookPause: tab.lookPause });", ""],
-  ["ow-planner-reports-own-run", "server/process-engine.ts", "(reviewer === callerSlot || !runIsWorkingForSeat(state, reviewer))", "!runIsWorkingForSeat(state, reviewer)"],
-  ["ow-review-caller-only", "server/process-engine.ts", "reviewer === callerSlot || !runIsWorkingForSeat(state, reviewer)", "seat.orchestrates === true || !runIsWorkingForSeat(state, reviewer)"],
-  ["ow-refuse-save-as", "server/crew-setup.ts", "    checkNewCrew({ crew: location.tab.crew, lookPause: location.tab.lookPause });\n", ""],
-  ["ow-migrate-lookpause-return", "server/config-migrate.ts", "  if (typeof entry.lookPause === \"boolean\") return null;\n", ""],
-  ["ow-seat-unchanged-refused", "server/crew-setup.ts", "if (changed) checkNewCrew({ crew, lookPause: tab.lookPause });", "checkNewCrew({ crew, lookPause: tab.lookPause });"],
-  ["ow-save-unchanged-refused", "server/crew-setup.ts", "if (!sameSteps) checkNewCrew(setup);", "checkNewCrew(setup);"],
-  ["ow-review-any-caller", "server/process-engine.ts", "reviewer === callerSlot", "callerSlot !== undefined"],
-  ["ow-planner-standin-first", "server/setup.ts", 'withRole("Planner")[0] ?? otherReviewRole[0]', 'otherReviewRole[0] ?? withRole("Planner")[0]'],
+  ["fc-installed-true", "server/fixed-crew/assignment.ts", 'cli.installed === true', 'cli.installed !== false'],
+  ["fc-preserve-user", "server/fixed-crew/assignment.ts", 'if (current.source === "user") return current;', 'if (false) return current;'],
+  ["fc-empty-stays-null", "server/fixed-crew/assignment.ts", 'if (available.length === 0) return { assignment: null, source: "auto" };', 'if (available.length === 0) return automatic({ ...seat.preferred });'],
+  ["fc-single-cli", "server/fixed-crew/assignment.ts", 'if (available.length === 1) return automatic(singleAssignment(seat, available[0]));', 'if (available.length === 1) return automatic(null);'],
+  ["fc-preferred-choice", "server/fixed-crew/assignment.ts", 'models.includes(seat.preferred.model) ? seat.preferred.model', 'false ? seat.preferred.model'],
+  ["fc-assignment-setter", "server/fixed-crew/assignment.ts", 'next[seat.slot] = resolved;', 'next[seat.slot] = current;'],
+  ["fc-null-run-refused", "server/fixed-crew/assignment.ts", 'if (!preference.assignment) throw new Error("Choose a model in Settings before running this seat.");', 'if (false) throw new Error("Choose a model in Settings before running this seat.");'],
+  ["fc-codex-xhigh", "server/config.ts", 'codex: ["low", "medium", "high", "xhigh", "max"],', 'codex: ["low", "medium", "high", "max"],'],
+  ["fc-review-company", "server/fixed-crew/assignment.ts", 'const fallback = differentCompany ?? candidates[0];', 'const fallback = candidates[0];'],
+  ["fc-reviewer-alternation", "server/fixed-crew/assignment.ts", 'if (preferred && writerCompany && assignmentCompany(preferred) === writerCompany && differentCompany) {', 'if (false) {'],
+  ["fc-model-default-order", "server/fixed-crew/assignment.ts", 'defaults.find((candidate) => models.includes(candidate)) ?? models[0]', 'models[0]'],
+  ["fc-acp-last", "server/fixed-crew/assignment.ts", 'return isAcpCli(id) ? 3 :', 'return isAcpCli(id) ? -1 :'],
+  ["fc-keep-preferred-cli", "server/fixed-crew/assignment.ts", 'const preferredCli = available.find((cli) => cli.id === seat.preferred.cli);', 'const preferredCli = available.find((cli) => cli.id === seat.preferred.cli && modelChoices(cli, catalogue).includes(seat.preferred.model) && effortChoices(cli).includes(seat.preferred.effort));'],
 ];

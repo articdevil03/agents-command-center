@@ -2,16 +2,41 @@
   const { fail, check, waitFor, waitForServerReply, text, $, requireElement, toastVisible, waitToastVisible, installTenSecondClock, latestTab, clickTab, openTabMenu, clickMenuItem, showChat, openSeatCard, openProjectMenu, pickProject, pressEscape } = window.__ccHarness;
   const runReal = async () => {
     await waitFor(() => window.__latestState?.type === "state", "server state");
-    const targets = ["#ptabs", "#ptabs .ptab", "#tabs", "#tabs [role=tab]", "#crew", "#crew .seat", "#statusBtn", "#pipe", "#pipe .step", "#sline", "#view", "#composer", "#rail", "#stage", "#side", "#feed", "#usage", "#lowerBody"];
+    const settle = () => new Promise((done) => setTimeout(done, 60));
+    const sentSince = (start, type) => window.__sent.slice(start).filter((message) => message.type === type);
+    const pickedFolder = new URLSearchParams(location.search).get("folder");
+    // The shared model menu needs the CLIs the server found: ask for them once, before any picker opens.
+    window.__socket.send(JSON.stringify({ type: "refreshSettings" }));
+    await waitFor(() => ["claude", "codex", "opencode"].every((cli) => window.__latestState.settings?.tools?.[cli]?.installed === true && window.__latestState.clis?.find((item) => item.id === cli)?.installed === true), "CLI probes");
+    // A creation draft's pick: the position's chip opens the shared model menu, a model of the named CLI is chosen, and the menu is closed again.
+    const draftPick = async (which, slot, cli) => {
+      requireElement(`#${which === "tab" ? "tCrew" : "pCrew"} [data-fc-new-model="${CSS.escape(slot)}"]`).click();
+      await waitFor(() => !$("pop").hidden && Boolean(document.querySelector(`#pop [data-model][data-cli="${cli}"]`)), `${slot} model menu`);
+      const option = requireElement(`#pop [data-model][data-cli="${cli}"]`), pick = { cli, model: option.dataset.model };
+      option.click(); pressEscape();
+      await waitFor(() => $("pop").hidden && !$(which === "tab" ? "modal" : "projModal").hidden, `${slot} menu closed, creation dialog still open`);
+      return pick;
+    };
+    const holdsPick = (preference, pick) => preference?.source === "user" && preference.assignment?.cli === pick.cli && preference.assignment?.model === pick.model;
+    const targets = ["#ptabs", "#ptabs .ptab", "#tabs", "#tabs [role=tab]", "#crew", "#crew .seat", "#statusBtn", "#sline", "#view", "#composer", "#rail", "#stage", "#side", "#feed", "#usage", "#lowerBody"];
+    const retiredMounts = ["#pipe", "#pipe .step", "#tplBox", "#kindBox", "#pKind", "#pTpl", "#setupPop"]; // the old step bar and the kind and template pickers no longer exist
     const missing = targets.filter((selector) => !document.querySelector(selector));
+    const stillThere = retiredMounts.filter((selector) => document.querySelector(selector));
     const packC = ["#inboxBtn", "#inboxPop", "#permBtn", "#permPop", '[data-l="changes"]', '[data-l="notes"]'];
     const missingPackC = packC.filter((selector) => !document.querySelector(selector));
     check("Pack C shell controls render", missingPackC.length === 0, { found: packC.filter((selector) => document.querySelector(selector)), missing: missingPackC });
     const state = window.__latestState;
     const entry = state.projects.flatMap((project) => project.tabs.map((tab) => ({ project, tab }))).find(({ tab }) => tab.id === state.selectedTabId);
-    const countsMatch = Boolean(entry && document.querySelectorAll("#crew .seat").length === entry.tab.crew.length && document.querySelectorAll("#pipe .step").length === entry.tab.derived.stepBar.length);
-    check("server state renders every shell target, project, tab, crew and step", missing.length === 0 && countsMatch, {
-      found: targets.filter((selector) => document.querySelector(selector)), missing, projects: state.projects.map((project) => project.name), tabs: entry?.project.tabs.map((tab) => tab.name), crew: document.querySelectorAll("#crew .seat").length, expectedCrew: entry?.tab.crew.length, steps: [...document.querySelectorAll("#pipe .step")].map((node) => node.textContent.trim()), expectedSteps: entry?.tab.derived.stepBar.length,
+    const slots = (state.fixedCrewDefinitions ?? []).map((item) => item.slot);
+    const preferenceSlots = Object.keys(entry?.tab.fixedCrew?.preferences ?? {});
+    const assigned = preferenceSlots.filter((slot) => entry.tab.fixedCrew.preferences[slot].assignment);
+    const crewMatches = Boolean(entry && document.querySelectorAll("#crew .seat").length === entry.tab.crew.length && entry.tab.crew.length === assigned.length && assigned.length > 0 && entry.tab.crew.every((seat) => seat.seatKey === `${entry.tab.id}.${seat.slot}`) && entry.tab.processState?.tabId === entry.tab.id);
+    $("setBtn").click();
+    await waitFor(() => !$("setModal").hidden && Boolean(document.querySelector(`#setBody section.fc[data-fc-tab="${CSS.escape(entry.tab.id)}"] [data-fc-row]`)), "fixed Settings positions of the open tab");
+    const settingsRows = [...document.querySelectorAll(`#setBody section.fc[data-fc-tab="${CSS.escape(entry.tab.id)}"] [data-fc-row]`)].map((row) => row.dataset.fcRow);
+    pressEscape(); await waitFor(() => $("setModal").hidden, "Settings closes");
+    check("server state renders the shell, the open tab's own crew and all 18 fixed positions in Settings, and no retired mount", missing.length === 0 && stillThere.length === 0 && crewMatches && slots.length === 18 && new Set(slots).size === 18 && preferenceSlots.length === 18 && JSON.stringify([...settingsRows].sort()) === JSON.stringify([...slots].sort()), {
+      found: targets.filter((selector) => document.querySelector(selector)), missing, stillThere, projects: state.projects.map((project) => project.name), tabs: entry?.project.tabs.map((tab) => tab.name), crew: document.querySelectorAll("#crew .seat").length, expectedCrew: entry?.tab.crew.length, assigned, slots: slots.length, preferenceSlots: preferenceSlots.length, settingsRows,
     });
     const otherTab = entry.project.tabs.find((tab) => tab.id !== entry.tab.id);
     if (otherTab) {
@@ -35,32 +60,32 @@
     $("addtab").click();
     requireElement("#modal[aria-hidden=false]");
     $("tName").value = "Audit Tab Undo";
-    const devDefaultTemplate = requireElement('#tplBox [aria-checked="true"]').dataset.template;
-    requireElement('#kindBox [data-kind="mkt"]').click();
-    const mktTemplate = requireElement('#tplBox [aria-checked="true"]').dataset.template;
+    const tabPick = await draftPick("tab", "coder", "codex");
     $("browse").click();
-    await waitFor(() => document.querySelector("#tDir")?.textContent.includes(new URLSearchParams(location.search).get("folder")), "folder picker result");
-    const addTabStart = window.__received.length;
+    await waitFor(() => document.querySelector("#tDir")?.textContent.includes(pickedFolder), "folder picker result");
+    const addTabStart = window.__received.length, addTabSent = window.__sent.length;
     $("createTab").click();
     await waitForServerReply(addTabStart, "add-tab server response", () => window.__latestState.projects.flatMap((project) => project.tabs).some((tab) => tab.name === "Audit Tab Undo"));
     let added = window.__latestState.projects.flatMap((project) => project.tabs).find((tab) => tab.name === "Audit Tab Undo");
-    const addTabTemplates = window.__latestState.templates ?? [];
-    check("add-tab dialog creates the selected kind and template on the server, and a new Development tab starts with Our process", Boolean(devDefaultTemplate === "our-process" && mktTemplate && mktTemplate !== "our-process" && addTabTemplates.find((item) => item.id === mktTemplate)?.kind === "mkt" && added && added.kind === "mkt" && added.setupName === addTabTemplates.find((item) => item.id === mktTemplate)?.name && window.__sent.some((message) => message.type === "addTab" && message.name === "Audit Tab Undo" && message.template === mktTemplate && message.kind === "mkt") && added.folder === new URLSearchParams(location.search).get("folder")), { devDefaultTemplate, mktTemplate, found: Boolean(added), id: added?.id ?? "missing", kind: added?.kind ?? "missing", setupName: added?.setupName ?? "missing", folder: added?.folder ?? "missing", request: window.__sent.slice(addTabStart).at(-1), response: window.__received.slice(addTabStart).at(-1) });
+    const addTabRequests = sentSince(addTabSent, "addTab"), addTabRequest = addTabRequests[0];
+    await waitFor(() => $("modal").hidden, "add-tab dialog settles closed");
+    check("add-tab dialog creates through the fixed crew: one request with the name, folder, projectOnly, fixedCrewVersion, the picked crewChoices and autoAssign, no kind or template, and the server's tab holds the pick", Boolean(addTabRequests.length === 1 && addTabRequest.name === "Audit Tab Undo" && addTabRequest.folder === pickedFolder && addTabRequest.projectOnly === true && addTabRequest.fixedCrewVersion === 1 && addTabRequest.autoAssign === false && JSON.stringify(Object.keys(addTabRequest.crewChoices)) === '["coder"]' && addTabRequest.crewChoices.coder.cli === tabPick.cli && addTabRequest.crewChoices.coder.model === tabPick.model && !("kind" in addTabRequest) && !("template" in addTabRequest) && added && added.folder === pickedFolder && added.fixedCrew?.version === 1 && holdsPick(added.fixedCrew.preferences.coder, tabPick) && !added.fixedCrew.preferences.leader.assignment && $("modal").hidden), { pick: tabPick, count: addTabRequests.length, found: Boolean(added), id: added?.id ?? "missing", folder: added?.folder ?? "missing", coder: added?.fixedCrew?.preferences?.coder ?? "missing", request: addTabRequest, response: window.__received.slice(addTabStart).at(-1) });
     $("addProj").click();
     requireElement("#projModal[aria-hidden=false]");
     $("pName").value = "Audit Project B1";
     $("pName").dispatchEvent(new Event("input", { bubbles: true }));
-    const projectKindDefault = requireElement('#pKind [aria-checked="true"]').dataset.kind;
-    requireElement('#pKind [data-kind="design"]').click();
-    const designTemplate = requireElement('#pTpl [aria-checked="true"]').dataset.template;
+    const projectPick = await draftPick("project", "leader", "claude");
+    requireElement("#pCrew [data-fc-new-auto]").click();
+    await waitFor(() => window.__received.some((message) => message.type === "crewAssignmentsPreview") && /Auto assign fills the empty positions/.test($("pCrew").textContent), "the Auto assign preview");
     $("pBrowse").click();
-    await waitFor(() => document.querySelector("#pDir")?.textContent.includes(new URLSearchParams(location.search).get("folder")), "project folder picker result");
-    const addProjectStart = window.__received.length;
+    await waitFor(() => document.querySelector("#pDir")?.textContent.includes(pickedFolder), "project folder picker result");
+    const addProjectStart = window.__received.length, addProjectSent = window.__sent.length, previewSent = window.__sent.filter((message) => message.type === "previewCrewAssignments").at(-1);
     $("createProj").click();
     await waitForServerReply(addProjectStart, "new-project server response", () => window.__latestState.projects.some((project) => project.name === "Audit Project B1"));
     const addedProject = window.__latestState.projects.find((project) => project.name === "Audit Project B1");
-    const projectDialogClosed = $("projModal").hidden;
-    check("new-project dialog creates the selected kind and template on the server", Boolean(projectKindDefault === "dev" && designTemplate && addedProject && addedProject.tabs[0].kind === "design" && addedProject.tabs[0].setupName === (window.__latestState.templates ?? []).find((item) => item.id === designTemplate)?.name && addedProject.folder === new URLSearchParams(location.search).get("folder") && projectDialogClosed && window.__sent.some((message) => message.type === "addProject" && message.kind === "design" && message.template === designTemplate)), { found: Boolean(addedProject), id: addedProject?.id ?? "missing", folder: addedProject?.folder ?? "missing", tab: addedProject?.tabs[0] ?? "missing", projectDialogClosed, request: window.__sent.slice(addProjectStart).at(-1), response: window.__received.slice(addProjectStart).at(-1) });
+    await waitFor(() => $("projModal").hidden, "new-project dialog settles closed");
+    const projectRequests = sentSince(addProjectSent, "addProject"), projectRequest = projectRequests[0];
+    check("new-project dialog creates through the fixed crew: one request with the name, folder, projectOnly, fixedCrewVersion, the picked crewChoices and autoAssign, no kind or template, and the server's first tab holds the pick", Boolean(projectRequests.length === 1 && projectRequest.name === "Audit Project B1" && projectRequest.folder === pickedFolder && projectRequest.tabFolder === pickedFolder && projectRequest.projectOnly === true && projectRequest.fixedCrewVersion === 1 && projectRequest.autoAssign === true && projectRequest.crewChoices.leader?.cli === projectPick.cli && projectRequest.crewChoices.leader.model === projectPick.model && !("kind" in projectRequest) && !("template" in projectRequest) && previewSent?.autoAssign === true && previewSent.choices.leader?.model === projectPick.model && addedProject && addedProject.folder === pickedFolder && addedProject.tabs[0].fixedCrew?.version === 1 && holdsPick(addedProject.tabs[0].fixedCrew.preferences.leader, projectPick) && $("projModal").hidden), { pick: projectPick, count: projectRequests.length, found: Boolean(addedProject), id: addedProject?.id ?? "missing", folder: addedProject?.folder ?? "missing", leader: addedProject?.tabs[0]?.fixedCrew?.preferences?.leader ?? "missing", request: projectRequest, preview: previewSent, response: window.__received.slice(addProjectStart).at(-1) });
     pickProject("alpha");
     await waitFor(() => window.__latestState?.projects?.find((project) => project.id === "alpha")?.tabs.some((tab) => tab.id === window.__latestState.selectedTabId), "return to Alpha after project creation");
     openTabMenu(added.id); clickMenuItem($("ctxPop"), "Remove tab");
@@ -95,26 +120,43 @@
     if (dev) {
       const devNode = requireElement('#tabs [data-tab-id="alpha-dev"]'); devNode.click();
       await waitFor(() => window.__latestState.selectedTabId === "alpha-dev", "return to Development");
-      requireElement("[data-seat-model]", openSeatCard("coder")).click();
-      const current = latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").model;
-       const nextModel = [...document.querySelectorAll("#pop [data-model]")].map((button) => button.dataset.model).find((model) => model !== current);
+      const seatOf = (slot) => latestTab("alpha-dev").crew.find((seat) => seat.slot === slot);
+      const savedOf = (slot) => latestTab("alpha-dev").fixedCrew.preferences[slot];
+      const assigned = (start) => sentSince(start, "setCrewAssignment");
+      const answered = (start, request) => window.__received.slice(start).some((message) => message.requestId === request?.requestId && (message.type === "actionResult" || message.type === "error"));
+      const closeLayers = async () => { for (let i = 0; i < 3 && (!$("pop").hidden || !$("setModal").hidden); i++) { pressEscape(); await settle(); } if (!$("pop").hidden || !$("setModal").hidden) fail("the model menu or Settings stayed open after Escape"); };
+      // The model menu of one position, opened from its model button in Settings (the only place a position's model is chosen).
+      const chipOf = (slot) => `#setBody section.fc[data-fc-tab="alpha-dev"] [data-fc-row="${CSS.escape(slot)}"] [data-fc-model]`;
+      const openPicker = async (slot) => {
+        if ($("setModal").hidden) $("setBtn").click();
+        await waitFor(() => !$("setModal").hidden && Boolean(document.querySelector(chipOf(slot))), `Settings model button of ${slot}`);
+        if (!$("pop").hidden) { pressEscape(); await waitFor(() => $("pop").hidden, "the open model menu closes"); }
+        requireElement(chipOf(slot)).click();
+        await waitFor(() => !$("pop").hidden && Boolean($("mq")), `${slot} model menu`);
+        return $("pop");
+      };
+      await openPicker("coder");
+      const current = seatOf("coder").model;
+      const nextModel = [...document.querySelectorAll("#pop [data-model]")].map((button) => button.dataset.model).find((model) => model !== current);
       if (!nextModel) fail(`no alternate server model rendered; matched ${JSON.stringify([...document.querySelectorAll("#pop [data-model]")].map((button) => button.dataset.model))}`);
-       const modelStart = window.__received.length;
-       requireElement(`#pop [data-model="${CSS.escape(nextModel)}"]`).click();
-       check("picking a model shows no 'will use' toast before the server confirms", !/will use/.test($("toast")?.textContent ?? "") && !/will use/.test($("undo")?.textContent ?? ""), { toast: $("toast")?.textContent });
-       await waitForServerReply(modelStart, "server seat model response", () => latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").model === nextModel);
-       check("seat model change reaches the server", latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").model === nextModel, { slot: "coder", model: latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").model, expected: nextModel, sent: window.__sent.filter((message) => message.type === "updateSeat").at(-1), response: window.__received.slice(modelStart).at(-1) });
-      requireElement("[data-seat-model]", openSeatCard("coder")).click();
-      const currentEffort = latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").effort;
+      const modelStart = window.__received.length, modelSent = window.__sent.length;
+      requireElement(`#pop [data-model="${CSS.escape(nextModel)}"]`).click();
+      check("picking a model shows no 'will use' toast before the server confirms", !/will use/.test($("toast")?.textContent ?? "") && !/will use/.test($("undo")?.textContent ?? ""), { toast: $("toast")?.textContent });
+      const modelRequest = assigned(modelSent).at(-1);
+      await waitForServerReply(modelStart, "server seat model response", () => answered(modelStart, modelRequest) && seatOf("coder").model === nextModel);
+      check("seat model change reaches the server as one setCrewAssignment for that tab and position, and the saved assignment follows the server's answer", assigned(modelSent).length === 1 && modelRequest.tabId === "alpha-dev" && modelRequest.slot === "coder" && modelRequest.assignment.model === nextModel && savedOf("coder").assignment.model === nextModel && savedOf("coder").source === "user" && seatOf("coder").model === nextModel && window.__received.slice(modelStart).some((message) => message.type === "actionResult" && message.requestId === modelRequest.requestId), { slot: "coder", expected: nextModel, saved: savedOf("coder"), sent: modelRequest, response: window.__received.slice(modelStart).at(-1) });
+      await openPicker("coder");
+      const currentEffort = seatOf("coder").effort;
       const nextEffort = [...document.querySelectorAll("#pop [data-effort]")].map((button) => button.dataset.effort).find((effort) => effort !== currentEffort);
       if (!nextEffort) fail(`no alternate server effort rendered; matched ${JSON.stringify([...document.querySelectorAll("#pop [data-effort]")].map((button) => button.dataset.effort))}`);
-       const effortStart = window.__received.length;
-       requireElement(`#pop [data-effort="${CSS.escape(nextEffort)}"]`).click();
-       await waitForServerReply(effortStart, "server seat effort response", () => latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").effort === nextEffort);
-       check("seat effort change reaches the server", latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").effort === nextEffort, { slot: "coder", effort: latestTab("alpha-dev").crew.find((seat) => seat.slot === "coder").effort, expected: nextEffort, sent: window.__sent.filter((message) => message.type === "updateSeat").at(-1), response: window.__received.slice(effortStart).at(-1) });
+      const effortStart = window.__received.length, effortSent = window.__sent.length;
+      requireElement(`#pop [data-effort="${CSS.escape(nextEffort)}"]`).click();
+      const effortRequest = assigned(effortSent).at(-1);
+      await waitForServerReply(effortStart, "server seat effort response", () => answered(effortStart, effortRequest) && seatOf("coder").effort === nextEffort);
+      check("seat effort change reaches the server as one setCrewAssignment that keeps the model, and the saved assignment follows the server's answer", assigned(effortSent).length === 1 && effortRequest.tabId === "alpha-dev" && effortRequest.slot === "coder" && effortRequest.assignment.effort === nextEffort && effortRequest.assignment.model === nextModel && savedOf("coder").assignment.effort === nextEffort && seatOf("coder").effort === nextEffort, { slot: "coder", expected: nextEffort, saved: savedOf("coder"), sent: effortRequest, response: window.__received.slice(effortStart).at(-1) });
+      await closeLayers(); showChat();
       // A seat's picture opens its card for every seat; its name opens the work view (the leader's chat).
       showChat(); pressEscape();
-      const seatOf = (slot) => latestTab("alpha-dev").crew.find((seat) => seat.slot === slot);
       const pic = (slot) => requireElement(`#crew [data-seat-id="${CSS.escape(slot)}"] [data-seat-pic]`);
       const nameOf = (slot) => requireElement(`#crew [data-seat-id="${CSS.escape(slot)}"] [data-seat-open]`);
       const viewing = (slot) => nameOf(slot).hasAttribute("aria-current");
@@ -155,26 +197,22 @@
       check("the leader's name button reads as expanded while its card is open", !$("seatPop").hidden && nameOf("leader").getAttribute("aria-expanded") === "true", { hidden: $("seatPop").hidden, expanded: nameOf("leader").getAttribute("aria-expanded") });
       pressEscape(); showChat();
 
-      // The picker lists every installed CLI; a model of another CLI sends cli with it; the tick and the effort row follow the server.
-      window.__socket.send(JSON.stringify({ type: "refreshSettings" }));
-      await waitFor(() => ["claude", "codex", "opencode"].every((cli) => window.__latestState.settings?.tools?.[cli]?.installed === true), "CLI probes");
-      const openPicker = (slot) => { pic(slot).click(); requireElement("[data-seat-model]", $("seatPop")).click(); return $("pop"); };
-      const sentSince = (start) => window.__sent.slice(start).filter((message) => message.type === "updateSeat");
+      // The picker lists every installed CLI; a model of another CLI sends its cli with the whole assignment; the tick and the effort row follow the server.
       const origin = { ...seatOf("coder") };
-      openPicker("coder");
+      await openPicker("coder");
       const groupNames = [...document.querySelectorAll("#pop [data-grp]")].map((node) => node.dataset.grp);
       check("the picker groups models by installed CLI, the seat's own first", groupNames[0] === origin.cli && groupNames.includes("claude") && groupNames.includes("codex") && groupNames.includes("opencode"), { groupNames, own: origin.cli });
-      const settle = () => new Promise((done) => setTimeout(done, 60));
       const groups = () => [...document.querySelectorAll("#pop [data-grp]")].map((node) => node.dataset.grp);
-      const deliverTools = async (patch) => {
+      // Delivered and read in the same turn: a real broadcast (the server echoes every pref the page saves) can land during any wait and replace this state.
+      const deliverTools = (patch) => {
         const next = structuredClone(window.__latestState);
         for (const [cli, installed] of Object.entries(patch)) { next.settings.tools[cli].installed = installed; next.clis.find((item) => item.id === cli).installed = installed; } // the picker reads the server's CLI list (state.clis)
-        window.__ccDeliver({ ...next, type: "state" }); await settle();
+        window.__ccDeliver({ ...next, type: "state" });
       };
       const [notChecked, missing] = ["claude", "codex", "opencode"].filter((cli) => cli !== origin.cli);
-      await deliverTools({ [notChecked]: null, [missing]: false });
+      deliverTools({ [notChecked]: null, [missing]: false });
       check("a CLI that was not checked (null) or is not installed is not offered, the seat's own always is", !groups().includes(notChecked) && !groups().includes(missing) && groups().includes(origin.cli), { groups: groups(), notChecked, missing });
-      await deliverTools({ [notChecked]: true, [missing]: true });
+      deliverTools({ [notChecked]: true, [missing]: true });
       check("the CLIs come back when the server finds them", groups().includes(notChecked) && groups().includes(missing), { groups: groups() });
       const effortStops = () => [...document.querySelectorAll("#pop .effort [role=radio]")].map((button) => ({ effort: button.dataset.effort, checked: button.getAttribute("aria-checked"), tab: button.tabIndex }));
       check("after a redraw only the checked effort is a tab stop", effortStops().length > 1 && effortStops().filter((item) => item.tab === 0).length === 1 && effortStops().find((item) => item.tab === 0).checked === "true", { stops: effortStops() });
@@ -190,92 +228,111 @@
       check("a typed provider/model id can be used for OpenCode only", Boolean(document.querySelector('#pop [data-model="someprovider/some-model"][data-cli="opencode"]')) && !document.querySelector('#pop [data-model="someprovider/some-model"][data-cli="codex"]'), { options: [...document.querySelectorAll("#pop [data-model]")].map((button) => `${button.dataset.cli}:${button.dataset.model}`) });
       typeSearch("");
       check("clearing the search brings the whole list back", optionCount() === allModels, { all: allModels, now: optionCount() });
-      window.__ccDeliver({ type: "error", action: "updateSeat", tabId: "alpha-dev", message: "Finish or stop Atlas's current turn first" }); await settle();
-      check("a refused seat change shows the server's reason and leaves the picker open", /Finish or stop Atlas's current turn first/.test($("toast")?.textContent ?? "") && !$("pop").hidden, { toast: $("toast")?.textContent, pickerOpen: !$("pop").hidden });
+      // A refusal is the server's answer to ONE request: the next request the page makes is recorded but held back (never sent), and the refusal is delivered under that request's own id.
+      const reason = "Finish the coder's current run first", strangerReason = "A refusal for some other request";
+      const refusedPick = [...document.querySelectorAll("#pop [data-model]")].find((button) => button.dataset.cli === origin.cli && button.dataset.model !== origin.model);
+      if (!refusedPick) fail("no second model of the coder's own CLI rendered to refuse");
+      const refusalSent = window.__sent.length, realSocket = window.__socket;
+      let held = null;
+      realSocket.send = (raw) => { held = JSON.parse(raw); window.__sent.push(held); delete realSocket.send; };
+      refusedPick.click();
+      const heldRequest = held;
+      if (!heldRequest || heldRequest.type !== "setCrewAssignment" || typeof heldRequest.requestId !== "string") fail(`the held request was not a setCrewAssignment with a request id: ${JSON.stringify(heldRequest)}`);
+      window.__ccDeliver({ type: "error", action: "setCrewAssignment", tabId: "alpha-dev", requestId: "some-other-request", message: strangerReason }); await settle();
+      const statusOf = () => text('[data-fc-model-status="coder"]', $("setBody"));
+      const strangerLeftRowAlone = !statusOf().includes(strangerReason);
+      window.__ccDeliver({ type: "error", action: "setCrewAssignment", tabId: "alpha-dev", requestId: heldRequest.requestId, message: reason }); await settle();
+      check("a refused seat change shows the server's reason on its own position, matched by request id, and leaves the picker open", strangerLeftRowAlone && statusOf() === `Not saved: ${reason}` && /Finish the coder's current run first/.test($("toast")?.textContent ?? "") && !$("pop").hidden && assigned(refusalSent).length === 1 && savedOf("coder").assignment.model === origin.model && seatOf("coder").model === origin.model, { status: statusOf(), strangerLeftRowAlone, toast: $("toast")?.textContent, pickerOpen: !$("pop").hidden, held: heldRequest, saved: savedOf("coder") });
       check("the picker no longer claims the CLI comes with the crew", !/comes with the crew|stays on Claude Code/.test(document.body.innerText), { text: $("pop").innerText });
       const target = [...document.querySelectorAll("#pop [data-model]")].find((button) => button.dataset.cli !== origin.cli);
       if (!target) fail(`no model of another CLI rendered; groups ${JSON.stringify(groupNames)}`);
       const switchSent = window.__sent.length, switchRecv = window.__received.length;
       target.click();
-      const tickEarly = target.getAttribute("aria-pressed") === "true";
-      const switchMessage = sentSince(switchSent).at(-1);
-      check("a model of another CLI sends updateSeat with cli and model", switchMessage?.slot === "coder" && switchMessage.cli === target.dataset.cli && switchMessage.model === target.dataset.model, { switchMessage, target: { cli: target.dataset.cli, model: target.dataset.model } });
-      check("the tick does not move before the server confirms", !tickEarly && seatOf("coder").cli === origin.cli, { tickEarly, cli: seatOf("coder").cli });
-      await waitForServerReply(switchRecv, "seat CLI switch response", () => seatOf("coder").cli === target.dataset.cli && seatOf("coder").model === target.dataset.model);
-      await waitFor(() => seatOf("coder").cli === target.dataset.cli && seatOf("coder").model === target.dataset.model, "coder moved to the other CLI");
+      const targetNow = () => $("pop").querySelector(`[data-model="${CSS.escape(target.dataset.model)}"][data-cli="${CSS.escape(target.dataset.cli)}"]`);
+      const tickEarly = targetNow()?.getAttribute("aria-pressed") === "true";
+      const switchMessage = assigned(switchSent).at(-1);
+      check("a model of another CLI sends setCrewAssignment with the whole assignment: cli, model and effort", assigned(switchSent).length === 1 && switchMessage?.slot === "coder" && switchMessage.tabId === "alpha-dev" && switchMessage.assignment.cli === target.dataset.cli && switchMessage.assignment.model === target.dataset.model && typeof switchMessage.assignment.effort === "string", { switchMessage, target: { cli: target.dataset.cli, model: target.dataset.model } });
+      check("the tick does not move before the server confirms", Boolean(targetNow()) && !tickEarly && seatOf("coder").cli === origin.cli, { tickEarly, cli: seatOf("coder").cli });
+      await waitForServerReply(switchRecv, "coder moved to the other CLI", () => answered(switchRecv, switchMessage) && seatOf("coder").cli === target.dataset.cli && seatOf("coder").model === target.dataset.model);
       const effortRow = [...document.querySelectorAll("#pop [data-effort]")];
-      check("the picker stays open after a pick and shows the effort row for the chosen model", !$("pop").hidden && Boolean($("pop").querySelector("#mq")) && $("pop").querySelector(`[data-model="${CSS.escape(target.dataset.model)}"][data-cli="${CSS.escape(target.dataset.cli)}"]`)?.getAttribute("aria-pressed") === "true" && effortRow.length > 0 && effortRow.some((button) => button.getAttribute("aria-checked") === "true" && button.dataset.effort === seatOf("coder").effort), { open: !$("pop").hidden, effortRow: effortRow.map((button) => button.dataset.effort), seat: seatOf("coder") });
+      check("the picker stays open after a pick and shows the effort row for the chosen model", !$("pop").hidden && Boolean($("pop").querySelector("#mq")) && targetNow()?.getAttribute("aria-pressed") === "true" && effortRow.length > 0 && effortRow.some((button) => button.getAttribute("aria-checked") === "true" && button.dataset.effort === seatOf("coder").effort), { open: !$("pop").hidden, effortRow: effortRow.map((button) => button.dataset.effort), seat: seatOf("coder") });
       const otherEffort = effortRow.map((button) => button.dataset.effort).find((effort) => effort !== seatOf("coder").effort);
-      const effortSent = window.__sent.length, effortRecv = window.__received.length;
+      const sameSent = window.__sent.length, sameRecv = window.__received.length;
       requireElement(`#pop [data-effort="${CSS.escape(otherEffort)}"]`).click();
-      await waitForServerReply(effortRecv, "same-visit effort response", () => seatOf("coder").effort === otherEffort);
-      check("effort changes in the same visit as the model", sentSince(effortSent).at(-1)?.effort === otherEffort && seatOf("coder").effort === otherEffort, { sent: sentSince(effortSent), effort: seatOf("coder").effort });
-      openPicker("coder");
+      const sameRequest = assigned(sameSent).at(-1);
+      await waitForServerReply(sameRecv, "same-visit effort response", () => answered(sameRecv, sameRequest) && seatOf("coder").effort === otherEffort);
+      check("effort changes in the same visit as the model", sameRequest?.assignment.effort === otherEffort && sameRequest.assignment.model === target.dataset.model && seatOf("coder").effort === otherEffort, { sent: sameRequest, effort: seatOf("coder").effort });
+      await openPicker("coder");
       const backSent = window.__sent.length, backRecv = window.__received.length;
       requireElement(`#pop [data-model="${CSS.escape(origin.model)}"][data-cli="${CSS.escape(origin.cli)}"]`).click();
-      await waitForServerReply(backRecv, "coder back to its own CLI", () => seatOf("coder").cli === origin.cli && seatOf("coder").model === origin.model);
-      await waitFor(() => seatOf("coder").cli === origin.cli && seatOf("coder").model === origin.model, "coder restored");
-      check("going back sends the CLI too", sentSince(backSent).at(-1)?.cli === origin.cli, { sent: sentSince(backSent) });
-      if (seatOf("coder").effort !== origin.effort) requireElement(`#pop [data-effort="${CSS.escape(origin.effort)}"]`).click();
-      pressEscape();
+      const backRequest = assigned(backSent).at(-1);
+      await waitForServerReply(backRecv, "coder restored", () => answered(backRecv, backRequest) && seatOf("coder").cli === origin.cli && seatOf("coder").model === origin.model);
+      check("going back sends the CLI too", backRequest?.assignment.cli === origin.cli && backRequest.assignment.model === origin.model, { sent: assigned(backSent) });
+      if (seatOf("coder").effort !== origin.effort) { requireElement(`#pop [data-effort="${CSS.escape(origin.effort)}"]`).click(); await waitFor(() => seatOf("coder").effort === origin.effort, "coder effort restored"); }
+      await closeLayers(); showChat();
 
-      // The leader runs on any CLI; the Advisor shows only for a CLI the server says can take one (state.clis advisor).
+      // The leader runs on any CLI. A saved Advisor is a read-only fact (the seat card, the Settings position line, the Usage panel), shown only for a CLI that can take one,
+      // and always named for the leader's own position. It is changed nowhere on the page, so no Advisor button exists.
       const leaderOrigin = { ...seatOf("leader") };
-      // Settings and the Usage panel, through the real app, with an advisor saved on the leader seat (an advisor is a seat's own setting now).
+      const advisor = "claude-fable-5-1";
       const advisorSurfaces = async () => {
-        // A real broadcast can land between steps and replace the state: deliver the advisor right before each read.
+        // A real broadcast can land between steps and replace the state: deliver the saved advisor right before each read.
         const withAdvisor = () => {
-          const next = structuredClone(window.__latestState);
-          next.projects.flatMap((project) => project.tabs).find((tab) => tab.id === "alpha-dev").crew.find((seat) => seat.slot === "leader").advisor = "claude-fable-5-1";
+          const next = structuredClone(window.__latestState), tab = next.projects.flatMap((project) => project.tabs).find((item) => item.id === "alpha-dev");
+          tab.crew.find((seat) => seat.slot === "leader").advisor = advisor;
+          const preference = tab.fixedCrew.preferences.leader;
+          if (preference.assignment?.cli === "claude") preference.assignment = { ...preference.assignment, advisor }; // the server keeps an advisor only on a CLI that can take one
           window.__ccDeliver({ ...next, type: "state" });
         };
         withAdvisor();
-        const usage = [...document.querySelectorAll("#usage .useRow")].some((row) => /Advisor/.test(row.textContent));
+        const leaderName = seatOf("leader").name;
+        const advisorRows = [...document.querySelectorAll("#usage .useRow")].map((row) => row.textContent.replace(/\s+/g, " ").trim()).filter((row) => /Advisor/.test(row));
+        const forLeader = advisorRows.filter((row) => row.includes(`Advisor for ${leaderName}`));
+        showChat(); pic("leader").click(); await settle(); withAdvisor();
+        if ($("seatPop").hidden || $("seatPop").dataset.slot !== "leader") fail("the leader's card did not open for the advisor read");
+        const cardRow = [...$("seatPop").querySelectorAll(".rowb")].find((row) => row.firstElementChild?.textContent === "Advisor");
+        const card = cardRow ? cardRow.textContent.replace(/\s+/g, " ").trim() : null, cardControl = Boolean($("seatPop").querySelector("[data-seat-advisor]"));
+        pressEscape(); await settle(); showChat();
         $("setBtn").click(); await settle(); withAdvisor();
-        // Settings' crew is the crew editor: the leader's Model and Advisor are in its card, opened from its row.
-        const leaderRow = document.querySelector('#setModal [data-se-row="leader"]');
-        if (leaderRow && leaderRow.getAttribute("aria-expanded") !== "true") leaderRow.click();
-        const settingsSeen = Boolean(document.querySelector('#setModal [data-se-model="leader"]'));
-        const settings = Boolean(document.querySelector('#setModal [data-se-advisor="leader"]')); // the leader's own button: other Claude seats have their own now
-        pressEscape(); await settle();
-        return { usage, settings, settingsSeen, leaderCli: latestTab("alpha-dev")?.crew.find((seat) => seat.slot === "leader")?.cli };
+        const settingsLine = text('#setBody section.fc[data-fc-tab="alpha-dev"] [data-fc-row="leader"] .fc-source');
+        const settingsControl = Boolean(document.querySelector("#setModal [data-se-advisor], #setModal [data-seat-advisor]"));
+        await closeLayers();
+        return { leaderCli: seatOf("leader").cli, usageAll: advisorRows.length, usageForLeader: forLeader.length, card, cardControl, settingsLine, settingsAdvisor: /advisor/i.test(settingsLine), settingsControl };
       };
       pic("leader").click();
-      check("a Claude leader's card shows the Advisor row", leaderOrigin.cli === "claude" && Boolean($("seatPop").querySelector("[data-seat-advisor]")), { cli: leaderOrigin.cli });
+      check("a Claude leader's card shows the Advisor row", leaderOrigin.cli === "claude" && [...$("seatPop").querySelectorAll(".rowb")].some((row) => row.firstElementChild?.textContent === "Advisor"), { cli: leaderOrigin.cli });
       pressEscape(); showChat();
       const claudeSurfaces = await advisorSurfaces();
-      check("a Claude leader: Settings and the Usage panel show the Advisor", claudeSurfaces.settingsSeen && claudeSurfaces.settings && claudeSurfaces.usage, claudeSurfaces);
-      openSeatCard("leader");
-      requireElement("[data-seat-model]", $("seatPop")).click();
-      const codexModel = requireElement('#pop [data-model][data-cli="codex"]');
-      const leaderRecv = window.__received.length, leaderSent = window.__sent.length;
-      codexModel.click();
-      check("the leader switches CLI with cli and model", sentSince(leaderSent).at(-1)?.cli === "codex" && sentSince(leaderSent).at(-1)?.slot === "leader", { sent: sentSince(leaderSent) });
-      await waitForServerReply(leaderRecv, "leader CLI switch", () => seatOf("leader").cli === "codex" && seatOf("leader").model === codexModel.dataset.model);
-      await waitFor(() => seatOf("leader").cli === "codex", "leader on Codex");
-      check("a Codex leader gets its limits in plain words", /Codex skips asking for commands it considers safe/.test($("pop").innerText) && /fresh session/.test($("pop").innerText), { text: $("pop").innerText });
-      pressEscape(); showChat();
+      check("a Claude leader: the card, the Settings position line and the Usage panel show the saved Advisor as read-only facts for the leader alone", claudeSurfaces.leaderCli === "claude" && Boolean(claudeSurfaces.card) && !/Off/.test(claudeSurfaces.card) && !claudeSurfaces.cardControl && claudeSurfaces.settingsAdvisor && !claudeSurfaces.settingsControl && claudeSurfaces.usageForLeader === 1 && claudeSurfaces.usageAll === 1, claudeSurfaces);
+      const leaderPicker = async (cli) => {
+        await openPicker("leader");
+        const option = requireElement(`#pop [data-model][data-cli="${cli}"]`), start = window.__received.length, sent = window.__sent.length;
+        option.click();
+        const request = assigned(sent).at(-1);
+        await waitForServerReply(start, "leader on the chosen CLI", () => answered(start, request) && seatOf("leader").cli === cli && seatOf("leader").model === option.dataset.model);
+        return { option, request, sent };
+      };
+      const codexLeader = await leaderPicker("codex");
+      check("the leader switches CLI with setCrewAssignment: cli, model and effort for the leader position", assigned(codexLeader.sent).length === 1 && codexLeader.request.slot === "leader" && codexLeader.request.tabId === "alpha-dev" && codexLeader.request.assignment.cli === "codex" && codexLeader.request.assignment.model === codexLeader.option.dataset.model && typeof codexLeader.request.assignment.effort === "string", { sent: assigned(codexLeader.sent) });
+      check("a Codex leader gets its limit in plain words: it cannot be held read-only, and the choice is saved for this tab", /Codex cannot be held read-only/.test($("pop").innerText) && /Saved for this tab/.test($("pop").innerText), { text: $("pop").innerText });
+      await closeLayers(); showChat();
       const codexSurfaces = await advisorSurfaces();
-      check("a Codex leader: Settings and the Usage panel show no Advisor", codexSurfaces.settingsSeen && !codexSurfaces.settings && !codexSurfaces.usage, codexSurfaces);
+      check("a Codex leader: the card, the Settings position line and the Usage panel show no Advisor", codexSurfaces.leaderCli === "codex" && codexSurfaces.card === null && !codexSurfaces.settingsAdvisor && codexSurfaces.usageAll === 0, codexSurfaces);
       showChat(); pic("leader").click();
-      check("a Codex leader's card has no Advisor row", !$("seatPop").querySelector("[data-seat-advisor]") && !$("seatPop").hidden, { advisorRow: Boolean($("seatPop").querySelector("[data-seat-advisor]")) });
-      requireElement("[data-seat-model]", $("seatPop")).click();
-      const openCodeRecv = window.__received.length;
-      requireElement('#pop [data-model][data-cli="opencode"]').click();
-      await waitForServerReply(openCodeRecv, "leader to OpenCode", () => seatOf("leader").cli === "opencode");
-      await waitFor(() => seatOf("leader").cli === "opencode", "leader on OpenCode");
-      check("an OpenCode leader gets its limits in plain words", /Plan blocks edits, but a shell command can still write/.test($("pop").innerText) && /fresh session/.test($("pop").innerText), { text: $("pop").innerText });
+      check("a Codex leader's card has no Advisor row", ![...$("seatPop").querySelectorAll(".rowb")].some((row) => row.firstElementChild?.textContent === "Advisor") && !$("seatPop").hidden, { advisorRow: Boolean($("seatPop").querySelector("[data-seat-advisor]")) });
       pressEscape(); showChat();
+      await leaderPicker("opencode");
+      check("an OpenCode leader (read-only is enforced) gets no read-only warning, only the saved note", /Saved for this tab/.test($("pop").innerText) && !/cannot be held read-only/.test($("pop").innerText) && window.__latestState.clis.find((cap) => cap.id === "opencode")?.readOnlyEnforced === true, { text: $("pop").innerText });
+      await closeLayers(); showChat();
       const openCodeSurfaces = await advisorSurfaces();
-      check("an OpenCode leader: Settings and the Usage panel show no Advisor", openCodeSurfaces.settingsSeen && !openCodeSurfaces.settings && !openCodeSurfaces.usage, openCodeSurfaces);
-      showChat(); pic("leader").click();
-      requireElement("[data-seat-model]", $("seatPop")).click();
-      const leaderBackRecv = window.__received.length;
+      check("an OpenCode leader: the card, the Settings position line and the Usage panel show no Advisor", openCodeSurfaces.leaderCli === "opencode" && openCodeSurfaces.card === null && !openCodeSurfaces.settingsAdvisor && openCodeSurfaces.usageAll === 0, openCodeSurfaces);
+      await openPicker("leader");
+      const leaderBackRecv = window.__received.length, leaderBackSent = window.__sent.length;
       requireElement(`#pop [data-model="${CSS.escape(leaderOrigin.model)}"][data-cli="claude"]`).click();
-      await waitForServerReply(leaderBackRecv, "leader back to Claude", () => seatOf("leader").cli === "claude" && seatOf("leader").model === leaderOrigin.model);
-      await waitFor(() => seatOf("leader").cli === "claude" && seatOf("leader").model === leaderOrigin.model, "leader restored");
-      if (seatOf("leader").effort !== leaderOrigin.effort) requireElement(`#pop [data-effort="${CSS.escape(leaderOrigin.effort)}"]`).click();
-      pressEscape();
+      const leaderBack = assigned(leaderBackSent).at(-1);
+      await waitForServerReply(leaderBackRecv, "leader restored", () => answered(leaderBackRecv, leaderBack) && seatOf("leader").cli === "claude" && seatOf("leader").model === leaderOrigin.model);
+      if (seatOf("leader").effort !== leaderOrigin.effort) { requireElement(`#pop [data-effort="${CSS.escape(leaderOrigin.effort)}"]`).click(); await waitFor(() => seatOf("leader").effort === leaderOrigin.effort, "leader effort restored"); }
+      await closeLayers();
       showChat();
     }
     // The first-project screen names the CLIs that can run the leader (Gemini cannot).
@@ -304,20 +361,6 @@
     const newTabDefaultsToProject = $("tDir").textContent === chosenFolder && !$("createTab").disabled;
     check("new tab dialog defaults to the project folder", newTabDefaultsToProject, { displayedFolder: $("tDir").textContent, projectFolder: alphaAfterProjectFolder?.folder, createEnabled: !$("createTab").disabled });
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
-    const processMenu = openTabMenu("alpha-dev"); clickMenuItem(processMenu, "Kind and crew");
-    const setupBefore = latestTab("alpha-dev")?.setupName, duoTemplate = (window.__latestState.templates ?? []).find((item) => item.id === "duo");
-    requireElement('#setupPop [data-use-template="duo"]').click();
-    const heldProcess = $("undo").querySelector("[data-undo-held]");
-    const sentBeforeUndo = window.__sent.some((message) => message.type === "useSetup" && message.tabId === "alpha-dev");
-    if (!heldProcess) fail("crew switch did not offer Undo");
-    heldProcess.click();
-    const undoRestored = latestTab("alpha-dev")?.setupName === setupBefore && !window.__sent.some((message) => message.type === "useSetup" && message.tabId === "alpha-dev");
-    const processMenuAgain = openTabMenu("alpha-dev"); clickMenuItem(processMenuAgain, "Kind and crew");
-    const processStart = window.__received.length;
-    requireElement('#setupPop [data-use-template="duo"]').click();
-    await new Promise((resolve) => setTimeout(resolve, 10_100));
-    await waitForServerReply(processStart, "server crew switch response", () => latestTab("alpha-dev")?.setupName === duoTemplate.name && latestTab("alpha-dev")?.crew.length === duoTemplate.crew.length);
-    check("crew switch waits for Undo and then reaches the server", !sentBeforeUndo && undoRestored && Boolean(duoTemplate) && latestTab("alpha-dev")?.setupName === duoTemplate.name && latestTab("alpha-dev")?.crew.length === duoTemplate.crew.length && window.__sent.some((message) => message.type === "useSetup" && message.tabId === "alpha-dev" && message.templateId === "duo"), { sentBeforeUndo, undoRestored, setupName: latestTab("alpha-dev")?.setupName, sent: window.__sent.filter((message) => message.type === "useSetup"), response: window.__received.slice(processStart).at(-1) });
   };
   Object.assign(window.__ccHarness, { runReal });
 })();

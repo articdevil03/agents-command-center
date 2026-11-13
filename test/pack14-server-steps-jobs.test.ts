@@ -6,7 +6,7 @@ import { CLIS, tabOf, sleep, SECRET, ALLOWED, client, fakeLog, chatFile, withSer
 
 // ---- A: the step line ----
 
-test("A: the step line shows the KIND of each step, per CLI, in order; crew tools are skipped; it is never in the chat log; no secret is ever in it", { timeout: 120_000 }, async () => {
+test("A: the step line shows the KIND of each step, per CLI, in order; the fixed task tools are skipped; it is never in the chat log; no secret is ever in it", { timeout: 120_000 }, async () => {
   await withServer({}, async (server, c) => {
     for (const cli of CLIS) {
       const tab = tabOf(cli, 1), from = c.messages.length;

@@ -8,20 +8,20 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 
-export const MAIN = getProcessDefinition("dev", "main").seats, SOLO = getProcessDefinition("dev", "solo").seats;
-export const crewFor = (seats: typeof MAIN, leader?: { cli: string; model: string; effort: string }) => seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort, ...(seat.isLeader ? leader : {}) }));
+const LEADER_SEAT = FIXED_CREW.find((seat) => seat.slot === "leader")!;
 export const CLIS = ["claude", "codex", "opencode"] as const;
 export type Cli = (typeof CLIS)[number];
-export const LEADERS: Record<Cli, { cli: string; model: string; effort: string } | undefined> = {
-  claude: undefined, codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" },
+export const LEADERS: Record<Cli, { cli: string; model: string; effort: string }> = {
+  claude: { cli: LEADER_SEAT.preferred.cli, model: LEADER_SEAT.preferred.model, effort: LEADER_SEAT.preferred.effort }, codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" },
 };
 export const TAB_COUNT = 7;
 export const tabOf = (cli: Cli, n: number) => `p12-${cli}-${n}`;
-export const SOLO_TAB = "p12-solo", SPARE_TAB = "p12-spare";
+export const SPARE_TAB = "p12-spare";
 export const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 export const ECHO: Record<Cli, (text: string) => RegExp> = {
   claude: (text) => new RegExp(`\\[folded: ${text}\\]`), codex: (text) => new RegExp(`\\[steer: ${text}\\]`), opencode: (text) => new RegExp(`\\[steer: ${text}\\]`),
@@ -29,17 +29,14 @@ export const ECHO: Record<Cli, (text: string) => RegExp> = {
 // A reply with a pause in the middle: the steer lands during the pause.
 export const slow = (cli: Cli, head: string, tail: string, ms = 900): string => JSON.stringify([{ say: head }, cli === "claude" ? { wait: ms } : { sleep: ms }, { say: tail }]);
 
-export type Server = { port: number; key: string; temp: string; data: string; work: string; child: ChildProcess; log: () => string; stop: () => Promise<void> };
+export type Server = { port: number; key: string; temp: string; data: string; work: string; activityHome: string; child: ChildProcess; log: () => string; stop: () => Promise<void> };
 export async function boot(env: Record<string, string> = {}): Promise<Server> {
   const temp = mkdtempSync(join(tmpdir(), "cc-pack12-"));
-  const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work");
-  for (const dir of [home, work, join(data, "config"), join(data, "chats"), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
-  const tab = (id: string, seats: typeof MAIN, leader?: { cli: string; model: string; effort: string }, process = "main") => ({ id, name: id, kind: "dev", process, folder: work, crew: crewFor(seats, leader) });
-  const tabs = [
-    ...CLIS.flatMap((cli) => Array.from({ length: TAB_COUNT }, (_, index) => tab(tabOf(cli, index + 1), MAIN, LEADERS[cli]))),
-    tab(SPARE_TAB, MAIN, LEADERS.codex), tab(SOLO_TAB, SOLO, LEADERS.codex, "solo"),
-  ];
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p12", name: "P12", folder: work, tabs }] }));
+  const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work"), activityHome = join(temp, "activity-home");
+  for (const dir of [home, work, activityHome, join(data, "config"), join(data, "chats"), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
+  const tab = (id: string, leader: { cli: string; model: string; effort: string }) => fixedTab(id, work, { leader: leader as any }, id);
+  const tabs = [...CLIS.flatMap((cli) => Array.from({ length: TAB_COUNT }, (_, index) => tab(tabOf(cli, index + 1), LEADERS[cli]))), tab(SPARE_TAB, LEADERS.codex)];
+  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p12", work, tabs), name: "P12" }])));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: Object.fromEntries(["claude", "codex"].map((cli) => [JSON.stringify([cli, "--version"]), { code: 0, stdout: `${cli} 1.0.0`, stderr: "" }])) }));
   const key = randomBytes(32).toString("hex");
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
@@ -48,7 +45,7 @@ export async function boot(env: Record<string, string> = {}): Promise<Server> {
     CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1",
     CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_FAKE_LEADER_CLI: "1",
     // A native Claude path, so the leader passes --replay-user-messages (the Claude fake echoes only when it gets that flag, as the real CLI does).
-    FAKE_LEADER_LOG: join(temp, "fake-leader.log"), CC_APP_KEY: key, CLAUDE_CLI_PATH: process.execPath, ...env,
+    FAKE_LEADER_LOG: join(temp, "fake-leader.log"), CC_APP_KEY: key, CLAUDE_CLI_PATH: process.execPath, CC_TEST_FAKE_CLI_ACTIVITY_HOME: activityHome, ...env,
   };
   const child = spawn(process.execPath, ["server/index.ts"], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: full as NodeJS.ProcessEnv });
   attachCrashCatcher(child.pid, "pack12-server");
@@ -57,7 +54,7 @@ export async function boot(env: Record<string, string> = {}): Promise<Server> {
   // CC_PORT=0: the OS picks the port at the server's own listen, so no other test can take it first.
   const port = await waitForServerStart(child, () => log);
   return {
-    port, key, temp, data, work, child, log: () => log,
+    port, key, temp, data, work, activityHome, child, log: () => log,
     stop: async () => {
       try {
         if (child.exitCode === null && child.signalCode === null) {
@@ -126,6 +123,16 @@ export const HEAD = `part one ${PAD}`;
 export const promptCount = (server: Server) => fakeLog(server).filter((entry) => entry.cli === "opencode" && entry.path?.endsWith("/prompt_async")).length;
 // The chat file on disk is the independent measurement of what the chat held.
 export const chatFile = (server: Server, tabId: string): any[] => readFileSync(join(server.data, "chats", `${tabId}.jsonl`), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((row) => row.type === "message" && row.role !== "notice");
+// Another tool working in the tab's folder outside Command Center: an OpenCode session record in the server's fake activity home that was created a minute before now,
+// so it is older than any reply window of ours (a record created inside a running reply's window would be taken as ours).
+export function outsideOpencodeSession(server: Server, id: string): void {
+  const path = join(server.activityHome, ".local", "share", "opencode", "opencode.db");
+  mkdirSync(dirname(path), { recursive: true });
+  const db = new (process.getBuiltinModule("node:sqlite")!).DatabaseSync(path);
+  db.exec("create table if not exists session (id text primary key, directory text, time_updated integer, time_created integer)");
+  db.prepare("insert or replace into session (id, directory, time_updated, time_created) values (?, ?, ?, ?)").run(id, server.work, Date.now(), Date.now() - 60_000);
+  db.close();
+}
 export const upload = (server: Server, name: string): string => { const path = join(server.data, "scratch", name); writeFileSync(path, "x"); return path; };
 
 export async function withServer(env: Record<string, string>, body: (server: Server, c: Client) => Promise<void>): Promise<void> {

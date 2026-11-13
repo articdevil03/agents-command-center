@@ -97,7 +97,7 @@ test("shutdown uses IPC and holds quit until the server is gone: a hung server i
   assert.equal(pending, h.stopServer(), "one cleanup promise for repeated close/quit events");
   assert.equal(h.timers.size, 1, "the server has not exited: the backstop waits");
   const [{ fn, ms }] = [...h.timers.values()];
-  assert.equal(ms, 3000);
+  assert.equal(ms, 125_000, "the backstop outlasts the server's parallel drain budgets");
   fn();
   await Promise.resolve();
   assert.equal(h.spawns[1][0], "C:\\Windows/System32/taskkill.exe", "taskkill by its System32 path, never a PATH lookup");

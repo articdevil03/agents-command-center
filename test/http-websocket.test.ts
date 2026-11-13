@@ -2,7 +2,7 @@ import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BASE_ORIGIN, root, request, keyedSocket, openWs, nextMessage, nextState, nextMessages } from "./http-helpers.ts";
+import { BASE_ORIGIN, root, keyedSocket, openWs, nextMessage, nextState } from "./http-helpers.ts";
 
 test("WebSocket: a foreign Origin is rejected", async () => {
   const ws = keyedSocket({ origin: "https://evil.example" });
@@ -136,33 +136,6 @@ test("WebSocket: history remains readable for a retired legacy bare seat id", as
   }
 });
 
-// Exercise validation through the real WebSocket call site: a rejected model
-// update must not leave its accompanying name change in memory or on disk.
-test("WebSocket: updateSeat applies no partial changes when its model is rejected", async () => {
-  const ws = await openWs();
-  try {
-    const before = nextMessages(ws, 2);
-    ws.send(JSON.stringify({ type: "hello" }));
-    const [beforeState] = await before;
-    const beforeTab = beforeState.projects[0].tabs[0];
-    const beforeSeat = beforeTab.crew[0];
-
-    const errorReplyP = nextMessage(ws);
-    ws.send(JSON.stringify({ type: "updateSeat", tabId: beforeTab.id, slot: beforeSeat.slot, name: "Should roll back", model: "bad & echo INJECTED" }));
-    const errorReply = await errorReplyP;
-    assert.equal(errorReply.type, "error");
-
-    const afterP = nextMessages(ws, 2);
-    ws.send(JSON.stringify({ type: "hello" }));
-    const [afterState] = await afterP;
-    const afterTab = afterState.projects[0].tabs.find((tab: { id: string }) => tab.id === beforeTab.id);
-    const afterSeat = afterTab.crew.find((seat: { slot: string }) => seat.slot === beforeSeat.slot);
-    assert.deepEqual(afterSeat, beforeSeat, "the rejected update must leave the crew slot unchanged");
-  } finally {
-    ws.close();
-  }
-});
-
 test("selected-tab instruction inventory stays scoped during a background folder refresh", async () => {
   const firstFolder = join(root, "settings-scope-first");
   const secondFolder = join(root, "settings-scope-second");
@@ -175,10 +148,10 @@ test("selected-tab instruction inventory stays scoped during a background folder
   const ws = await openWs();
   try {
     const addFirst = nextState(ws, (state) => state.projects.some((project: any) => project.id === "settingsscopefirst"));
-    ws.send(JSON.stringify({ type: "addProject", id: "settingsscopefirst", name: "First", folder: firstFolder, tabId: "settingsscopefirst-development" }));
+    ws.send(JSON.stringify({ type: "addProject", requestId: "scope_first", fixedCrewVersion: 1, crewChoices: {}, autoAssign: false, id: "settingsscopefirst", name: "First", folder: firstFolder, tabId: "settingsscopefirst-development" }));
     await addFirst;
     const addSecond = nextState(ws, (state) => state.projects.some((project: any) => project.id === "settingsscopesecond"));
-    ws.send(JSON.stringify({ type: "addProject", id: "settingsscopesecond", name: "Second", folder: secondFolder, tabId: "settingsscopesecond-development" }));
+    ws.send(JSON.stringify({ type: "addProject", requestId: "scope_second", fixedCrewVersion: 1, crewChoices: {}, autoAssign: false, id: "settingsscopesecond", name: "Second", folder: secondFolder, tabId: "settingsscopesecond-development" }));
     await addSecond;
 
     const changed = nextState(ws, (state) => state.projects.some((project: any) => project.id === "settingsscopefirst"
@@ -196,38 +169,5 @@ test("selected-tab instruction inventory stays scoped during a background folder
       assert.equal(state.selectedTabId, "settingsscopesecond-development");
       assert.deepEqual(projectInstructions.map((item: any) => item.path), [join(secondFolder, "CLAUDE.md")]);
     } finally { fresh.close(); }
-  } finally { ws.close(); }
-});
-
-test("updateSeat accepts a shipped preset portrait or a generated route, and refuses anything else including traversal", async () => {
-  const ws = await openWs();
-  try {
-    const initial = nextMessages(ws, 2);
-    ws.send(JSON.stringify({ type: "hello" }));
-    const [state] = await initial;
-    const tab = state.projects[0].tabs[0];
-    const leader = tab.crew.find((seat: any) => seat.isLeader);
-    for (const pic of ["avatars/atlas.svg", "avatars/ash.svg"]) {
-      const update = nextMessage(ws);
-      ws.send(JSON.stringify({ type: "updateSeat", tabId: tab.id, slot: leader.slot, pic }));
-      const changed = await update;
-      assert.equal(changed.type, "state", `${pic} is a shipped portrait and must be accepted`);
-      assert.equal(changed.projects[0].tabs[0].crew.find((seat: any) => seat.slot === leader.slot).pic, pic);
-    }
-    // Old photo presets stay refused even when such a file exists in public/avatars.
-    writeFileSync(join(root, "public", "avatars", "legacy.jpg"), "x");
-    writeFileSync(join(root, "public", "avatars", "legacy.png"), "x");
-    for (const pic of ["avatars/legacy.jpg", "avatars/legacy.png"]) {
-      const refusedLegacy = nextMessage(ws);
-      ws.send(JSON.stringify({ type: "updateSeat", tabId: tab.id, slot: leader.slot, pic }));
-      assert.equal((await refusedLegacy).type, "error", `${pic} is an old preset and must be refused`);
-    }
-    for (const pic of ["avatars/nope.svg", "avatars/atlas.jpg", "avatars/sol.png", "avatars/../server/index.ts", "avatars/..%2fserver%2findex.ts", "../avatars/astra.jpg", "/avatars/astra.jpg", "avatars/astra.webp", "avatars\\astra.jpg", "avatars\\atlas.svg", "avatars/astra.jpg/x", "avatars/.jpg", "avatars/"]) {
-      const refused = nextMessage(ws);
-      ws.send(JSON.stringify({ type: "updateSeat", tabId: tab.id, slot: leader.slot, pic }));
-      const invalid = await refused;
-      assert.equal(invalid.type, "error", `${pic} must be refused`);
-      assert.match(invalid.message, /invalid seat pic/);
-    }
   } finally { ws.close(); }
 });

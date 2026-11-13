@@ -3,8 +3,8 @@
 // a debugger that dies can take its debuggee with it. ProcDump exits on its own when the process exits.
 // Limits: the moments before the attach are not covered; a debugger can change timing enough to hide the bug, so a quiet gate is not proof.
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
-import { dirname, basename, join, resolve } from "node:path";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { dirname, basename, delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type Catcher = { label: string; chunks: Buffer[]; exited: Promise<void>; closed: boolean };
@@ -35,18 +35,33 @@ export function crashCatcherDisabled(): string | null {
   return null;
 }
 
-// Starts procdump on a running pid. Never throws and never fails a test: a missing tool prints one line and does nothing.
-export function attachCrashCatcher(pid: number | undefined, label: string, dumpDir: string = crashDumpDir()): void {
+// lstat, not existsSync: a WinGet install is an app-execution alias (a reparse point) that existsSync reports as missing but spawn runs.
+const present = (file: string): boolean => { try { lstatSync(file); return true; } catch { return false; } };
+// The first procdump.exe/.com found on this PATH (what spawn("procdump") would run), or null. Cached per PATH value for the process.
+const procdumpByPath = new Map<string, string | null>();
+export function findProcdump(pathVar: string = process.env.PATH ?? ""): string | null {
+  if (procdumpByPath.has(pathVar)) return procdumpByPath.get(pathVar)!;
+  const found = pathVar.split(delimiter).filter(Boolean).flatMap((dir) => ["procdump.exe", "procdump.com"].map((name) => join(dir, name))).find(present) ?? null;
+  procdumpByPath.set(pathVar, found);
+  return found;
+}
+
+type Attach = { program?: string | null; spawnProcess?: typeof spawn };
+
+// Starts procdump on a running pid. Never throws and never fails a test: a missing tool prints one line and does nothing, before any folder,
+// log line or prune is written. `program` and `spawnProcess` let a test hand in a controlled executable path and a recording spawner.
+export function attachCrashCatcher(pid: number | undefined, label: string, dumpDir: string = crashDumpDir(), { program = findProcdump(), spawnProcess = spawn }: Attach = {}): void {
   if (!pid) return;
   const off = crashCatcherDisabled();
   if (off) return notice(off);
   if (catchers.get(pid)?.closed === false) return; // never two procdumps on one pid (the preload and temp-root.ts both attach a test file)
+  if (!program) return notice("procdump not found");
   try { mkdirSync(dumpDir, { recursive: true }); } catch { return notice("dump folder not writable"); }
   // CC_CRASH_CATCHER_LOG=<file>: one line per attach, so a run can prove which processes were watched.
   if (process.env.CC_CRASH_CATCHER_LOG) { try { appendFileSync(process.env.CC_CRASH_CATCHER_LOG, `${pid} ${label}\n`); } catch { /* a log must never fail a test */ } }
   pruneCrashDumps(dumpDir);
   let proc;
-  try { proc = spawn("procdump", ["-accepteula", "-e", "-mm", String(pid), dumpDir], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); } catch { return notice("procdump not found"); }
+  try { proc = spawnProcess(program, ["-accepteula", "-e", "-mm", String(pid), dumpDir], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }); } catch { return notice("procdump not found"); }
   watchCatcher(pid, label, proc);
 }
 

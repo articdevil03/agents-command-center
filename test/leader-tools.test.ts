@@ -1,213 +1,98 @@
+// The leader's tool layer for a fixed crew: the SDK/JSON shape, the argument schemas and the awaited handlers.
+// The tools themselves are the explicit fixed specs (never the retired four legacy tools); the real ones come from fixedLeaderSpecs.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLeaderToolDefs, createLeaderTools, LEADER_ALLOWED_TOOLS } from "../server/leader-tools.ts";
+import { z } from "zod";
+import { buildLeaderToolDefs, buildLeaderToolSpecs, createLeaderTools, leaderToolJsonSchema, runLeaderTool, LAUNCH_BRIEF_MAX_CHARS, type LeaderToolSpec } from "../server/leader-tools.ts";
+import { importWithTempDataRoot } from "./temp-root.ts";
 
-function seat(slot: string, over = {}) {
-  return { slot, seatKey: `alpha-development.${slot}`, name: slot, cli: "codex", model: "gpt-6-sol", effort: "high", isLeader: slot === "leader", ...over };
-}
+const { modules: { tools } } = await importWithTempDataRoot(async () => ({ tools: await import("../server/main/fixed-task-tools.ts") }));
+const FIXED_NAMES = ["finish_fixed_task", "list_task_archives", "get_task_archive", "get_fixed_task", "reconcile_task_execution", "begin_planning", "accept_planner_report", "request_task_action", "verify_task_evidence"];
+const LEGACY_NAMES = ["get_crew_status", "launch_seat", "send_request", "list_requests", "advance_step", "report_round", "finish_fix", "wait_for_runs"];
+const realSpecs = () => tools.fixedLeaderSpecs("fixed", {});
+const ok = (text: string) => ({ content: [{ type: "text" as const, text }] });
+// Explicit fixed specs for a fixture: the only dependency the tool layer takes.
+const deps = (specs: LeaderToolSpec[]) => ({ fixedSpecs: () => specs, tabName: "Development" });
+const find = (specs: { name: string }[], name: string) => { const found = specs.find((item) => item.name === name); assert.ok(found, `tool "${name}" not found`); return found!; };
 
-function deps(over = {}) {
-  return {
-    tabName: "Development",
-    crew: () => [seat("coder"), seat("reviewer1")],
-    statusOf: () => "idle",
-    launch: () => ({ ok: true }),
-    ...over,
-  };
-}
-
-function findTool(defs, name) {
-  const found = defs.find((item) => item.name === name);
-  assert.ok(found, `tool "${name}" not found`);
-  return found;
-}
-
-test("leader tools register only the tab-scoped crew and launch tools", () => {
-  const defs = buildLeaderToolDefs(deps());
-  assert.deepEqual(LEADER_ALLOWED_TOOLS, defs.map((item) => `mcp__tab-crew__${item.name}`));
+test("fixed leader tools are exactly the nine fixed tools, served by name through the SDK defs and the allowed-tool names, and none of the retired tools", () => {
+  const specs = buildLeaderToolSpecs(deps(realSpecs()) as any);
+  assert.deepEqual(specs.map((item) => item.name), FIXED_NAMES);
+  assert.deepEqual(buildLeaderToolDefs(deps(realSpecs()) as any).map((item) => item.name), FIXED_NAMES);
+  assert.deepEqual(specs.map((item) => `mcp__tab-crew__${item.name}`), FIXED_NAMES.map((name) => `mcp__tab-crew__${name}`));
+  for (const name of LEGACY_NAMES) assert.equal(specs.some((item) => item.name === name), false, `${name} is retired`);
 });
 
-test("get_crew_status reads current settings and status for this tab only", async () => {
-  let model = "gpt-6-sol", status = "idle";
-  const d = deps({ crew: () => [seat("coder", { model })], statusOf: () => status });
-  const { handler } = findTool(buildLeaderToolDefs(d), "get_crew_status");
-  const before = JSON.parse((await handler({}, {})).content[0].text);
-  assert.equal(before.tab, "Development");
-  assert.equal(before.crew[0].model, "gpt-6-sol");
-  assert.equal(before.crew[0].status, "idle");
-  model = "gpt-6-astra";
-  status = "working";
-  const after = JSON.parse((await handler({}, {})).content[0].text);
-  assert.equal(after.crew[0].model, "gpt-6-astra");
-  assert.equal(after.crew[0].status, "working");
+test("supplied fixed specs are returned as they are, and without them nothing is built", () => {
+  const supplied = [{ name: "get_fixed_task", description: "d", shape: {}, handler: async () => ok("{}") }];
+  const built = buildLeaderToolSpecs(deps(supplied));
+  assert.deepEqual(built.map((item) => item.name), ["get_fixed_task"]);
+  assert.equal(built[0], supplied[0], "the very spec that was supplied");
+  // The retired generated tools are gone: a tool layer with no supplied specs refuses instead of inventing the old four.
+  assert.throws(() => buildLeaderToolSpecs({ tabName: "Development" } as any), /fixedSpecs is required/);
+  assert.throws(() => buildLeaderToolDefs({} as any), /fixedSpecs is required/);
 });
 
-test("get_crew_status includes the leader but marks it non-runnable", async () => {
-  const d = deps({ crew: () => [seat("coder"), seat("leader")] });
-  const result = JSON.parse((await findTool(buildLeaderToolDefs(d), "get_crew_status").handler({}, {})).content[0].text);
-  assert.deepEqual(result.crew.map((item) => item.slot), ["coder", "leader"]);
-  assert.equal(result.crew[0].runnable, true);
-  assert.equal(result.crew[1].runnable, false);
-  assert.equal(result.crew.every((item) => item.seatKey.startsWith("alpha-development.")), true);
-});
-
-test("launch_seat delegates a slot and brief and reports the tab-scoped key", async () => {
-  const calls = [];
-  const d = deps({ launch: (slot, brief) => { calls.push({ slot, brief }); return { ok: true }; } });
-  const { handler } = findTool(buildLeaderToolDefs(d), "launch_seat");
-  const result = await handler({ slot: "coder", brief: "fix the thing" }, {});
-  assert.deepEqual(calls, [{ slot: "coder", brief: "fix the thing" }]);
-  assert.equal(result.isError, undefined);
-  assert.match(result.content[0].text, /launched "alpha-development\.coder"/);
-});
-
-test("launch_seat reports a real launch refusal", async () => {
-  const d = deps({ launch: () => ({ ok: false, error: "tab is busy" }) });
-  const result = await findTool(buildLeaderToolDefs(d), "launch_seat").handler({ slot: "coder", brief: "x" }, {});
-  assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /tab is busy/);
-});
-
-test("launch_seat notes when slot settings changed after the last status check", async () => {
-  let model = "gpt-6-sol";
-  const d = deps({ crew: () => [seat("coder", { model })] });
-  const defs = buildLeaderToolDefs(d);
-  await findTool(defs, "get_crew_status").handler({}, {});
-  model = "gpt-6-astra";
-  const result = await findTool(defs, "launch_seat").handler({ slot: "coder", brief: "work" }, {});
-  assert.match(result.content[0].text, /settings changed since the last status check/);
-  assert.match(result.content[0].text, /gpt-6-astra/);
-});
-
-test("launch_seat has no stale-settings note before a status check", async () => {
-  const result = await findTool(buildLeaderToolDefs(deps()), "launch_seat").handler({ slot: "coder", brief: "work" }, {});
-  assert.equal(result.content[0].text, 'launched "alpha-development.coder"');
-});
-
-test("send_request can only name a destination and delegates the current tab scope", async () => {
-  const calls = [];
-  const d = deps({ sendRequest: (toTabId, title, body) => {
-    calls.push({ fromTabId: "alpha-development", toTabId, title, body });
-    return { ok: true, requestId: "server_request_1", request: { id: "row-1", fromTabId: "alpha-development", toTabId, title, body, status: "pending", createdAt: 1 } };
-  } });
-  const result = await findTool(buildLeaderToolDefs(d), "send_request").handler({ toTabId: "beta-development", title: "Review", body: "Look at this." }, {});
-  assert.deepEqual(calls, [{ fromTabId: "alpha-development", toTabId: "beta-development", title: "Review", body: "Look at this." }]);
-  assert.deepEqual(JSON.parse(result.content[0].text), {
-    requestId: "server_request_1",
-    request: { id: "row-1", fromTabId: "alpha-development", toTabId: "beta-development", title: "Review", body: "Look at this.", status: "pending", createdAt: 1 },
-  });
-});
-
-test("send_request reports validation refusals and list_requests returns only its injected tab scope", async () => {
-  const incoming = [{ id: "row-2", fromTabId: "beta-development", toTabId: "alpha-development", title: "For alpha", body: "Only alpha should see this.", status: "pending", createdAt: 2 }];
-  const d = deps({
-    sendRequest: () => ({ ok: false, error: "destination does not exist" }),
-    listRequests: () => incoming,
-  });
-  const send = await findTool(buildLeaderToolDefs(d), "send_request").handler({ toTabId: "missing-development", title: "x", body: "y" }, {});
-  assert.equal(send.isError, true);
-  assert.match(send.content[0].text, /destination does not exist/);
-  const listed = JSON.parse((await findTool(buildLeaderToolDefs(d), "list_requests").handler({}, {})).content[0].text);
-  assert.equal(listed.tab, "Development");
-  assert.deepEqual(listed.requests, incoming);
-});
-
-test("createLeaderTools builds the SDK MCP server named tab-crew", () => {
-  const server = createLeaderTools(deps());
+test("createLeaderTools builds the SDK MCP server named tab-crew from the supplied fixed specs", () => {
+  const server = createLeaderTools(deps(realSpecs()) as any);
   assert.equal(server.type, "sdk");
   assert.equal(server.name, "tab-crew");
+  assert.ok(server.instance, "an SDK server instance was built");
 });
 
-test("launch_seat waits for an asynchronous launch and reports a denial as an error", async () => {
-  const { handler } = findTool(buildLeaderToolDefs(deps({ launch: async () => ({ ok: false, error: "The user denied this." }) })), "launch_seat");
-  const denied = await handler({ slot: "coder", brief: "work" }, {});
-  assert.equal(denied.isError, true);
-  assert.match(denied.content[0].text, /The user denied this\./);
-  const { handler: allowedHandler } = findTool(buildLeaderToolDefs(deps({ launch: async () => ({ ok: true }) })), "launch_seat");
-  const allowed = await allowedHandler({ slot: "coder", brief: "work" }, {});
-  assert.equal(allowed.isError, undefined);
-  assert.match(allowed.content[0].text, /launched/);
-});
-
-// A brief goes to a file, so it may be long; one without an end would ride in every state message as a launch notice.
-test("launch_seat refuses a brief over the cap through the real argument validation, and still takes one at the cap", async () => {
-  const { buildLeaderToolSpecs, runLeaderTool, LAUNCH_BRIEF_MAX_CHARS } = await import("../server/leader-tools.ts");
-  const calls: string[] = [];
-  const specs = buildLeaderToolSpecs(deps({ launch: (_slot: string, brief: string) => { calls.push(brief); return { ok: true }; } }) as any);
-  const atCap = await runLeaderTool(specs, "launch_seat", { slot: "coder", brief: "x".repeat(LAUNCH_BRIEF_MAX_CHARS) });
-  assert.equal(atCap.isError, false);
-  assert.equal(calls.length, 1);
-  const over = await runLeaderTool(specs, "launch_seat", { slot: "coder", brief: "x".repeat(LAUNCH_BRIEF_MAX_CHARS + 1) });
+test("fixed tool argument schemas hold through the real validation: the brief cap, the action kinds and the required task identity", async () => {
+  const specs = realSpecs();
+  const expected = { taskId: "t", planVersion: 1, recordRevision: 1 };
+  // At the cap the arguments are valid, so the call reaches the handler, which refuses this instance as not the current leader.
+  const atCap = await runLeaderTool(specs, "begin_planning", { expected: null, brief: "x".repeat(LAUNCH_BRIEF_MAX_CHARS) });
+  assert.equal(atCap.isError, true);
+  assert.match(atCap.text, /^begin_planning failed: Only the current leader/, "valid arguments reached the handler");
+  const over = await runLeaderTool(specs, "begin_planning", { expected: null, brief: "x".repeat(LAUNCH_BRIEF_MAX_CHARS + 1) });
   assert.equal(over.isError, true);
-  assert.match(over.text, /invalid arguments for launch_seat: brief:/);
-  assert.equal(calls.length, 1, "nothing was launched");
+  assert.match(over.text, /^invalid arguments for begin_planning: brief:/);
+  assert.match((await runLeaderTool(specs, "begin_planning", { expected: null, brief: "" })).text, /^invalid arguments for begin_planning: brief:/);
+  assert.match((await runLeaderTool(specs, "begin_planning", { brief: "work" })).text, /^invalid arguments for begin_planning: expected:/, "the task identity is required, even as null");
+  assert.match((await runLeaderTool(specs, "begin_planning", { expected: { taskId: "t", planVersion: 0, recordRevision: 1 }, brief: "work" })).text, /^invalid arguments for begin_planning: expected/, "a plan version is positive");
+  assert.match((await runLeaderTool(specs, "request_task_action", { expected, kind: "launch_anything", brief: "work" })).text, /^invalid arguments for request_task_action: kind:/);
+  assert.match((await runLeaderTool(specs, "request_task_action", { expected, kind: "build", route: "sideways", brief: "work" })).text, /^invalid arguments for request_task_action: route:/);
+  assert.match((await runLeaderTool(specs, "request_task_action", { expected, kind: "build", brief: "work" })).text, /^request_task_action failed: Only the current leader/, "a valid action reaches the handler");
+  assert.match((await runLeaderTool(specs, "verify_task_evidence", { expected })).text, /^invalid arguments for verify_task_evidence: runId:/);
+  assert.match((await runLeaderTool(specs, "accept_planner_report", { expected })).text, /^invalid arguments for accept_planner_report: runId:/);
 });
 
-test("get_crew_status names each seat's role, advisor, write permission and whether it runs the process, and lists the steps with their owners", async () => {
-  const steps = [
-    { id: "brief", label: "Brief", type: "work", owners: ["planner"] },
-    { id: "review", label: "Review", type: "rounds", pairs: [{ reviewer: "reviewer1", fixers: ["coder"] }] },
-  ];
-  const d = deps({
-    crew: () => [seat("planner", { role: "Planner", cli: "claude", advisor: "claude-fable-5-1", canWrite: false, orchestrates: true }), seat("coder", { role: "Coder", canWrite: true })],
-    steps: () => steps,
-  });
-  const status = JSON.parse((await findTool(buildLeaderToolDefs(d), "get_crew_status").handler({}, {})).content[0].text);
-  assert.deepEqual(status.crew.map((item: any) => [item.slot, item.role, item.advisor, item.canWrite, item.orchestrates]), [["planner", "Planner", "claude-fable-5-1", false, true], ["coder", "Coder", null, true, false]]);
-  assert.deepEqual(status.steps, steps);
-  const description = findTool(buildLeaderToolDefs(d), "get_crew_status").description;
-  assert.match(description, /Each step names its owner seat; hand a step's work to its owner/);
-  const none = JSON.parse((await findTool(buildLeaderToolDefs(deps()), "get_crew_status").handler({}, {})).content[0].text);
-  assert.deepEqual(none.steps, [], "a caller with no steps gets an empty list, never a crash");
+test("fixed tool JSON schemas keep their required fields and the brief cap", () => {
+  const schema = (name: string) => leaderToolJsonSchema(find(realSpecs(), name) as LeaderToolSpec) as any;
+  assert.deepEqual(schema("get_fixed_task").properties, {});
+  assert.deepEqual([...schema("begin_planning").required].sort(), ["brief", "expected"]);
+  assert.equal(schema("begin_planning").properties.brief.maxLength, LAUNCH_BRIEF_MAX_CHARS);
+  for (const name of ["expected", "kind", "brief"]) assert.ok(schema("request_task_action").required.includes(name), `${name} is required`);
+  assert.ok(schema("request_task_action").properties.kind.enum.includes("build"));
 });
 
-test("runnable depends on who asks: never yourself, never the leader, and only the one seat a talk-only leader may launch", async () => {
-  const crewOf = () => [seat("leader"), seat("planner"), seat("coder")];
-  const slots = async (over: object) => JSON.parse((await findTool(buildLeaderToolDefs(deps({ crew: crewOf, ...over })), "get_crew_status").handler({}, {})).content[0].text).crew.filter((item: any) => item.runnable).map((item: any) => item.slot);
-  assert.deepEqual(await slots({}), ["planner", "coder"], "the leader's view");
-  assert.deepEqual(await slots({ callerSlot: "planner" }), ["coder"], "a seat is not runnable by itself");
-  assert.deepEqual(await slots({ onlyLaunchable: () => "planner" }), ["planner"], "a leader beside a planner that runs the process");
-  assert.deepEqual(await slots({ onlyLaunchable: () => undefined }), ["planner", "coder"]);
-  assert.deepEqual(await slots({ callerSlot: "planner", leaderTakesJobs: true }), ["leader", "coder"], "the seat that runs the process may hand a job to the leader");
+// The awaited handlers. runLeaderTool is the one place the Codex, OpenCode and ACP routes await a handler; the SDK route hands the same handler to the SDK.
+const asyncSpecs = (): LeaderToolSpec[] => [
+  { name: "slow_ok", description: "answers later", shape: { value: z.string() }, handler: async ({ value }) => { await new Promise((resolve) => setTimeout(resolve, 5)); return ok(`got ${value}`); } },
+  { name: "slow_refused", description: "an error result", shape: {}, handler: async () => ({ content: [{ type: "text" as const, text: "refused: busy" }], isError: true as const }) },
+  { name: "slow_throws", description: "rejects", shape: {}, handler: async () => { await new Promise((resolve) => setTimeout(resolve, 5)); throw new Error("the launch failed"); } },
+];
+
+test("fixed tool handlers are awaited: an asynchronous answer, an error result and a rejection each come back as the tool's own result", async () => {
+  const specs = buildLeaderToolSpecs(deps(asyncSpecs()));
+  const answered = await runLeaderTool(specs, "slow_ok", { value: "yes" });
+  assert.deepEqual(answered, { text: "got yes", isError: false }, "the resolved content, never a pending promise");
+  assert.deepEqual(await runLeaderTool(specs, "slow_refused", {}), { text: "refused: busy", isError: true });
+  assert.deepEqual(await runLeaderTool(specs, "slow_throws", {}), { text: "slow_throws failed: the launch failed", isError: true });
+  assert.deepEqual(await runLeaderTool(specs, "no_such_tool", {}), { text: "unknown tool: no_such_tool", isError: true });
+  const invalid = await runLeaderTool(specs, "slow_ok", { value: 7 });
+  assert.equal(invalid.isError, true);
+  assert.match(invalid.text, /^invalid arguments for slow_ok: value:/, "a bad argument is refused before the handler runs");
 });
 
-test("get_crew_status carries where the process stands, and launch_seat names the run it started", async () => {
-  const view = { stepId: "build", stepLabel: "Build", stepType: "work", phase: "review", round: 1, look: "not reached", orchestrator: "planner" };
-  const d = deps({ processView: () => view, launch: () => ({ ok: true, runId: "run-123" }) });
-  const status = JSON.parse((await findTool(buildLeaderToolDefs(d), "get_crew_status").handler({}, {})).content[0].text);
-  assert.deepEqual(status.process, view);
-  assert.equal(JSON.parse((await findTool(buildLeaderToolDefs(deps()), "get_crew_status").handler({}, {})).content[0].text).process, null);
-  const launched = await findTool(buildLeaderToolDefs(d), "launch_seat").handler({ slot: "coder", brief: "x" }, {});
-  assert.equal(launched.content[0].text, 'launched "alpha-development.coder" as run run-123');
-});
-
-test("the step tools and wait_for_runs exist only when the server hands them in, and keep their caps", async () => {
-  const { buildLeaderToolSpecs, runLeaderTool, WAIT_MAX_RUNS, WAIT_MAX_SECONDS } = await import("../server/leader-tools.ts");
-  const names = (over: object) => buildLeaderToolSpecs(deps(over) as any).map((item) => item.name);
-  assert.deepEqual(names({}), ["get_crew_status", "launch_seat", "send_request", "list_requests"], "the leader's four");
-  const bar = [{ stepId: "build", label: "Build", type: "work", state: "current", owners: ["coder"] }];
-  const calls: unknown[] = [];
-  const stepOps = {
-    advance: (id: string) => { calls.push(["advance", id]); return { changed: false, reason: "Ann still has a run working on Build", stepBar: bar }; },
-    reportRound: (round: number, outcome: string) => { calls.push(["report", round, outcome]); return { changed: true, stepBar: bar }; },
-    finishFix: (round: number) => { calls.push(["fix", round]); return { changed: true, stepBar: bar }; },
-  };
-  const waited: unknown[] = [];
-  const waitForRuns = async (runIds: string[], seconds: number) => { waited.push([runIds, seconds]); return runIds.map((runId) => ({ runId, seatKey: "k", status: "done", outcome: "done", logPath: "p", tail: "" })); };
-  assert.deepEqual(names({ stepOps }), ["get_crew_status", "launch_seat", "send_request", "list_requests", "advance_step", "report_round", "finish_fix"]);
-  assert.deepEqual(names({ waitForRuns }), ["get_crew_status", "launch_seat", "send_request", "list_requests", "wait_for_runs"]);
-  const specs = buildLeaderToolSpecs(deps({ stepOps, waitForRuns }) as any);
-  const refused = await runLeaderTool(specs, "advance_step", { fromStepId: "build" });
-  assert.equal(refused.isError, true, "nothing changed is an error result");
-  assert.deepEqual(JSON.parse(refused.text), { changed: false, reason: "Ann still has a run working on Build", stepBar: bar });
-  assert.equal((await runLeaderTool(specs, "report_round", { round: 2, outcome: "findings" })).isError, false);
-  assert.equal((await runLeaderTool(specs, "report_round", { round: 2, outcome: "maybe" })).isError, true, "only findings or clean");
-  assert.equal((await runLeaderTool(specs, "finish_fix", { round: 2 })).isError, false);
-  assert.deepEqual(calls, [["advance", "build"], ["report", 2, "findings"], ["fix", 2]]);
-  const ok = await runLeaderTool(specs, "wait_for_runs", { runIds: ["a", "b"] });
-  assert.equal(JSON.parse(ok.text).allEnded, true);
-  assert.deepEqual(waited, [[["a", "b"], 60]], "the default wait is a minute");
-  assert.equal((await runLeaderTool(specs, "wait_for_runs", { runIds: Array.from({ length: WAIT_MAX_RUNS + 1 }, (_, i) => `r${i}`) })).isError, true, "at most eight runs");
-  assert.equal((await runLeaderTool(specs, "wait_for_runs", { runIds: ["a"], maxWaitSeconds: WAIT_MAX_SECONDS + 1 })).isError, true, "at most 120 seconds");
-  assert.equal(waited.length, 1, "a refused call never waited");
+test("the SDK defs carry each fixed spec's name, description and awaited handler", async () => {
+  const defs = buildLeaderToolDefs(deps(asyncSpecs()));
+  assert.deepEqual(defs.map((item) => [item.name, item.description]), asyncSpecs().map((item) => [item.name, item.description]));
+  const slow = find(defs, "slow_ok") as any;
+  assert.deepEqual(await slow.handler({ value: "sdk" }, {}), ok("got sdk"));
+  assert.equal(((await (find(defs, "slow_refused") as any).handler({}, {})) as any).isError, true);
+  await assert.rejects((find(defs, "slow_throws") as any).handler({}, {}), /the launch failed/, "the SDK route sees the rejection, never a pending promise");
 });

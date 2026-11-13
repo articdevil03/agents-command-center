@@ -151,15 +151,23 @@ test("server death after readiness displays an error in the window", async () =>
 
 // The shutdown handler is cut out of the real server/index.ts and run here, so this stands in only for the one helper it calls.
 const SYSTEM32_TASKKILL = "C:\\Windows\\System32\\taskkill.exe";
-function registerServerShutdownHandlers(proc, calls) {
+function registerServerShutdownHandlers(proc, calls, t) {
   const serverSource = stripTypeScriptTypes(sourceText("server/index.ts")).replaceAll("\r\n", "\n");
-  const shutdownSource = serverSource.slice(serverSource.indexOf("function shutdown("));
-  let closeCallback;
+  const shutdownSource = serverSource.slice(serverSource.indexOf("let shutdownWork"));
+  let closeCallback, finishDrain, finishExit;
+  const ended = new Promise(resolve => { finishExit = resolve; });
+  const drain = new Promise(resolve => { finishDrain = resolve; });
+  const originalExit = proc.exit; proc.exit = code => { originalExit(code); finishExit(code); };
+  t.after(() => { finishDrain(false); closeCallback?.(); });
   const timeouts = [];
   const clientA = { terminate: () => calls.push("websocket:a") };
   const clientB = { terminate: () => calls.push("websocket:b") };
   runInNewContext(shutdownSource, {
-    process: proc, console: { log() {} }, clearInterval: (timer) => calls.push(`${timer.name} timer`),
+    process: proc, console: { log() {}, error() {} },
+    describeError: error => String(error),
+    fixedGitOperations: { close: () => calls.push("git:close"), drain: () => { calls.push("git:drain"); return drain; } },
+    closeWorkerAdmission: () => calls.push("worker:close"), drainWorkers: () => { calls.push("worker:drain"); return Promise.resolve(true); },
+    clearTimeout() {}, clearInterval: (timer) => calls.push(`${timer.name} timer`),
     spawnSync: (command, args, options) => { calls.push({ command, args, options }); },
     windowsTaskkillPath: () => SYSTEM32_TASKKILL,
     stallTimer: { name: "stall" }, backpressureTimer: { name: "backpressure" }, stopAllRunning: () => calls.push("workers"),
@@ -174,23 +182,25 @@ function registerServerShutdownHandlers(proc, calls) {
     clients: new Set([clientA, clientB]),
     setTimeout: (_callback, ms) => { timeouts.push(ms); return { unref() {} }; },
   });
-  return { closeHttp: () => closeCallback?.(), timeouts };
+  return { closeHttp: () => closeCallback?.(), timeouts, releaseDrain: (confirmed = true) => finishDrain(confirmed), ended };
 }
 
-test("server signal shutdown stops tab leaders and workers, closes every connection, then exits", () => {
+test("server signal shutdown stops tab leaders and workers, closes every connection, then exits", async t => {
   for (const event of ["SIGTERM", "SIGINT"]) {
     const calls = [];
     const proc = Object.assign(new EventEmitter(), { connected: true, send() {}, exit: (code) => calls.push(`exit:${code}`) });
-    const shutdown = registerServerShutdownHandlers(proc, calls);
+    const shutdown = registerServerShutdownHandlers(proc, calls, t);
     proc.emit(event);
-    assert.deepEqual(calls, ["stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
+    assert.deepEqual(calls, ["worker:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
     assert.deepEqual(shutdown.timeouts, [7000]);
     shutdown.closeHttp();
+    assert.equal(calls.some(call => String(call).startsWith("exit:")), false, "HTTP completion waits for Git drain");
+    shutdown.releaseDrain(); await shutdown.ended;
     assert.deepEqual(calls.at(-1), "exit:0", "the process exits after HTTP close finishes");
   }
 });
 
-test("Electron's real shutdown message drives the server IPC handler", async () => {
+test("Electron's real shutdown message drives the server IPC handler", async t => {
   const electron = shellHarness();
   const started = electron.startServer();
   await Promise.resolve();
@@ -201,11 +211,15 @@ test("Electron's real shutdown message drives the server IPC handler", async () 
 
   const calls = [];
   electron.proc.exit = (code) => calls.push(`exit:${code}`);
-  const server = registerServerShutdownHandlers(electron.proc, calls);
+  const server = registerServerShutdownHandlers(electron.proc, calls, t);
+  electron.proc.emit("message", "unrelated IPC");
+  assert.deepEqual(calls, [], "non-shutdown IPC does nothing");
   electron.proc.emit("message", electron.sent[0]);
-  assert.deepEqual(calls, ["stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
+  assert.deepEqual(calls, ["worker:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
   assert.deepEqual(server.timeouts, [7000]);
-  server.closeHttp();
+  server.releaseDrain(); await Promise.resolve();
+  assert.notEqual(calls.at(-1), "exit:0", "Git completion still waits for HTTP");
+  server.closeHttp(); await server.ended;
   assert.equal(calls.at(-1), "exit:0");
 
   electron.proc.exitCode = 0;
@@ -214,18 +228,39 @@ test("Electron's real shutdown message drives the server IPC handler", async () 
   assert.equal(electron.timers.size, 0, "the server exited by itself: the backstop was cleared, no taskkill needed");
 });
 
-test("server disconnect handler and startup parent-loss check stop the process tree", () => {
+test("server disconnect handler and startup parent-loss check stop the process tree", async t => {
   for (const mode of ["disconnect", "startup"]) {
     const calls = [];
     const proc = Object.assign(new EventEmitter(), {
       connected: mode === "disconnect", pid: 4321, send() {}, exit: (code) => calls.push(`exit:${code}`),
     });
-    registerServerShutdownHandlers(proc, calls);
+    const shutdown = registerServerShutdownHandlers(proc, calls, t);
     if (mode === "disconnect") { proc.connected = false; proc.emit("disconnect"); }
+    assert.equal(calls[0], "worker:close");
+    assert.equal(calls.includes("exit:0"), false);
+    assert.equal(calls.some(call => typeof call === "object"), false, "taskkill waits for drain");
+    shutdown.releaseDrain(); await shutdown.ended;
     assert.deepEqual(plain(calls), [
-      "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers",
+      "worker:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain",
       { command: SYSTEM32_TASKKILL, args: ["/pid", "4321", "/T", "/F"], options: { windowsHide: true } },
       "exit:0",
     ]);
   }
+});
+
+test("server shutdown is idempotent and unknown Git drain refuses successful exit and taskkill", async t => {
+  const calls = [];
+  const proc = Object.assign(new EventEmitter(), { connected: true, pid: 4321, send() {}, exit: code => calls.push(`exit:${code}`) });
+  const shutdown = registerServerShutdownHandlers(proc, calls, t);
+  proc.connected = false; proc.emit("disconnect");
+  proc.emit("SIGTERM"); proc.emit("SIGINT"); proc.emit("message", "shutdown");
+  assert.equal(calls.filter(call => call === "git:close").length, 1);
+  assert.equal(calls.filter(call => call === "git:drain").length, 1);
+  assert.equal(calls.some(call => typeof call === "object"), false, "no taskkill before unconfirmed drain");
+  shutdown.closeHttp(); shutdown.releaseDrain(false); await within(shutdown.ended, "disconnected unknown drain");
+  assert.equal(calls.includes("exit:0"), false);
+  assert.equal(calls.filter(call => call === "git:close").length, 1);
+  assert.equal(calls.filter(call => call === "git:drain").length, 1);
+  assert.equal(calls.at(-1), "exit:1");
+  assert.equal(calls.some(call => typeof call === "object"), false);
 });

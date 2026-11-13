@@ -12,9 +12,10 @@ const AUTHOR = "Agents Command Center contributors";
 const EMAIL = "noreply@users.noreply.github.com";
 const PATTERN_FILE_NAME = ".leak-patterns.local";
 // Never exported: the design workspace, the private word list, and internal-only files (each named, with its reason).
-const EXCLUDE_PREFIXES = ["design/"];
+const EXCLUDE_PREFIXES = ["design/", "backups/", "tasks/", "executions/", "execution-logs/"];
 const EXCLUDE_FILES = new Set([
   PATTERN_FILE_NAME,
+  "config/setups.json", "config/fixed-crew-recovery.json", "config/acp-clis.json",
   ".packC-map.md", // an internal pack state map, only meaningful to the build process that wrote it
 ]);
 const PROFILE_OK = /^(example|runner|user|username|test|tester|x|public|default|me|you|name|yourname|someone)$/i;

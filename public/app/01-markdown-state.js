@@ -136,8 +136,6 @@
     tick: '<svg class="tick" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7.5 6 10.5 11.5 4" stroke="currentColor" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     warn: '<svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 4v3.5M7 9.6v.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
     ok: '<svg width="16" height="16" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M4.4 7.2 6.2 9 9.7 5.2" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    pencil: '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M8.2 1.8 10.2 3.8 4 10H2V8L8.2 1.8Z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>',
-    picture: '<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor" stroke-width="1.3"/><circle cx="6" cy="7" r="1.3" stroke="currentColor" stroke-width="1.2"/><path d="m3 12 3.5-3 2.5 2 2-1.5 3 2.5" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>',
     chev: '<svg width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5 6 7.5 9 4.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>',
     rchev: '<svg class="chev" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 3 7.5 6 4.5 9" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round"/></svg>',
     back: '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
@@ -146,17 +144,12 @@
     crew: '<svg width="17" height="17" viewBox="0 0 18 18" fill="none" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.5" stroke="currentColor" stroke-width="1.4"/><circle cx="12.5" cy="7.5" r="2" stroke="currentColor" stroke-width="1.4"/><path d="M2 15c.6-2.6 2.3-4 4.5-4s3.9 1.4 4.5 4M11 11.3c.5-.2 1-.3 1.5-.3 1.8 0 3 1.1 3.5 3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
     stop: '<svg width="8" height="8" viewBox="0 0 8 8" aria-hidden="true"><rect width="8" height="8" rx="1.5" fill="currentColor"/></svg>',
   };
-  const KINDS = [
-    { id: "dev", name: "Development", desc: "Code: build, review rounds, ship" },
-    { id: "design", name: "Design", desc: "Mockups, images and assets" },
-    { id: "mkt", name: "Marketing", desc: "Posts, captions, images and video" },
-  ];
   // The 20 flat presets that ship in public/avatars, in picker order.
   const AVATAR_PRESETS = ["atlas", "sonny", "vera", "sol", "nova", "terra", "pip", "momo", "juno", "ziggy", "rumi", "kiki", "bo", "fig", "dune", "sage", "mel", "ollie", "taro", "ash"];
   // A picture that already wears a crown: the leader badge would only repeat it.
   const CROWNED_PRESETS = new Set(["atlas"]);
-  // A picture fallback only: a seat's own saved picture (seat.pic) always wins, and a template's seats bring their own.
-  const SLOT_PRESET = { leader: "atlas", planner: "sage", coder: "sonny", reviewer1: "vera", reviewer2: "sol", fixer: "nova", fixer1: "juno", fixer2: "nova", final: "terra", finalReviewer: "terra", designer: "terra", imageAndAssets: "bo", designReviewer: "sol", secondOpinion: "ziggy", socialMedia: "vera", image: "bo", videoAndMotion: "terra" };
+  // A picture fallback only: a seat's own saved picture (seat.pic) always wins.
+  const SLOT_PRESET = { leader: "atlas", planner: "sage", researcher: "dune", coder: "sonny", designCoder: "terra", helper: "pip", imageMaker: "bo", socialMaker: "vera", videoMaker: "momo", secondOpinion: "ziggy", reviewer1: "vera", fixer1: "juno", reviewer2: "sol", fixer2: "nova", final: "terra", designFinal: "sol", minimalFixer: "fig", minimalReviewer: "rumi" };
   const NAME_PRESET = { atlas: "atlas", sonny: "sonny", vera: "vera", sol: "sol", nova: "nova", terra: "terra", astra: "ziggy", x: "bo" };
   const ME_DEFAULT = "ash.svg";
   const AVATAR_MAX_CHARS = 512 * 1024; // the server refuses a bigger uploaded picture (server/config.ts AVATAR_MAX_CHARS)
@@ -183,7 +176,6 @@
   const REQUEST_BODY_BYTES = 24 * 1024; // server/requests.ts MAX_BODY_BYTES
   const REFRESH_WAIT_MS = 30_000; // Settings "Check again" gives up waiting for the server's answer after this long
   const HISTORY_WAIT_MS = 15_000; // a saved-runs list or saved run the server never answers stops spinning after this long
-  const PROCESS_PENDING_MS = 5_000; // a step button the server never acted on is usable again after this long
 
   let serverState = null;
   let socket = null;
@@ -228,12 +220,9 @@
     }
   }
   function settingsActionId(key) { return pendingSettingsActions.get(key) ?? settingsActionResults.get(key)?.requestId; }
-  let avatarUploadRequestId = null;
-  let avatarPending = null; // a preset picture sent with updateSeat, shown as Saving until the server's seat carries it
   let clientPrefOverrides = new Map();
   let streamingByTab = new Map();
   const outputByRun = new Map(); // runId -> the tail of a live run's output, capped like the server's; the server's state output is its base
-  const stallActions = new Map(); // runId -> what the server did about a stalled run ("relaunch" or "escalate")
   const seenNotices = new Map(); // launch notice id -> the Activity text it was last shown with
   let killOrder = []; // runIds of the killRun messages the server has not answered yet, in send order
   let historyBySeat = new Map();
@@ -270,7 +259,6 @@
   let toastTimer = 0;
   let currentLayer = null;
   let layerStack = [];
-  let avatarTarget = null;
   let runTarget = null;
   let runUnknown = false; // the open Run dialog lost its answer: starting again could launch twice
   let pendingRun = null; // { tabId, slot }: the Run dialog waits for runAccepted or the refusal
@@ -281,21 +269,10 @@
   let activeTheme = "light";
   const unreadProjects = new Set(); // projectIds with a finished reply that landed while another project was shown
   let me = { av: ME_DEFAULT }; // theme, picture and dismissed runs come from the server's client prefs (see applyServerLooks)
-  let tabKind = "dev";
-  let tabTemplate = ""; // template id picked in the Add tab dialog
-  let projectTemplate = ""; // template id picked in the New project dialog
-  let projectKind = "dev";
-  let stepsOpen = false;
   let railWide = true;
   let sideOpen = false;
   let sideWidthDraft = null;
   const projectLastTab = new Map(); // projectId -> the tab last shown in it
-  const processPending = new Map(); // tabId -> process action waiting for the server
-  const processPendingSince = new Map(); // tabId -> when that action was sent
-  const stepClickGuard = new Map(); // tabId -> time before which step-action clicks are ignored
-  const tabStepSignature = new Map(); // tabId -> current step index, look approval state, phase and round of the last state
-  const stepActionSent = new Set(); // tabIds with a step action sent whose step change has not arrived yet
-  const STEP_CLICK_GUARD_MS = 600;
   const stopStates = new Map(); // runId -> "requested" | "accepted"
   let stopAllTrack = null; // { runIds, tabIds, accepted }: reported when every run has exited or is unconfirmed
   let refreshState = null; // { status, at }: the read-only Settings refresh

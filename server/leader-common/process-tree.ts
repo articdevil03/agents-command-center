@@ -51,7 +51,7 @@ export type ProcInfo = { pid: number; ppid: number; created: number };
 export type ProcessLister = () => Promise<ProcInfo[] | null>;
 // sweep(endedAt): endedAt is when the watched process ended (ms); children it started before then are still found by parent pid after it is gone.
 // failed: how many leftovers the latest sweep tried to stop and could not (sweep's number counts only the ones it did stop).
-export type TreeWatch = { sweep: (endedAt?: number) => Promise<number | null>; release: () => void; readonly failed: number };
+export type TreeWatch = { sweep: (endedAt?: number, strict?: boolean) => Promise<number | null>; release: () => void; readonly failed: number };
 export type TreeDeps = { list: ProcessLister; kill: (pid: number) => Promise<boolean>; registryDir?: () => string | null; pollMs?: number; now?: () => number; sweepAtFirstWatch?: boolean };
 // slow: a long-lived process (a leader) that is looked at every SLOW_POLL_MS instead of POLL_MS while no worker run needs the fast poll.
 export type TreeTracker = { watch: (pid: number, startedAt?: number, slow?: boolean) => TreeWatch; flushRegistry: () => void };
@@ -62,7 +62,26 @@ export { LIST_TIMEOUT_MS, KILL_TIMEOUT_MS };
 // A process is ours when it was created within this window around the moment we spawned it.
 const BEFORE_SPAWN_MS = 5_000;
 const AFTER_SPAWN_MS = 2_000;
-const LIST_SCRIPT = 'Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate | Where-Object { $_.CreationDate } | ForEach-Object { "$($_.ProcessId),$($_.ParentProcessId),$(([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds())" }';
+const LIST_SCRIPT = '$ErrorActionPreference = "Stop"; Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate | ForEach-Object { "$($_.ProcessId),$($_.ParentProcessId),$(if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 })" }';
+
+// List/kill helpers belong to the caller too. A reporting timeout never forgets their handles.
+const treeHelpers = new Map<ChildProcess, Promise<void>>();
+function ownTreeHelper(child: ChildProcess): void {
+  let ended!: () => void;
+  const completion = new Promise<void>((resolve) => { ended = resolve; });
+  treeHelpers.set(child, completion);
+  const finish = () => { treeHelpers.delete(child); ended(); };
+  child.once("close", finish);
+  child.on("error", () => { if (!child.pid) finish(); });
+}
+export async function drainProcessTreeHelpers(): Promise<boolean> {
+  if (!treeHelpers.size) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([Promise.all([...treeHelpers.values()]), new Promise<void>((done) => { timer = setTimeout(done, LIST_TIMEOUT_MS + KILL_TIMEOUT_MS + 1000); })]);
+    return treeHelpers.size === 0;
+  } finally { clearTimeout(timer); }
+}
 
 export function parseProcessList(text: string): ProcInfo[] {
   const rows: ProcInfo[] = [];
@@ -94,23 +113,33 @@ export function descendantsOf(list: ProcInfo[], rootPid: number): number[] {
 export function listProcesses(spawnFn: typeof spawn = spawn, timeoutMs = LIST_TIMEOUT_MS): Promise<ProcInfo[] | null> {
   return new Promise((done) => {
     let output = "";
+    let outputBytes = 0, overflow = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = (value: ProcInfo[] | null) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); done(value); };
     let child: ChildProcess;
     try { child = spawnFn(windowsPowerShellPath(), ["-NoProfile", "-NonInteractive", "-Command", LIST_SCRIPT], { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"], env: leaderChildEnv() }); }
     catch { settle(null); return; }
+    ownTreeHelper(child);
     child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => { output += chunk; });
+    child.stdout?.on("data", (chunk: string) => {
+      outputBytes += Buffer.byteLength(chunk);
+      if (outputBytes > 16 * 1024 * 1024) { overflow = true; try { child.kill(); } catch { /* retained until close */ } settle(null); return; }
+      output += chunk;
+    });
     timer = setTimeout(() => { try { child.kill(); } catch { /* the timeout answers null */ } settle(null); }, timeoutMs);
     child.once("error", () => settle(null));
-    child.once("close", (code) => settle(code === 0 ? parseProcessList(output) : null));
+    child.once("close", (code) => {
+      const valid = output.trim().split(/\r?\n/).every((line) => /^\d+,\d+,\d+$/.test(line.trim()));
+      settle(code === 0 && !overflow && valid ? parseProcessList(output) : null);
+    });
   });
 }
 function killPid(pid: number): Promise<boolean> {
   return new Promise((done) => {
     let killer: ChildProcess;
     try { killer = spawn(windowsTaskkillPath(), ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }); } catch { done(false); return; }
+    ownTreeHelper(killer);
     const timer = setTimeout(() => { try { killer.kill(); } catch { /* answered below */ } done(false); }, KILL_TIMEOUT_MS);
     timer.unref();
     killer.once("error", () => { clearTimeout(timer); done(false); });
@@ -245,6 +274,11 @@ export function createTreeTracker(deps: TreeDeps): TreeTracker {
     watch(pid, startedAt = now(), slow = false) {
       const root: WatchedRoot = { pid, startedAt, slow, endedAt: null, rootCreated: null, known: new Map() };
       let failed = 0;
+      let strictSweep: Promise<number | null> | null = null;
+      function unreadableOwnedIdentity(list: ProcInfo[]): boolean {
+        const owned = new Set([root.pid, ...root.known.keys()]);
+        return list.some((proc) => proc.created <= 0 && (owned.has(proc.pid) || owned.has(proc.ppid)));
+      }
       roots.add(root);
       reschedule();
       void tick().catch(() => {}); // record the root and its creation time at once, not after the first slow poll
@@ -252,7 +286,9 @@ export function createTreeTracker(deps: TreeDeps): TreeTracker {
       return {
         get failed() { return failed; },
         // Kills what this root left alive; null = the process list could not be read, so nothing was touched.
-        async sweep(endedAt) {
+        sweep(endedAt, strict = false) {
+          if (strictSweep) return strictSweep;
+          const work = async (): Promise<number | null> => {
           failed = 0;
           if (!roots.has(root)) return 0;
           if (endedAt !== undefined) root.endedAt = endedAt;
@@ -260,10 +296,25 @@ export function createTreeTracker(deps: TreeDeps): TreeTracker {
           if (!list) return null;
           noteOwner(list);
           discover(root, list);
+          if (strict && unreadableOwnedIdentity(list)) { failed = 1; writeRegistry(); return null; }
           const alive = new Map(list.map((proc) => [proc.pid, proc.created]));
           const targets = [...root.known].filter(([knownPid, created]) => alive.get(knownPid) === created).map(([knownPid]) => knownPid);
           if (root.rootCreated !== null && alive.get(root.pid) === root.rootCreated) targets.push(root.pid);
           const results = await Promise.all(targets.map((target) => deps.kill(target)));
+          if (strict) {
+            // Accepted taskkill is only a request. Keep every identity until a FRESH list proves absence.
+            const after = await deps.list();
+            if (!after) { failed = Math.max(1, targets.length); writeRegistry(); return null; }
+            discover(root, after);
+            if (unreadableOwnedIdentity(after)) { failed = 1; writeRegistry(); return null; }
+            const remaining = new Map(after.map((proc) => [proc.pid, proc.created]));
+            const survivors = [...root.known].filter(([pid, created]) => remaining.get(pid) === created);
+            if (root.rootCreated !== null && remaining.get(root.pid) === root.rootCreated) survivors.push([root.pid, root.rootCreated]);
+            failed = survivors.length;
+            if (failed) { writeRegistry(); return null; }
+            roots.delete(root); reschedule(); writeRegistry();
+            return targets.length;
+          }
           // A target whose kill failed stays tracked (here and in the registry), so a later sweep or the next start retries it.
           failed = results.filter((ok) => !ok).length;
           targets.forEach((target, i) => { if (results[i]) root.known.delete(target); });
@@ -271,6 +322,10 @@ export function createTreeTracker(deps: TreeDeps): TreeTracker {
           reschedule();
           writeRegistry();
           return results.filter(Boolean).length;
+          };
+          if (!strict) return work();
+          strictSweep = work().finally(() => { strictSweep = null; });
+          return strictSweep;
         },
         release() { roots.delete(root); reschedule(); writeRegistry(); },
       };

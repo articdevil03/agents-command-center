@@ -1,265 +1,6 @@
+import { pageCoreMutations } from "./page-core.mjs";
 export const pageMutations = [
-  ["guard-approval-settings-close-submits","public/app/05-layers-approvals.js","      if (layer.id === \"setModal\") settingsSubmits.clear();\n",""],
-  ["guard-approval-settings-edit-listener","public/app/12-events-queue-init.js","    $(\"setBody\").addEventListener(\"input\", (event) => { const key = event.target.dataset?.focusKey; if (key) settingsEdits.add(key); });\n",""],
-  ["guard-approval-key-release-identity","public/app/12-events-queue-init.js","      if (press?.key !== (event.code || event.key)) return;\n",""],
-  ["guard-approval-rejected-press-retained","public/app/05-layers-approvals.js","    if (!tab || !approvalId || approvalAnswers.get(approvalId)?.status === \"running\"","    approvalPressId = null; approvalKeyPressId = null;\n    if (!tab || !approvalId || approvalAnswers.get(approvalId)?.status === \"running\""],
-  ["guard-approval-held-key-setter","public/app/12-events-queue-init.js","document.addEventListener(\"keydown\", (event) => heldApprovalKeys.add(event.code || event.key), true);","document.addEventListener(\"keydown\", () => {}, true);"],
-  ["guard-approval-held-pointer-setter","public/app/12-events-queue-init.js","document.addEventListener(\"pointerdown\", (event) => heldApprovalPointers.add(event.pointerId ?? 0), true);","document.addEventListener(\"pointerdown\", () => {}, true);"],
-  ["guard-approval-settings-submit-setter","public/app/07-chat.js","    if (savedBy[key]) settingsSubmits.set(key, { requestId, fields: new Map((savedBy[key] ?? []).map((field) => [field, $(\"setBody\").querySelector(`[data-focus-key=\"${field}\"]`)?.value])) });\n",""],
-  ["guard-approval-settings-submitted-comparison","public/app/11-settings-render.js","if (body.querySelector(`[data-focus-key=\"${key}\"]`)?.value === submitted.get(key)) settingsEdits.delete(key);","if (true) settingsEdits.delete(key);"],
-  ["guard-approval-vault-submit-setter","public/app/07-chat.js","\"vault-save\": [\"vault-path\"], ",""],
-  ["guard-approval-vault-submitted-comparison","public/app/11-settings-render.js","if (body.querySelector(`[data-focus-key=\"${key}\"]`)?.value === submitted.get(key)) settingsEdits.delete(key);","if (key === \"vault-path\" || body.querySelector(`[data-focus-key=\"${key}\"]`)?.value === submitted.get(key)) settingsEdits.delete(key);"],
-  ["guard-approval-vault-forget-id","public/app/11-settings-render.js","        settingsSubmits.delete(action); }","        if (action !== \"vault-save\") settingsSubmits.delete(action); }"],
-  ["guard-approval-pointer-identity","public/app/05-layers-approvals.js","    if (event.detail !== 0 && approvalPressId?.pointerId !== (event.pointerId ?? 0)) return;",""],
-  ["guard-approval-pointer-up-identity","public/app/12-events-queue-init.js","if (press?.pointerId !== (event.pointerId ?? 0)) return;",""],
-  ["guard-approval-pointer-setter","public/app/12-events-queue-init.js",", pointerId: event.pointerId ?? 0",""],
-  ["guard-approval-vault-unchanged-input","public/app/11-settings-render.js","for (const input of body.querySelectorAll(\"input[data-focus-key]\"))","for (const input of body.querySelectorAll(\"input[data-focus-key]:not([type=hidden])\"))"],
-  ["guard-approval-pointer-cleanup","public/app/12-events-queue-init.js","if (approvalPressId === press) approvalPressId = null;","approvalPressId = null;"],
-  ["guard-approval-key-cleanup","public/app/12-events-queue-init.js","if (approvalKeyPressId === press) approvalKeyPressId = null;","approvalKeyPressId = null;"],
-  ["guard-approval-key-activation","public/app/05-layers-approvals.js","const pressed = (event.detail === 0 ? approvalKeyPressId ?? approvalPressId ?? { id: approvalId } : approvalPressId)?.id;","const pressed = (event.detail === 0 ? { id: approvalId } : approvalPressId)?.id;"],
-  ["guard-approval-first-settle","public/app/05-layers-approvals.js","if (item && item.approvalId !== lastApproval.id)","if (item && lastApproval.id && item.approvalId !== lastApproval.id && performance.now() - lastApproval.at < 1500)"],
-  ["guard-approval-pointer-settled","public/app/12-events-queue-init.js","const settledApprovalId = () => performance.now() >= approvalSettleUntil ? $(\"approvalPanel\").dataset.approvalId : \"\";","const settledApprovalId = () => $(\"approvalPanel\").dataset.approvalId;"],
-  ["guard-approval-key-id","public/app/12-events-queue-init.js","if (!event.repeat) approvalKeyPressId = { id: settledApprovalId(), key: event.code || event.key };","if (!event.repeat) approvalKeyPressId = null;"],
-  ["guard-approval-double-click","public/app/05-layers-approvals.js","    if (event.detail > 1) { approvalClickNote = approvalId; renderToolApproval(); return; }\n","    approvalClickNote = \"\";\n"],
-  ["guard-approval-focus-values","public/app/11-settings-render.js","      if (target && !target.disabled && target.type !== \"hidden\") {","      if (target && snapshot.value !== null && \"value\" in target) target.value = snapshot.value;\n      if (target && !target.disabled && target.type !== \"hidden\") {"],
-  ["guard-approval-vault-render-draft","public/app/11-settings-render.js","  function updateVaultControls() {","  function updateVaultControls() {\n    settingsEdits.add(\"vault-path\");"],
-  ["guard-approval-vault-close-draft","public/app/11-settings-render.js","const drafts = fresh ? new Map() : settingsDraftSnapshot(body);","const drafts = fresh ? new Map([[\"vault-path\", $(\"vaultPath\")?.value ?? \"\"]]) : settingsDraftSnapshot(body);"],
-  ["guard-approval-panel-render", "public/app/05-layers-approvals.js", "panel.hidden = !item;", "panel.hidden = true;"],
-  ["guard-approval-waiting-status","public/app/06-crew-rail.js","Boolean(seat && (tab?.pendingApprovals ?? []).some((item) => (item.askedBy?.slot ?? leader(tab)?.slot) === seat.slot))","false"],
-  ["guard-approval-settle-start", "public/app/05-layers-approvals.js", "      approvalSettleUntil = performance.now() + APPROVAL_SETTLE_MS;\n", "      approvalSettleUntil = 0;\n"],
-  ["guard-approval-settle-disabled", "public/app/05-layers-approvals.js", "const settling = performance.now() < approvalSettleUntil;", "const settling = false;"],
-  ["guard-approval-press-id", "public/app/05-layers-approvals.js", "performance.now() < approvalSettleUntil || pressed !== approvalId) return;", "performance.now() < approvalSettleUntil) return;"],
-  ["guard-approval-repeat-key", "public/app/12-events-queue-init.js", "if (event.repeat && (event.key === \"Enter\" || event.key === \" \")) event.preventDefault();", ""],
-  ["guard-approval-sort-oldest", "public/app/05-layers-approvals.js", ".sort((a, b) => a.createdAt - b.createdAt)", ""],
-  ["guard-approval-disconnect-fails-answer", "public/app/02-selectors-format.js", "      for (const answer of approvalAnswers.values()) if (answer.status === \"running\") { answer.status = \"failed\"; answer.message = \"Disconnected. Reconnect before answering.\"; }\n", ""],
-  ["guard-approval-notify","public/app/02-selectors-format.js","if (!oldIds.has(item.approvalId)) notify(\"needs-user\", `${item.askedBy?.name ?? leaderName(tab)} needs your answer`,`${tab.name}: ${String(item.summary).split(\"\\n\")[0].slice(0, 200)}`);",""],
-  ["guard-approval-reconnect-hello","public/app/02-selectors-format.js","      send({ type: \"hello\" });\n      // A held action whose send was lost with the connection waits for the first state: it is dropped there if the server did apply it, resent if not.","      // A held action whose send was lost with the connection waits for the first state: it is dropped there if the server did apply it, resent if not."],
-  ["guard-approval-status-target-found", "public/app/06-crew-rail.js", "<span class=\"pill ${esc(status.tone)}\" data-tone=\"${esc(status.tone)}\">", "<span class=\"${esc(status.tone)}\" data-tone=\"${esc(status.tone)}\">"],
-  ["guard-approval-settings-drafts", "public/app/11-settings-render.js", "const drafts = fresh ? new Map() : settingsDraftSnapshot(body);", "const drafts = new Map();"],
-  ["guard-approval-settings-fresh-open", "public/app/10-dialogs-seat-card.js", "    renderSettings(true);\n    openModal(\"setModal\"", "    renderSettings();\n    openModal(\"setModal\""],
-  ["guard-approval-request-form-clear", "public/app/09-needs-you-stopping.js", "$(\"reqTitle\").value = \"\"; $(\"reqBody\").value = \"\";", ""],
-  ["guard-approval-vault-browse-draft","public/app/11-settings-render.js","$(\"vaultPath\").value = folder; settingsEdits.add(\"vault-path\"); updateVaultControls();","$(\"vaultPath\").value = folder; updateVaultControls();"],
-  ["guard-approval-vault-typed-draft","public/app/12-events-queue-init.js","    $(\"setBody\").addEventListener(\"input\", (event) => { const key = event.target.dataset?.focusKey; if (key) settingsEdits.add(key); });\n","    $(\"setBody\").addEventListener(\"input\", (event) => { const key = event.target.dataset?.focusKey; if (key && key !== \"vault-path\") settingsEdits.add(key); });\n"],
-  ["guard-approval-vault-controls-after-focus","public/app/11-settings-render.js","    updateVaultControls();\n    restoreSettingsFocus(body, snapshot);","    restoreSettingsFocus(body, snapshot);\n    updateVaultControls();"],
-  ["guard-approval-vault-browse-refresh","public/app/11-settings-render.js","settingsEdits.add(\"vault-path\"); updateVaultControls(); }); return; }","settingsEdits.add(\"vault-path\"); }); return; }"],
-  ["guard-approval-settings-all-drafts","public/app/11-settings-render.js","if (settingsEdits.has(key))","if (true)"],
-  ["guard-approval-keydown-repeat-guard", "public/app/12-events-queue-init.js", "if (!event.repeat) approvalKeyPressId = ", "approvalKeyPressId = "],
-  ["guard-approval-reader-activation", "public/app/05-layers-approvals.js", "approvalKeyPressId ?? approvalPressId ?? { id: approvalId }", "approvalKeyPressId"],
-  ["guard-approval-reader-pointer-press", "public/app/05-layers-approvals.js", "approvalKeyPressId ?? approvalPressId ?? { id: approvalId }", "approvalKeyPressId ?? { id: approvalId }"],
-  ["guard-approval-monotonic-clock", "public/app/05-layers-approvals.js", "const APPROVAL_SETTLE_MS = 400;", "const APPROVAL_SETTLE_MS = 400; const performance = { now: () => Date.now() };"],
-  ["guard-approval-vault-return-saved-edit","public/app/12-events-queue-init.js","    $(\"setBody\").addEventListener(\"input\", (event) => { const key = event.target.dataset?.focusKey; if (key) settingsEdits.add(key); });\n","    $(\"setBody\").addEventListener(\"input\", (event) => { const key = event.target.dataset?.focusKey; if (key) { if (key === \"vault-path\" && event.target.value === (serverState?.settings?.vault?.path ?? \"\")) settingsEdits.delete(key); else settingsEdits.add(key); } });\n"],
-  ["guard-approval-vault-browse-current-state","public/app/11-settings-render.js","if (action === \"vault-browse\") { pickFolder((folder) => { if ($(\"setModal\").hidden) return; $(\"vaultPath\").value = folder; settingsEdits.add(\"vault-path\"); updateVaultControls(); }); return; }","if (action === \"vault-browse\") { const openedPath = serverState?.settings?.vault?.path ?? \"\"; pickFolder((folder) => { if ($(\"setModal\").hidden) return; $(\"vaultPath\").value = folder; if (folder !== openedPath) settingsEdits.add(\"vault-path\"); updateVaultControls(); }); return; }"],
-  ["guard-approval-settings-browse-edit","public/app/11-settings-render.js","$(\"defaultProjectFolder\").value = folder; settingsEdits.add(\"default-folder\");","$(\"defaultProjectFolder\").value = folder;"],
-  ["guard-approval-settings-fresh-edits","public/app/11-settings-render.js","    if (fresh) settingsEdits.clear();\n",""],
-  ["guard-approval-settings-saved-edit-clear","public/app/11-settings-render.js","=== submitted.get(key)) settingsEdits.delete(key); });","=== submitted.get(key)) {} });"],
-  ["guard-approval-settings-submits-forget","public/app/11-settings-render.js","        settingsSubmits.delete(action); }","        }"],
-  ["guard-approval-pointercancel-handler","public/app/12-events-queue-init.js","      heldApprovalPointers.delete(event.pointerId ?? 0);\n      if (approvalPressId?.pointerId === (event.pointerId ?? 0)) approvalPressId = null;\n    }, true);","    }, true);"],
-  ["guard-approval-pointercancel-held","public/app/12-events-queue-init.js","document.addEventListener(\"pointercancel\", (event) => {\n      heldApprovalPointers.delete(event.pointerId ?? 0);\n","document.addEventListener(\"pointercancel\", (event) => {\n"],
-  ["guard-approval-pointercancel-press","public/app/12-events-queue-init.js","      if (approvalPressId?.pointerId === (event.pointerId ?? 0)) approvalPressId = null;\n    }, true);","    }, true);"],
-  ["guard-approval-blur-keys","public/app/12-events-queue-init.js","      heldApprovalKeys.clear(); heldApprovalPointers.clear();\n      approvalPressId","      heldApprovalPointers.clear();\n      approvalPressId"],
-  ["guard-approval-blur-pointers","public/app/12-events-queue-init.js","      heldApprovalKeys.clear(); heldApprovalPointers.clear();\n      approvalPressId","      heldApprovalKeys.clear();\n      approvalPressId"],
-  ["guard-approval-blur-pointer-press","public/app/12-events-queue-init.js","      approvalPressId = null; approvalKeyPressId = null;\n    });","      approvalKeyPressId = null;\n    });"],
-  ["guard-approval-blur-key-press","public/app/12-events-queue-init.js","      approvalPressId = null; approvalKeyPressId = null;\n    });","      approvalPressId = null;\n    });"],
-  ["guard-approval-avatar-close-guard","public/app/10-dialogs-seat-card.js","        closeLayerOf($(\"avModal\"));\n      } catch (error) {","        closeLayer();\n      } catch (error) {"],
-  ["client-project-id", "public/app/12-events-queue-init.js", "const payload = { type: \"chat\", tabId, text, requestId,", "const payload = { type: \"chat\", text, requestId,"],
-  ["client-project-recheck", "public/app/12-events-queue-init.js", "if (composerGeneration !== generation || pendingChatByTab.get(tabId) !== requestId) return;", "if (false) return;"],
-  ["project-selector-setter", "public/app/08-seat-view-details.js", "        abandonChatOnTabSwitch(composerTabId);\n      }\n      composerTabId = tab?.id ?? null; composerGeneration++;", "      }\n      composerTabId = tab?.id ?? null;"],
-  ["send-guard", "public/app/12-events-queue-init.js", "if (!tab || !inChat(tab) || savePending.has(tab.id) || chatSendLocked(tab.id)) return;", "if (!tab || !inChat(tab) || savePending.has(tab.id)) return;"],
-  ["send-guard-setter", "public/app/12-events-queue-init.js", "    pendingChatByTab.set(tabId, requestId);\n    renderAttachments();\n    updateChatLoading(tabId);\n    try {", "    renderAttachments();\n    updateChatLoading(tabId);\n    try {"],
-  ["attachment-consumption", "public/app/07-chat.js", "const remaining = list.filter((item) => !request.items.includes(item));", "const remaining = list;"],
-  ["upload-await", "public/app/12-events-queue-init.js", "      await Promise.all(queued.map((item) => item.promise).filter(Boolean));\n", ""],
-  ["upload-setter", "public/app/07-chat.js", "previewUrl: URL.createObjectURL(file), path: \"\", status: \"loading\", promise: null, released: false };\n    const list = attachmentList(tabId); list.push(item); attachmentsByTab.set(tabId, list);\n    item.promise = (async () => {", "previewUrl: URL.createObjectURL(file), path: \"\", status: \"loading\", promise: null, released: false };\n    const list = attachmentList(tabId); list.push(item); attachmentsByTab.set(tabId, list);\n    void (async () => {"],
-  ["disconnected-send-result", "public/app/12-events-queue-init.js", "if (!send(payload)) { request.sent = false; settleChatRequest(request, false); return; }", "send(payload);"],
-  ["send-open-check", "public/app/01-markdown-state.js", "if (!socket || socket.readyState !== WebSocket.OPEN) {", "if (false) {"],
-  ["draft-preservation", "public/app/07-chat.js", "if ((textVersionByTab.get(request.tabId) ?? 0) === request.textVersion) {", "if (true) {"],
-  ["guard-bottom-threshold", "public/app/08-seat-view-details.js", "view.scrollHeight - view.scrollTop - view.clientHeight <= 4;", "view.scrollHeight - view.scrollTop - view.clientHeight <= 299;"],
-  ["guard-bottom-boundary", "public/app/07-chat.js", "live.scrollHeight - live.scrollTop - live.clientHeight <= 4;", "live.scrollHeight - live.scrollTop - live.clientHeight < 4;"],
-  ["guard-sidebar-expand-write", "public/app/12-events-queue-init.js", "saveClientPref(\"crewRailOpen\", !collapsed)", "saveClientPref(\"crewRailOpen\", false)"],
-  ["guard-sidebar-collapse-write", "public/app/12-events-queue-init.js", "saveClientPref(\"crewRailOpen\", !collapsed)", "saveClientPref(\"crewRailOpen\", true)"],
-  ["guard-storage-read-call", "public/app/01-markdown-state.js", "railWide = pref(\"crewRailOpen\", true) !== false;", "railWide = true;"],
-  ["guard-storage-write-call", "public/app/12-events-queue-init.js", "    if (!saveClientPref(\"crewRailOpen\", !collapsed)) return;\n", ""],
-  ["guard-appendChatMessage-decision", "public/app/08-seat-view-details.js", "const stickToBottom = view.dataset.tabId !== tab.id || view.dataset.mode !== \"chat\" || view.scrollHeight - view.scrollTop - view.clientHeight <= 4;", "const stickToBottom = true;"],
-  ["guard-appendChatMessage-assignment", "public/app/08-seat-view-details.js", "if (messages || stream) view.scrollTop = stickToBottom ? view.scrollHeight : previousScrollTop;", "if (messages || stream) view.scrollTop = view.scrollHeight;"],
-  ["guard-usage-percent-clamp", "public/app/07-chat.js", "Math.max(0, Math.min(100, context / window * 100))", "Math.max(0, context / window * 100)"],
-  // ---- notifications (server/stall.ts's sibling feature 1): the policy is
-  // pure (test/frontend-*.test.ts), and the real event path (test/frontend-*.test.ts's
-  // call-site regex, the only technique available for app.js -- no jsdom) ----
-  ["guard-notify-enabled-gate", "public/app/02-selectors-format.js", "if (pref(\"notificationsEnabled\", true) && \"Notification\" in window", "if (\"Notification\" in window"],
-  ["guard-notify-seat-completion", "public/app/02-selectors-format.js", "return [\"worker-finish\", \"worker-fail\", \"worker-stall\", \"needs-user\"].includes(kind);", "return [\"worker-fail\", \"worker-stall\", \"needs-user\"].includes(kind);"],
-  ["guard-notify-leader-focus-gate", "public/app/02-selectors-format.js", "if (kind === \"leader-turn\") return !document.hasFocus();", "if (kind === \"leader-turn\") return true;"],
-  ["guard-notify-callsite-seatstatus", "public/app/04-messages.js", "        notify(kind, `${seat.name} ${verb}`, runEndBody(tab, message));\n", ""],
-  ["guard-notify-callsite-chatdone", "public/app/04-messages.js", "      notify(\"leader-turn\", \"The lead finished\", \"Your reply is ready.\");\n", ""],
-  ["guard-notify-callsite-stalled", "public/app/04-messages.js", "      if (seat) notify(seat.isLeader ? \"leader-turn\" : \"worker-stall\", `${seat.name} is stalled`, action === \"relaunch\" ? \"No output for 5 minutes. It is being stopped and started once more.\" : \"Check the run before it can continue.\");\n", ""],
-  ["guard-notifications-default-on", "public/app/02-selectors-format.js", "if (pref(\"notificationsEnabled\", true) && \"Notification\" in window", "if (pref(\"notificationsEnabled\", false) && \"Notification\" in window"],
-  // ---- bell: the old icon toggles, the Notifications clamp and the click guard are gone (the top-bar WINDOW TOP BAR pack); the completion sound
-  // is now its own switch, guarded by the guard-topbar-* entries at the end of this list. ----
-  ["guard-notif-toggle-aria-pressed", "public/app/04-messages.js", "      $(\"setBody\").querySelectorAll(\"[data-setting]\").forEach((button) => button.setAttribute(\"aria-checked\", String(settingValue(button.dataset.setting))));\n", ""],
-
-
-  // ---- P2 fix 1: the 5H countdown must stay honest without depending on
-  // state traffic -- ticked independently, and stopped the moment the strip
-  // is actually hidden rather than leaking a timer nobody can see. ----
-
-  // ---- icon toggles: solid gold-on-active + CSS tooltip pack (call-site
-  // wiring proven the same way as the rest of this block: source regex
-  // against the real markup/CSS/app.js, the only technique for a no-jsdom
-  // suite) ----
-  // A later rule for the SAME selector, appended right after the real one,
-  // wins the cascade by source order alone (equal specificity) -- the
-  // line-start-anchored test above only proves the real rule exists, not
-  // that it's the one that wins. Only the "exactly one block" count catches this.
-  ["guard-notify-internal-lifecycle-gate", "public/app/04-messages.js", "if (seat && message.type !== \"runStop\") {", "if (seat) {"],
-  // Guard 9 (UI): a seat's tab badge must be absent, never a fake zero, while unmeasured.
-  ["guard-app-usagebadge-null", "public/app/02-selectors-format.js", "if (!usage || typeof usage !== \"object\") return null;\n    const pieces = [];", "if (!usage || typeof usage !== \"object\") return \"0 ctx\";\n    const pieces = [];"],
-
-  // ---- final-review fixes on the live per-agent usage pack ----
-  // Finding 2: three call sites the pure helpers can't see going missing --
-  // proven through the real "state" message path in test/round2-*.test.ts,
-  // never by calling usageBadgeText/planLimitsLabel directly.
-  ["guard-planlimits-message-wiring", "public/app/04-messages.js", "      rateWindowsByRun.set(message.runId, message.windows);\n", ""],
-  // ---- crew portraits: call sites, not just buildAvatarEl in isolation ----
-  ["guard-avatar-portrait-decision", "public/app/02-selectors-format.js", "if (UPLOADED_PIC.test(value)) return value;", "if (value) return value;"],
-  ["guard-avatar-error-fallback-wiring", "public/app/12-events-queue-init.js", "      if (image.getAttribute(\"src\") === image.dataset.fallback) { image.dataset.fellBack = \"1\"; return; }\n      image.dataset.fellBack = \"1\"; image.src = image.dataset.fallback;", "      image.dataset.fellBack = \"1\";"],
-  ["guard-avatar-src", "public/app/02-selectors-format.js", "return `/avatars/${avatarKeyFor(seat)}.svg`;", "return `/avatars/${avatarKeyFor(seat)}.png`;"],
-  ["guard-avatar-renderseats-call-site", "public/app/06-crew-rail.js", "aria-label=\"Open ${esc(seat.name)}'s card${railWide ? \"\" : `: ${esc(role)}, ${esc(line.text)}`}\">${seatImg(seat)}", "aria-label=\"Open ${esc(seat.name)}'s card${railWide ? \"\" : `: ${esc(role)}, ${esc(line.text)}`}\">"],
-  ["guard-avatar-workerheader-call-site", "public/app/08-seat-view-details.js", "<span class=\"av big\">${seatImg(seat)}<i class=\"dot ${esc(dot)}\"></i></span><div class=\"vwho\">", "<span class=\"av big\"><i class=\"dot ${esc(dot)}\"></i></span><div class=\"vwho\">"],
-  // Portrait lookup must key off the agent's own raw id, never the
-  // "underground-"-prefixed seatId (see the brief: X's real portrait must be
-  // reused, and the prefixed id never has a matching file on disk).
-  // No "guard-avatar-underground-rail-call-site" entry: swapping this call
-  // site's `buildAvatarEl(undergroundAvatarSeat(agent))` for the bare
-  // `buildAvatarEl(agent)` is behaviorally equivalent, not just hard to
-  // distinguish. buildAvatarEl only ever reads seat.id/seat.name/seat.color,
-  // and an Underground agent object already carries its own unprefixed id,
-  // name and color at the top level (see undergroundWithStatus's own
-  // server-side shape) -- the exact same three values the shim recomputes.
-  // There is no mutation of THIS call site that any test could ever turn
-  // red. The shim's actual contract (map .id off the agent's raw id, never
-  // the "underground-"-prefixed seatId) is what guard-avatar-underground-
-  // shim-uses-real-id above already covers, at the one place it can fail.
-
-  // ---- right panel: phone preview + always-open usage strip ----
-  // The usage strip: leader-only context (never an aggregate), and the
-  // 5-hour/7-day plan windows with a real reset duration on the 5-hour one.
-  ["guard-usagestrip-ctx-dash", "public/app/07-chat.js", "return \"not reported yet\";", "return \"0.0%\";"],
-  // A reset already in the past is stale, not a real countdown -- the window
-  // just hasn't refreshed yet. Removing this check would let it render a
-  // negative/zero duration as though it were real.
-  // Hours/minutes split -- mutating the divisor would print the wrong unit
-  // entirely (e.g. minutes where the label says hours).
-
-  // Item 1: the leader has no worker tab, so it's the one seat that would
-  // otherwise never get the badge every worker's tab shows -- the call site
-  // that routes it there, and the function that builds it, both need a live guard.
-
-  // renderUsagePanel rebuilds this strip's content on every state broadcast
-  // (a longer/shorter reset string can change the rendered height), so it
-  // must recompute the preview's scale itself rather than relying only on
-  // the resize handle's own drag/keyboard/load call sites.
-  // Guard 3: a blank/junk preview URL must never reach the iframe.
-  //
-  // No "guard-preview-url-blank-check" entry: removing the `value.trim() === ""`
-  // half of the type/blank check is behaviorally equivalent to the code as
-  // written, not just hard to distinguish. new URL("") and new URL("   ")
-  // both throw on their own (verified directly against Node's real URL
-  // parser), caught by the surrounding try/catch below, so the explicit
-  // blank check can never be the deciding line for any input -- there is no
-  // mutation of it that this sweep, or any other, could ever turn red. The
-  // URL parser strips ASCII whitespace, but not non-breaking spaces. The
-  // trim inside new URL is behaviorally significant and guarded below.
-  ["guard-client-pref-reconciliation-call", "public/app/04-messages.js", "      applyServerLooks();\n      rebaseRunOutput(message);", "      rebaseRunOutput(message);"],
-  ["guard-client-pref-send-call", "public/app/01-markdown-state.js", "const sent = send({ type: \"updateClientPref\", key, value });", "const sent = true;"],
-  // Guard 4: right panel collapse persistence, same shape as the sidebar's.
-  ["guard-rightpanel-collapsed-write", "public/app/09-needs-you-stopping.js", "if (!saveClientPref(\"detailsOpen\", open)) return;", "if (!saveClientPref(\"detailsOpen\", true)) return;"],
-
-  // ---- right panel fills its height (no dead space under a collapsed usage
-  // row), and a draggable, clamped, persisted width ----
-
-  // Guard 4 (scale-to-fit preview, never cropped): the iframe keeps a fixed
-  // logical phone size and gets transform-scaled to fit, rather than a
-  // responsive width that lets a real app reflow/crop at whatever narrow
-  // width the panel happens to be. See computePreviewScale/updatePreviewScale.
-
-  // Pure: picking the LARGER ratio (instead of the smaller) is exactly the
-  // crop this whole pack exists to fix -- one axis would overflow to fill
-  // the other.
-  // Never upscale past 1:1 -- a panel bigger than the phone must not blur a
-  // small phone to fill a huge one.
-  // A wrap that hasn't been laid out yet (zero/negative size) must fall back
-  // to 1, not Infinity/NaN, which would produce a broken CSS transform.
-  // The recompute must actually write the transform, not just compute a
-  // number nobody applies.
-  // Dropping just the centering half (scale alone survives) moves the
-  // preview off-centre and clips it -- the exact defect the whole-transform
-  // assertion in round2-*.test.ts's transformScale exists to catch.
-  // Call-site guards: resize/drag/keyboard/load all route through
-  // applyRightPanelWidth, the right panel's own collapse/expand transition
-  // settles through its transitionend listener, and the usage strip's own
-  // resize handle routes through applyUsageStripHeight.
-  // Guard 5 (usage strip): the new handle's own apply function must recompute
-  // the preview scale through the same path applyRightPanelWidth uses, not a
-  // second definition of its own.
-  ["guard-rightpanel-width-write", "public/app/09-needs-you-stopping.js", "    if (send({ type: \"updateClientPref\", key: \"rightPanelWidth\", value })) clientPrefOverrides.set(\"rightPanelWidth\", value);\n", ""],
-  // Guard (call site): every caller of applyRightPanelWidth must route
-  // through clampRightPanelWidth -- deleting this line is the one edit that
-  // would let a stored or dragged 99999 reach the DOM unclamped.
-  ["guard-rightpanel-width-load-callsite", "public/app/09-needs-you-stopping.js", "Number(pref(\"rightPanelWidth\", 320)) ?? 320))); }", "320))); }"],
-
-  // Guard 4 (usage strip): a stored or dragged 99999/-1/NaN must never reach
-  // the DOM unclamped, on load exactly as much as on drag.
-  // Every caller (load, drag, keyboard, client-prefs sync) routes through
-  // applyUsageStripHeight, which must itself route through the clamp -- the
-  // one edit that would let a stored or dragged junk value reach the DOM.
-  // client-prefs sync must also route through the same apply function, not
-  // assign the raw synced value directly.
-  ["guard-launch-notice-client-replay", "public/app/04-messages.js", "      addStateNotices(message);\n", ""],
-  ["guard-release-crew-control", "public/app/09-needs-you-stopping.js", "    root.querySelectorAll(\"[data-release]\").forEach((button) => button.addEventListener(\"click\", () => {", "    root.querySelectorAll(\"[data-release-disabled]\").forEach((button) => button.addEventListener(\"click\", () => {"],
-  ["guard-packc-settings-request-id", "public/app/07-chat.js", 'if (!send({ ...payload, requestId })) return null;', 'if (!send({ ...payload })) return null;'],
-  ["guard-packc-install-confirm", "public/app/11-settings-render.js", 'payload = { type: "installCli", cli, confirm: true };', 'payload = { type: "installCli", cli };'],
-  ["guard-packc-permission-tab", "public/app/09-needs-you-stopping.js", 'tabId: tab.id, mode: next, requestId, ...(next === "bypass" ? { confirm: true } : {})', 'tabId: serverState?.projects?.flatMap((project) => project.tabs).find((candidate) => candidate.id !== tab.id)?.id ?? tab.id, mode: next, requestId, ...(next === "bypass" ? { confirm: true } : {})'],
-  ["guard-packc-request-badge-tab", "public/app/09-needs-you-stopping.js", 'const tab = currentTab(); const count = tab ? Number(serverState?.pendingRequestCounts?.[tab.id] ?? tab.pendingRequestCount ?? 0) : 0;', 'const tab = currentTab(); const wrongTabId = tab && allTabs().find(({ tab: candidate }) => candidate.id !== tab.id)?.tab.id; const count = tab ? Number(serverState?.pendingRequestCounts?.[wrongTabId] ?? 0) : 0;'],
-  ["guard-packc-look-permission-order", "public/app/08-seat-view-details.js", '    renderPermissionButton(tab);\n    const nextHistoryKey =', '    renderPermissionButton(tab);\n    if (tab?.changes?.repo) $("ctools").prepend($("permBtn"));\n    const nextHistoryKey ='],
-  ["guard-packc-look-tool-action-column", "public/app/11-settings-render.js", '${copy}</div><div class="tool-row-action" data-tool-row-action>${connected}${install}', '${copy}${install}</div><div class="tool-row-action" data-tool-row-action>${connected}'],
-  ["guard-packc-look-changes-rows", "public/app/08-seat-view-details.js", 'if (lowerSection === "changes") renderChanges();', 'if (lowerSection === "changes") { if (currentTab()?.changes?.repo) renderNotes(); else renderChanges(); }'],
-  ["guard-dialog-close-focus", "public/app/05-layers-approvals.js", 'if (modal) layer.focus({ preventScroll: true });\n      else first?.focus();', 'first?.focus();'],
-  ["guard-dialog-close-inset", "public/styles/01-base-bar-rail.css", '--dialog-close-inset:20px;', '--dialog-close-inset:0px;'],
-  ["guard-overlap-close-centre", "public/styles/03-popovers-settings.css", '.setm>.dialog-close{grid-column:2;grid-row:1;justify-self:end;margin:8px var(--dialog-close-inset) 16px 0}', '.setm>.dialog-close{grid-column:2;grid-row:1;justify-self:end;margin:var(--dialog-close-inset) var(--dialog-close-inset) 16px 0}'],
-  ["guard-overlap-settings-x-header", "public/styles/03-popovers-settings.css", '.setm>.dialog-close{grid-column:2;grid-row:1;justify-self:end;margin:8px var(--dialog-close-inset) 16px 0}', '.setm>.dialog-close{position:absolute;top:var(--dialog-close-inset);right:var(--dialog-close-inset);z-index:3}'],
-  ["guard-overlap-field-track", "public/styles/03-popovers-settings.css", '.field{display:grid;grid-template-columns:minmax(0,1fr);gap:6px;min-width:0}', '.field{display:grid;gap:6px;min-width:0}'],
-  // The simple-look rail has no header grid track: each rail line clips its own long text (removing the .fx track and min-width stays green), so the guard sits on the seat name's clip.
-  ["guard-overlap-railhead-track", "public/styles/01-base-bar-rail.css", '.fx .fn{font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}', '.fx .fn{font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;text-overflow:ellipsis}'],
-  ["guard-overlap-safety-ellipsis", "public/styles/03-popovers-settings.css", '.ncard>small{color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}', '.ncard>small{color:var(--text-3);font-size:12px;white-space:nowrap;overflow:hidden}'],
-  ["guard-packc-r7-uploaded-seat-picture", "public/app/02-selectors-format.js", '    if (UPLOADED_PIC.test(value)) return value;\n', ''],
-  ["guard-packc-r7-avatar-dialog-tick", "public/app/10-dialogs-seat-card.js", 'selected: !UPLOADED_PIC.test(String(seat?.pic ?? "")) && avatarKeyFor(seat) === file', 'selected: avatarKeyFor(seat) === file'],
-  ["guard-packc-r7-permission-picker-outside-click", "public/app/05-layers-approvals.js", "\"seatPop\", \"permPop\", \"soundPop\"]", "\"seatPop\", \"soundPop\"]"],
-  ["guard-packc-r7-terminal-results-win", "public/app/07-chat.js", '    if (finished) return finished;\n', ''],
-  ["guard-packc-r7-terminal-message", "public/app/04-messages.js", '      retireAction({ requestId: message.requestId,', '      (() => {})({ requestId: message.requestId,'],
-  ["guard-packc-r7-terminal-snapshot", "public/app/04-messages.js", '      for (const item of listedActions()) retireAction(item);\n', ''],
-  ["guard-packc-r7-terminal-setter", "public/app/01-markdown-state.js", '        results.set(key, result);', ''],
-  ["guard-packc-r7-resolved-card-not-working", "public/app/09-needs-you-stopping.js", 'const action = request.status !== "pending" && trackedAction?.status === "running" ? null : trackedAction;', 'const action = trackedAction;'],
-  ["guard-packc-r7-request-send-per-tab", "public/app/09-needs-you-stopping.js", 'const pendingRequestAction = pendingRequestActions.get(tab?.id) ?? requestActionResults.get(tab?.id)?.requestId;\n    const sendAction', 'const pendingRequestAction = [...pendingRequestActions.values()].at(-1);\n    const sendAction'],
-  ["guard-packc-r7-escape-request-title", "public/app/09-needs-you-stopping.js", '<b class="req-title">${plainMd(request.title)}</b>', '<b class="req-title">${request.title}</b>'],
-  ["guard-packc-r7-escape-request-body", "public/app/09-needs-you-stopping.js", '<div class="req-body md">${mdHtml(request.body)}</div>', '<div class="req-body md">${request.body}</div>'],
-  ["guard-packc-r7-escape-approval-summary", "public/app/09-needs-you-stopping.js", '<span class="approval-path">${esc(item.approval.summary)}</span>', '<span class="approval-path">${item.approval.summary}</span>'],
-  ["guard-packc-r7-escape-changes-path", "public/app/08-seat-view-details.js", '<span title="${esc(file.path)}">${esc(file.path)}</span>', '<span title="${esc(file.path)}">${file.path}</span>'],
-  ["guard-packc-r7-escape-mcp-name", "public/app/11-settings-render.js", '<div class="sitem"><span>${esc(server.name)}</span>${canRemoveMcp', '<div class="sitem"><span>${server.name}</span>${canRemoveMcp'],
-  ["guard-packc-r7-tool-version-escaped-once", "public/app/11-settings-render.js", 'const version = tool?.version ? ` · ${tool.version}` : "";', 'const version = tool?.version ? ` · ${esc(tool.version)}` : "";'],
-  ["guard-packc-r7-launch-approval-title","public/app/05-layers-approvals.js","    if (tool.startsWith(\"launch:\")) return `${who} wants to launch ${tool.slice(7)}`;\n",""],
-  ["guard-packc-final2-terminal-only", "public/app/01-markdown-state.js", "if (!result || ![\"done\", \"failed\", \"unknown\"].includes(result.status)) return;", "if (!result) return;"],
-  ["guard-packc-final2-terminal-same-id", "public/app/01-markdown-state.js", "if (id === result.requestId) {", "if (true) {"],
-  ["guard-packc-final2-removed-controls-pruned", "public/app/04-messages.js", "&& !removalKeys.has(key)) settingsActionResults.delete(key);", "&& false) settingsActionResults.delete(key);"],
-  ["guard-packc-final2-removed-request-pruned", "public/app/04-messages.js", "if (key.startsWith(\"request-resolve-\") && !requestKeys.has(key)) settingsActionResults.delete(key);", "if (false) settingsActionResults.delete(key);"],
-  ["guard-packc-final2-pending-retired", "public/app/01-markdown-state.js", "        pending.delete(key);", ""],
-  ["guard-packc-final2-terminal-control-result", "public/app/01-markdown-state.js", "return pendingSettingsActions.get(key) ?? settingsActionResults.get(key)?.requestId;", "return pendingSettingsActions.get(key);"],
-  ["guard-packc-final2-cleared-id-setter", "public/app/09-needs-you-stopping.js", "requestFormCleared.set(tab.id, pendingRequestAction);", ""],
-  ["guard-packc-final2-cleared-id-bounded", "public/app/09-needs-you-stopping.js", "requestFormCleared.set(tab.id, pendingRequestAction);", "requestFormCleared.set(tab.id, pendingRequestAction); requestFormCleared.set(pendingRequestAction, pendingRequestAction);"],
-  ["guard-packc-final2-cleared-tab-pruned", "public/app/04-messages.js", "if (!tabIds.has(id)) map.delete(id);", "if (false) map.delete(id);"],
-  ["guard-packc-final2-seen-listed-retired", "public/app/04-messages.js", "seenListedActions.has(id) || lostActions.has(id)", "lostActions.has(id)"],
-  ["guard-packc-final2-seen-listed-setter", "public/app/04-messages.js", "if (listedIds.has(id)) seenListedActions.add(id);", "if (listedIds.has(id)) {}"],
-  ["guard-packc-final2-seen-listed-pruned", "public/app/04-messages.js", "if (!stillPending.has(id)) seenListedActions.delete(id);", "if (false) seenListedActions.delete(id);"],
-  ["guard-packc-final2-lost-at-close", "public/app/02-selectors-format.js", "lostActions = pendingActionIds();", "lostActions = new Set();"],
-  ["guard-packc-final2-unknown-terminal", "public/app/01-markdown-state.js", "[\"done\", \"failed\", \"unknown\"].includes(result.status)", "[\"done\", \"failed\"].includes(result.status)"],
-  ["guard-packc-final2-late-result-replaces-unknown", "public/app/01-markdown-state.js", "old.requestId === result.requestId && old.status === \"unknown\"", "old.requestId === result.requestId && false"],
+  ...pageCoreMutations,
   // ---- WINDOW TOP BAR pack: unread dot, sound button, desktop notice vs chime, hidden title bar and menu row, drag regions, the app's icon, and the
   // theme/picture/dismissed-run client prefs. Families run with their own scope (see the pack report): -el- electron-*.test.ts, -srv- client-prefs.test.ts,
   // -css-src- frontend-*.test.ts, -pg- / -css-region- browser-*.test.ts (CC_BROWSER_PHASES). ----
@@ -370,7 +111,6 @@ export const pageMutations = [
   ["guard-pack2-close-warning-global-work","public/app/06-crew-rail.js","other = serverState?.globalWork ?? [];","other = [];"],
   ["guard-pack2-chat-problem-line","public/app/08-seat-view-details.js","const problem = tab.chatProblem ?","const problem = false ?"],
   ["guard-pack2-r1-avatar-url-in-message-cache", "public/app/07-chat.js", "if (cached && cached.sig === sig && cached.pic === pic) return cached.html;", "if (cached && cached.sig === sig) return cached.html;"],
-  ["guard-pack2-r1-step-button-timeout", "public/app/07-chat.js", "      if (processPending.get(tab.id) !== action || processPendingSince.get(tab.id) !== since) return;\n", "      return;\n"],
   ["guard-pack2-r1-clear-hint-damaged-chat", "public/app/07-chat.js", "      { hint: tab.chatProblem\n", "      { hint: false\n"],
   ["guard-pack2-final-dismissed-cap-holds-retained","public/app/01-markdown-state.js",".slice(-DISMISSED_RUNS_MAX));",".slice(-200));"],
   ["guard-pack2-final-saved-run-timeout-own-token","public/app/08-seat-view-details.js","historyRunTokens.get(key) === token && ",""],
@@ -402,16 +142,13 @@ export const pageMutations = [
   ["guard-collapse-arrow-flip-css", "public/styles/01-base-bar-rail.css", "#stage.wide .rtg svg{transform:rotate(180deg)}", "#stage.wide .rtg svg{}"],
   ["guard-model-picker-values-preserve","public/model-picker.js","if (cli === seat.cli && seat.model && !values.includes(seat.model)) values.unshift(seat.model);",""],
   ["guard-claude-model-supports-effort", "public/app/02-selectors-format.js", "return info?.supportsEffort !== false;", "return true;"],
-  ["guard-claude-model-supports-effort-wiring","public/model-picker.js","hasEffort = page.modelSupportsEffort(seat.cli, seat.model) && efforts.length > 0;","hasEffort = efforts.length > 0;"],
+  ["guard-claude-model-supports-effort-wiring","public/model-picker.js","hasEffort = Boolean(seat.cli) && page.modelSupportsEffort(seat.cli, seat.model) && efforts.length > 0;","hasEffort = Boolean(seat.cli) && efforts.length > 0;"],
   ["guard-pack6-stop-all-wording", "public/app/04-messages.js", ': `Stop sent to ${tabs} tab${tabs === 1 ? "" : "s"}. No runs were working`', ': `Stopped everything in ${tabs} tab${tabs === 1 ? "" : "s"}. No runs were working`'],
-  ["guard-pack7-seat-lock-pg-card","public/app/10-dialogs-seat-card.js","blocked = !seat.isLeader && seatBlocked(tab, seat), locked = seatLocked(tab, seat);","blocked = !seat.isLeader && seatBlocked(tab, seat), locked = false;"],
-  ["guard-pack7-seat-lock-pg-picker","public/model-picker.js","locked = page.seatLocked(tab, seat)","locked = false"],
-  ["guard-pack7-seat-lock-pg-settings","public/setup-editor-draw.js","const locked = !fresh && ctx.seatLocked(seat)","const locked = false"],
-  ["guard-pack7-r1-uncertain-locks-pg","public/app/02-selectors-format.js"," || uncertainRows().some((row) => (row.seatKey ?? row.seatId) === seatKeyOf(tab, seat))); }","); }"],
+  ["guard-pack7-seat-lock-pg-card","public/fixed-crew/view.js","chip.disabled = state.busy || tab.fixedCrew.unavailable === true;","chip.disabled = tab.fixedCrew.unavailable === true;"],
+  ["guard-pack7-seat-lock-pg-picker","public/model-picker.js","const act = (run) => { if (!adapter.locked()) run(); };","const act = (run) => { run(); };"],
+  ["guard-pack7-r1-uncertain-locks-pg","public/fixed-crew/events.js","locked: () => Boolean(tab()?.fixedCrew?.busy?.[slot])","locked: () => false"],
   ["guard-pack7-r1-search-keeps-lock-pg","public/model-picker.js","bindModels(); lockPicker(); });","bindModels(); });"],
   ["guard-pack7-r1-focus-picker-pg","public/model-picker.js","if (target?.disabled) target = $(\"mq\");","target = target;"],
-  ["guard-pack7-r1-focus-card-pg","public/app/10-dialogs-seat-card.js","(focusTarget.disabled ? pop.querySelector(\"button:not(:disabled)\") : focusTarget)?.focus","focusTarget?.focus"],
-  ["guard-pack7-r1-focus-settings-pg","public/setup-editor.js","    if (el?.disabled) el = el.closest(\".se-card, .se-head\")?.querySelector(\"button:not(:disabled),input:not(:disabled)\") ?? el.closest(\".se-seat\")?.querySelector(\"[data-se-row]\") ?? root.querySelector(\"[data-se-row]\");\n",""],
   ["guard-pack7-final-focus-skips-disabled-pg","public/app/05-layers-approvals.js","const focusable = (el) => shown(el) && !el.matches(\":disabled\");","const focusable = (el) => shown(el);"],
   ["guard-pack9-page-release-lock","public/app/04-messages.js","      if (request?.tabId === message.tabId) settleChatRequest(request, false);\n      if (message.action === \"run\" && pendingRun && pendingRun.tabId === message.tabId)","      if (message.action === \"run\" && pendingRun && pendingRun.tabId === message.tabId)"],
   ["guard-pack9-page-chat-confirm-flag","public/app/12-events-queue-init.js","{ type: \"chat\", tabId, text, requestId, ...(images.length ? { images } : {}), ...(files.length ? { files } : {}), ...(confirmBusy === true ? { confirmBusy: true } : {}) };","{ type: \"chat\", tabId, text, requestId, ...(images.length ? { images } : {}), ...(files.length ? { files } : {}) };"],
@@ -454,14 +191,14 @@ export const pageMutations = [
   ["guard-pack10-final-leftover-stars","public/app/01-markdown-state.js","run.mark.repeat(run.len - (run.used ?? run.len))","\"\""],
   ["guard-pack10-r1-link-label-code","public/app/01-markdown-state.js","rel=\"noopener noreferrer\">${mdSpans(label, false)}</a>","rel=\"noopener noreferrer\">${label}</a>"],
   ["guard-pack10-r1-task-rail","public/app/06-crew-rail.js","const task = mdPlain(seat.isLeader ? engineSeat(tab, seat.slot)?.task : seat.task);","const task = seat.isLeader ? engineSeat(tab, seat.slot)?.task : seat.task;"],
-  ["guard-pack10-r1-task-status","public/app/06-crew-rail.js","task = mdPlain(seat.task);","task = seat.task || \"\";"],
+  ["guard-pack10-r1-task-status","public/app/06a-tab-status.js","task = mdPlain(seat.task);","task = seat.task || \"\";"],
   ["guard-pack10-r1-handover-fence","public/app/09-needs-you-stopping.js","{ line, code: fenced }","{ line, code: false }"],
   ["guard-pack10-r1-ol-start","public/app/01-markdown-state.js","entry.num !== 1 && entry.num < 1e9","false && entry.num < 1e9"],
   ["guard-pack10-r1-heading-hashes","public/app/01-markdown-state.js","if (end > 0 && end < title.length && mdSpace(title[end - 1]))","if (end > 0 && end < title.length)"],
   ["guard-pack10-r1-sweep-stalled-card","public/app/09-needs-you-stopping.js","<p>${plainMd(item.run.label)}: no output","<p>${esc(item.run.label)}: no output"],
   ["guard-pack10-r1-sweep-last-title","public/app/08-seat-view-details.js","<b title=\"${plainMd(last.label)}\">","<b title=\"${esc(last.label)}\">"],
   ["guard-pack10-r1-sweep-last-text","public/app/08-seat-view-details.js","\">${plainMd(last.label)}</b>","\">${esc(last.label)}</b>"],
-  ["guard-pack10-r1-sweep-status-failed","public/app/06-crew-rail.js","run failed: ${mdPlain(failed.label)}","run failed: ${failed.label}"],
+  ["guard-pack10-r1-sweep-status-failed","public/app/06a-tab-status.js","run failed: ${mdPlain(failed.label)}","run failed: ${failed.label}"],
   ["guard-pack10-r1-sweep-notice-coalesce","public/app/09-needs-you-stopping.js","${plainMd(item.row.brief ?? \"a run\")}","${esc(item.row.brief ?? \"a run\")}"],
   ["guard-pack10-r1-sweep-run-tab-text","public/app/08-seat-view-details.js","<span class=\"d\"></span><span>${plainMd(run.label)}</span></button>","<span class=\"d\"></span><span>${esc(run.label)}</span></button>"],
   ["guard-pack10-r1-request-buttons-reachable","public/styles/02-chat-panels.css",".req-body.md{font-size:13px;line-height:19px;max-width:none}",".req-body.md{font-size:13px;line-height:19px;max-width:none;position:relative;margin-bottom:-80px}"],
@@ -513,7 +250,7 @@ export const pageMutations = [
   ["guard-pack14-page-step-error","public/app/04-messages.js","streamingByTab.delete(message.tabId); stepByTab.delete(message.tabId);\n      // A stopped or failed reply","streamingByTab.delete(message.tabId);\n      // A stopped or failed reply"],
   ["guard-pack14-page-step-escape","public/app/08-seat-view-details.js","${esc(stepByTab.get(tab.id) ?? \"\")}</span>`;","${stepByTab.get(tab.id) ?? \"\"}</span>`;"],
   ["guard-pack14-page-paint-step","public/app/07-chat.js","    for (const element of view.querySelectorAll(\"[data-activity]\")) { element.textContent = label; element.hidden = !label; }\n",""],
-  ["guard-pack14-page-status-wording","public/app/06-crew-rail.js","const jobs = jobsOf(tab).length;","const jobs = 0;"],
+  ["guard-pack14-page-status-wording","public/app/06a-tab-status.js","const jobs = jobsOf(tab).length;","const jobs = 0;"],
   ["guard-pack14-page-jobs-line-call","public/app/08-seat-view-details.js","    renderJobsLine(tab);\n    syncComposerVisibility();","    syncComposerVisibility();"],
   ["guard-pack14-page-crew-jobs-call","public/app/06-crew-rail.js","    renderCrewJobs(tab);\n    const toggle","    const toggle"],
   ["guard-pack14-page-jobs-tick","public/app/10-dialogs-seat-card.js","    document.querySelectorAll(\"[data-job-since]\").forEach((element) => { element.textContent = jobAge(Number(element.dataset.jobSince)); });\n",""],
@@ -523,69 +260,22 @@ export const pageMutations = [
   ["guard-pack14-page-job-escape-row","public/app/08-seat-view-details.js","<span class=\"jt\">${esc(job.description)}</span>","<span class=\"jt\">${job.description}</span>"],
   ["guard-pack14-page-jobs-count-text","public/app/08-seat-view-details.js","${jobs.length} background jobs still running, longest ","${jobs.length} jobs, longest "],
   ["guard-pack17-model-from-any-tab","public/app/02-selectors-format.js","const acpShownModel = (cli, tab) => tab?.acpLeader?.model ?? acpCli(cli)?.lastModel ?? null;","const acpShownModel = (cli, tab) => (serverState?.projects ?? []).flatMap((project) => project.tabs).find((item) => item.acpLeader?.model)?.acpLeader.model ?? acpCli(cli)?.lastModel ?? null;"],
-  ["p18-final-ff2","public/setup-editor.js","      const merged = { ...found.seat, ...fields };\n      if (merged.orchestrates && runReason(merged)) found.own.orchestrates = false;","      if (found.own.orchestrates && runReason({ ...found.seat, ...fields })) found.own.orchestrates = false;"],
-  ["p18-final-ff3-app","public/app/04-messages.js","(tab.processState?.crewGenerationId !== item.crewGenerationId)","(tab.setupName === item.setupName || tab.processState?.crewGenerationId !== item.crewGenerationId)"],
-  ["p18-final-ff3-editor","public/setup-editor.js",": wait.action === \"useSetup\" ? tab.processState?.crewGenerationId !== wait.crewGenerationId",": wait.action === \"useSetup\" ? tab.setupName === wait.name"],
-  ["p18-final-ff3-save","public/setup-editor.js",": wait.action === \"saveSetup\" ? false",": wait.action === \"saveSetup\" ? (state?.savedSetups ?? []).some((item) => item.name === wait.name)"],
   // ---- Pack 18 (setups, crew tools, the planner that runs the process, the editor): each entry guards the behaviour its test file proves. ----
-  ["p18-blank-first", "public/setup-editor-draw.js", "${blank ? option(\"template\", blank, blank.desc) : \"\"}<div class=\"se-mg\">Templates</div>${others}", "<div class=\"se-mg\">Templates</div>${others}${blank ? option(\"template\", blank, blank.desc) : \"\"}"],
-  ["p18-r1-f7", "public/app/10-dialogs-seat-card.js", "if (item.name === tab.setupName && item.crew.length === tab.crew.length && item.crew.every((seat, at) => seat.slot === tab.crew[at].slot && seat.role === tab.crew[at].role && seat.canWrite === tab.crew[at].canWrite && (seat.orchestrates === true) === (tab.crew[at].orchestrates === true)) && (item.lookPause === true) === (tab.lookPause === true)) {", "if (item.name === tab.setupName) {"],
-  ["p18-r1-f8", "public/app/07-chat.js", "${tab.steps?.some((step) => step.type === \"look\") ? \"Look approved\" : \"Review rounds\"}", "Look approved"],
   ["p18-page-acp-any-seat","public/model-picker.js","const usable = (cap) => cap.id === seat.cli || cap.installed === true;","const usable = (cap) => (cap.id === seat.cli || cap.installed === true) && (seat.isLeader || !page.isAcpCli(cap.id));"],
-  ["p18-page-adv-caps","public/app/10-dialogs-seat-card.js","const advisorRow = cliCap(seat.cli)?.advisor ?","const advisorRow = seat.cli === \"claude\" ?"],
-  ["p18-page-adv-send","public/model-picker.js","choose({ advisor: button.dataset.advisor || null });","page.send({ type: \"setAdvisor\", tabId: tab.id, advisor: button.dataset.advisor || null });"],
-  ["p18-page-round-type","public/app/06-crew-rail.js","if (!step || step.type !== \"rounds\" || tab.processState?.approval?.state !== \"approved\"","if (!step || ![\"review\", \"finalCheck\"].includes(step.stepId) || tab.processState?.approval?.state !== \"approved\""],
-  ["p18-page-fixer-chooser","public/app/06-crew-rail.js","const makerBox = fixers.length > 1 ?","const makerBox = fixers.length > 99 ?"],
-  ["p18-page-template-faces","public/app/10-dialogs-seat-card.js","<span class=\"faces\">${setupFaces(crew)}</span>","<span class=\"faces\">${setupFaces((crew ?? []).slice(0, 1))}</span>"],
   ["p18-page-caps-readonly","public/app/08-seat-view-details.js","if (cliCap(seat?.cli)?.readOnlyEnforced === false) return canWrite === false","if (seat?.cli === \"codex\") return canWrite === false"],
   ["p18-page-launched-by","public/app/04-messages.js","${launchedByText(message.launchedBy)}",""],
   ["p18-page-approval-asker","public/app/05-layers-approvals.js","const who = cap(asker?.name ?? leaderName(tab));","const who = cap(leaderName(tab));"],
-  ["p18-page-default-template","public/app/10-dialogs-seat-card.js","(kind === \"dev\" ? list.find((item) => item.id === \"our-process\") : null) ?? ",""],
-  ["p18-page-use-setup-sends-template","public/app/10-dialogs-seat-card.js","const message = { type: \"useSetup\", tabId: tab.id, ...(templateId ? { templateId } : { setupId }) };","const message = { type: \"useSetup\", tabId: tab.id, templateId: templateId ?? setupId };"],
+  ["b5-page-create-data-ready","public/fixed-crew/project-dialog.js","return defs.length > 0 && defs.every((def) => usable(def, slots));","return true;"],
+  ["b5-page-create-project-fixed-required","public/app/10-dialogs-seat-card.js","    if (!fixed) { creationUnavailable(\"npStat\"); return; }\n",""],
+  ["b5-page-create-tab-fixed-required","public/app/10-dialogs-seat-card.js","    if (!fixed) { creationUnavailable(\"tStat\"); return; }\n",""],
   ["p18-page-clis-label","public/app/02-selectors-format.js","function cliLabel(cli) { return cliCap(cli)?.label ??","function cliLabel(cli) { return CLI_LABEL[cli] ??"],
-  ["p18-editor-busy-lock","public/setup-editor.js","const isLocked = (tab) => Boolean(tab?.derived?.busy || tab?.activeWork);","const isLocked = (tab) => Boolean(tab?.activeWork);"],
-  ["p18-editor-inline-error","public/setup-editor.js","if (message?.type !== \"error\" || !OWN_ACTIONS.has(message.action)) return;","if (message) return;"],
-  ["p18-editor-socket-hook","public/setup-editor.js","super(...args); this.addEventListener(\"message\", (event) => heard(event.data));","super(...args);"],
-  ["p18-editor-load-order","public/index.html","<script defer src=\"/setup-editor.js\"></script>\n  <script defer src=\"/setup-editor-draw.js\"></script>\n  <script defer src=\"/setup-editor-events.js\"></script>\n  <script defer src=\"/model-picker.js\"></script>\n  <script defer src=\"/app/01-markdown-state.js\"></script>\n  <script defer src=\"/app/02-selectors-format.js\"></script>\n  <script defer src=\"/app/03-state-sync.js\"></script>\n  <script defer src=\"/app/04-messages.js\"></script>\n  <script defer src=\"/app/05-layers-approvals.js\"></script>\n  <script defer src=\"/app/06-crew-rail.js\"></script>\n  <script defer src=\"/app/07-chat.js\"></script>\n  <script defer src=\"/app/08-seat-view-details.js\"></script>\n  <script defer src=\"/app/09-needs-you-stopping.js\"></script>\n  <script defer src=\"/app/10-dialogs-seat-card.js\"></script>\n  <script defer src=\"/app/11-settings-render.js\"></script>\n  <script defer src=\"/app/12-events-queue-init.js\"></script>","<script defer src=\"/app/01-markdown-state.js\"></script>\n  <script defer src=\"/app/02-selectors-format.js\"></script>\n  <script defer src=\"/app/03-state-sync.js\"></script>\n  <script defer src=\"/app/04-messages.js\"></script>\n  <script defer src=\"/app/05-layers-approvals.js\"></script>\n  <script defer src=\"/app/06-crew-rail.js\"></script>\n  <script defer src=\"/app/07-chat.js\"></script>\n  <script defer src=\"/app/08-seat-view-details.js\"></script>\n  <script defer src=\"/app/09-needs-you-stopping.js\"></script>\n  <script defer src=\"/app/10-dialogs-seat-card.js\"></script>\n  <script defer src=\"/app/11-settings-render.js\"></script>\n  <script defer src=\"/app/12-events-queue-init.js\"></script>\n  <script defer src=\"/setup-editor.js\"></script>\n  <script defer src=\"/setup-editor-draw.js\"></script>\n  <script defer src=\"/setup-editor-events.js\"></script>\n  <script defer src=\"/model-picker.js\"></script>"],
-  ["p18-editor-refocus","public/setup-editor.js","el.focus({ preventScroll: true });","void el;"],
-  ["p18-editor-click-kept","public/setup-editor.js","function redrawSoon() { if (pressed) owed = true; else setTimeout(redraw); }","function redrawSoon() { setTimeout(redraw); }"],
-  ["p18-r2-rail-shape","public/app/10-dialogs-seat-card.js"," && seat.canWrite === tab.crew[at].canWrite && (seat.orchestrates === true) === (tab.crew[at].orchestrates === true)) && (item.lookPause === true) === (tab.lookPause === true)) {",")) {"],
-  ["p18-r2-approved-line","public/app/06-crew-rail.js","${tab.steps?.some((step) => step.type === \"look\") ? \"Approved. \" : \"\"}${esc(String(tab.derived.approvedCardLine)","Approved. ${esc(String(tab.derived.approvedCardLine)"],
-  ["p18-r4-callsite-gen","public/app/10-dialogs-seat-card.js",", setupName: item.name, crewGenerationId: tab.processState?.crewGenerationId });",", setupName: item.name });"],
-  ["p18-r4-reqid-gen","public/setup-editor.js","    if (message.type === \"saveSetup\") message.requestId = crypto.randomUUID();\n",""],
-  ["rw-page-one-crew-list","public/app/11-settings-render.js","<h3>Crew and models · ${esc(tabLabel(tab.id))}</h3><div data-setup-editor></div></section>","<h3>Crew and models · ${esc(tabLabel(tab.id))}</h3><div class=\"card\"><div class=\"crow\">${seatImg(tab.crew[2])}<div class=\"d\"><b>${esc(tab.crew[2]?.name)}</b></div></div></div><div data-setup-editor></div></section>"],
-  ["rw-page-role-programs","public/setup-editor.js","setSeat(slot, { role: name, canWrite: def ? def.canWrite : false, orchestrates: def?.runsProcess === true });","setSeat(slot, { role: name, orchestrates: def?.runsProcess === true });"],
-  ["rw-page-save-look","public/setup-editor.js","if (!sendAs({ type: \"setSetup\", tabId: tab.id, crew: body.crew, lookPause: body.lookPause }, { added, note })) return;","if (!sendAs({ type: \"setSetup\", tabId: tab.id, crew: body.crew }, { added, note })) return;"],
-  ["rw-page-orch-planner-only","public/setup-editor-draw.js","const runRow = !seat.isLeader && String(seat.role ?? \"\").trim() === \"Planner\" ? row(","const runRow = !seat.isLeader ? row("],
-  ["rw-page-one-planner","public/setup-editor-draw.js","const taken = item.name === \"Planner\" && planner && planner.slot !== seat.slot;","const taken = false;"],
-  ["rw-page-advisor-cap","public/setup-editor-draw.js","const advisorRow = cap?.advisor ? row(","const advisorRow = true ? row("],
-  ["rw-page-runs-reason","public/setup-editor.js","if (cap?.crewTools === false) return `${cap.label} cannot reach the crew tools.`;","if (false) return `${cap.label} cannot reach the crew tools.`;"],
-  ["rw-page-placeholder","public/setup-editor.js","draft.crew.push({ slot, name: \"\", role: \"\",","draft.crew.push({ slot, name: \"New seat\", role: \"Helper\","],
-  ["rw-page-name-fallback","public/setup-editor.js","      if (String(seat.name ?? \"\").trim()) return seat;\n","      return seat;\n"],
-  ["rw-page-refocus","public/setup-editor.js","    el.focus({ preventScroll: true });\n    if (sel && el.setSelectionRange","    void el;\n    if (sel && el.setSelectionRange"],
-  ["rw-page-caret-kept","public/setup-editor.js","    if (document.activeElement === el) ui.lastFocus = { key, sel: selOf(el) };\n",""],
-  ["rw-page-bar-pinned","public/setup-editor.css",".se-dock{grid-column:2;grid-row:3;",".se-dock{position:absolute;left:0;right:0;bottom:0;z-index:5;"],
-  ["rw-page-draft-model","public/model-picker.js","const chooser = (tab, seat, draft) => (fields) => draft ? draft.pick(fields) : page.send(","const chooser = (tab, seat, draft) => (fields) => page.send("],
-  ["rw-page-keep-scroll","public/app/11-settings-render.js","    renderCrewEditor(body);\n    restoreSettingsDrafts(body, drafts);\n    updateVaultControls();\n    restoreSettingsFocus(body, snapshot);\n","    restoreSettingsDrafts(body, drafts);\n    updateVaultControls();\n    restoreSettingsFocus(body, snapshot);\n    renderCrewEditor(body);\n"],
+  ["p18-editor-load-order","public/index.html","<script defer src=\"/model-picker.js\"></script>\n  <script defer src=\"/fixed-crew/state.js\"></script>\n  <script defer src=\"/fixed-crew/view.js\"></script>\n  <script defer src=\"/fixed-crew/task-state.js\"></script>\n  <script defer src=\"/fixed-crew/task-archive-view.js\"></script>\n  <script defer src=\"/fixed-crew/task-view.js\"></script>\n  <script defer src=\"/fixed-crew/task-events.js\"></script>\n  <script defer src=\"/fixed-crew/events.js\"></script>\n  <script defer src=\"/fixed-crew/project-dialog.js\"></script>\n  <script defer src=\"/app/01-markdown-state.js\"></script>\n  <script defer src=\"/app/02-selectors-format.js\"></script>\n  <script defer src=\"/app/03-state-sync.js\"></script>\n  <script defer src=\"/app/04-messages.js\"></script>\n  <script defer src=\"/app/05-layers-approvals.js\"></script>\n  <script defer src=\"/app/06-crew-rail.js\"></script>\n  <script defer src=\"/app/06a-tab-status.js\"></script>\n  <script defer src=\"/app/07-chat.js\"></script>\n  <script defer src=\"/app/08-seat-view-details.js\"></script>\n  <script defer src=\"/app/08a-sidebar-details.js\"></script>\n  <script defer src=\"/app/09-needs-you-stopping.js\"></script>\n  <script defer src=\"/app/10-dialogs-seat-card.js\"></script>\n  <script defer src=\"/app/11-settings-render.js\"></script>\n  <script defer src=\"/app/12-events-queue-init.js\"></script>","<script defer src=\"/app/01-markdown-state.js\"></script>\n  <script defer src=\"/app/02-selectors-format.js\"></script>\n  <script defer src=\"/app/03-state-sync.js\"></script>\n  <script defer src=\"/app/04-messages.js\"></script>\n  <script defer src=\"/app/05-layers-approvals.js\"></script>\n  <script defer src=\"/app/06-crew-rail.js\"></script>\n  <script defer src=\"/app/06a-tab-status.js\"></script>\n  <script defer src=\"/app/07-chat.js\"></script>\n  <script defer src=\"/app/08-seat-view-details.js\"></script>\n  <script defer src=\"/app/08a-sidebar-details.js\"></script>\n  <script defer src=\"/app/09-needs-you-stopping.js\"></script>\n  <script defer src=\"/app/10-dialogs-seat-card.js\"></script>\n  <script defer src=\"/app/11-settings-render.js\"></script>\n  <script defer src=\"/app/12-events-queue-init.js\"></script>\n  <script defer src=\"/model-picker.js\"></script>\n  <script defer src=\"/fixed-crew/state.js\"></script>\n  <script defer src=\"/fixed-crew/view.js\"></script>\n  <script defer src=\"/fixed-crew/task-state.js\"></script>\n  <script defer src=\"/fixed-crew/task-archive-view.js\"></script>\n  <script defer src=\"/fixed-crew/task-view.js\"></script>\n  <script defer src=\"/fixed-crew/task-events.js\"></script>\n  <script defer src=\"/fixed-crew/events.js\"></script>\n  <script defer src=\"/fixed-crew/project-dialog.js\"></script>"],
+  ["rw-page-draft-model","public/model-picker.js","pick: (fields) => act(() => adapter.pick(fields))","pick: (fields) => act(() => void fields)"],
+  ["rw-page-keep-scroll","public/app/11-settings-render.js","    restoreSettingsFocus(body, snapshot);\n    fixRadios(body);\n","    void snapshot;\n    fixRadios(body);\n"],
   ["rw-page-menu-close-scroll","public/app/11-settings-render.js","body.onscroll = () => { trackSettingsScroll(); closeScrolledMenus(); };","body.onscroll = trackSettingsScroll;"],
   ["rw-page-menu-close-section","public/app/11-settings-render.js","      closePopovers(); // a menu over Settings belongs to the section it was opened in\n",""],
-  ["rw-page-close-after-save","public/setup-editor.js","ui.wantFocus = back ? `se-row-${back}` : \"se-add\"; s.open = null;","ui.wantFocus = back ? `se-row-${back}` : \"se-add\";"],
-  ["rw-page-note-live","public/setup-editor.js","requestAnimationFrame(() => { live.textContent = text; });","void text;"],
-  ["rw-page-summary-from-server","public/setup-editor-draw.js","const items = (tab.steps ?? []).map((step) => {","const items = ([]).map((step) => {"],
-  ["rw-page-busy-lock","public/setup-editor.js","const isLocked = (tab) => Boolean(tab?.derived?.busy || tab?.activeWork);","const isLocked = (tab) => Boolean(tab?.activeWork);"],
-  ["rw-page-click-kept","public/setup-editor.js","function redrawSoon() { if (pressed) owed = true; else setTimeout(redraw); }","function redrawSoon() { setTimeout(redraw); }"],
-  ["rw-page-locked-look","public/setup-editor.js","if (!el.matches(\"[data-se-row],[data-se-live]\")) el.disabled = true;","if (!el.matches(\"[data-se-live]\")) el.disabled = true;"],
-  ["rw-page-live-model","public/setup-editor.js","if (!el.matches(\"[data-se-row],[data-se-live]\")) el.disabled = true;","if (!el.matches(\"[data-se-row]\")) el.disabled = true;"],
-  ["rw-page-sideways","public/setup-editor.css",".se-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto 12px;",".se-row{display:grid;grid-template-columns:34px max-content auto 12px;"],
-  ["rw-page-blank-first","public/setup-editor-draw.js","${blank ? option(\"template\", blank, blank.desc) : \"\"}<div class=\"se-mg\">Templates</div>${others}","<div class=\"se-mg\">Templates</div>${others}${blank ? option(\"template\", blank, blank.desc) : \"\"}"],
-  ["rw-page-look-needs-roles","public/setup-editor-draw.js","aria-describedby=\"se-look-h\"${steps ? \"\" : \" disabled\"}></button>","aria-describedby=\"se-look-h\"></button>"],
   ["rw-page-no-raw-id","public/model-picker.js","page.modelSupportsEffort(cli, model) ? \"\" : \"<small>No effort setting</small>\"","`<small>${esc(model)}</small>`"],
   ["rw-page-model-names-distinct","public/app/02-selectors-format.js","${family[3] ? \" · 1M context\" : \"\"}`","`"],
-  ["p21-switch-keeps-draft","public/setup-editor-events.js","s.confirm = null; s.menu = null; // the unsaved crew stays until the server confirms the switch (settle), so a refusal keeps it","s.confirm = null; s.menu = null; s.draft = null; s.open = null; s.roleMenu = null; s.custom.clear();"],
-  ["p21-switch-clears-on-confirm","public/setup-editor.js","if (wait.action === \"useSetup\") { s.draft = null; s.open = null; s.roleMenu = null; s.custom.clear(); }","void 0;"],
-  ["p21-save-waits-for-switch","public/setup-editor.js","if (s.saving || switching(s) || !unsaved(tab, s)) return;","if (s.saving || !unsaved(tab, s)) return;"],
-  ["p21-save-bar-off-while-switching","public/setup-editor-draw.js","const off = s.saving || SE.switching(s) || locked ?","const off = s.saving || locked ?"],
-  ["p21-discard-waits-for-switch","public/setup-editor-events.js","if (!s.draft || s.saving || SE.switching(s)) return;","if (!s.draft || s.saving) return;"],
   ["p21-unblock-phrase-kept","public/app/09-needs-you-stopping.js","send({ type: \"unblockSeat\", seatKey, confirm }); // the phrase stays until the server takes it (prunePhraseDrafts)","if (send({ type: \"unblockSeat\", seatKey, confirm })) phraseDrafts.delete(`data-confirm-unblock:${seatKey}`);"],
   ["p21-release-phrase-kept","public/app/09-needs-you-stopping.js","      send(button.dataset.release ? { type: \"releaseUnconfirmed\", runId: button.dataset.release, confirm } : { type: \"releaseUnconfirmedSeat\", seatId: button.dataset.releaseSeat, confirm });\n","      const sent = button.dataset.release ? send({ type: \"releaseUnconfirmed\", runId: button.dataset.release, confirm }) : send({ type: \"releaseUnconfirmedSeat\", seatId: button.dataset.releaseSeat, confirm });\n      if (sent) phraseDrafts.delete(`data-confirm-release:${ref}`);\n"],
   ["p21-gone-phrase-dropped","public/app/09-needs-you-stopping.js","for (const key of [...phraseDrafts.keys()]) if (!live.has(key)) phraseDrafts.delete(key);","void live;"],

@@ -4,86 +4,84 @@ import { existsSync, mkdirSync, rmSync, rmdirSync, utimesSync, writeFileSync } f
 import * as path from "node:path";
 import { tempRoot } from "./temp-root.ts";
 import { config, leaderApi } from "./round2-setup.ts";
-import { loadServer, loadRunnerHarness, connect, lastState, tick } from "./round2-helpers.ts";
+import { loadServer, loadFixed, loadRunnerHarness, connect, lastState, tick, waitFor, ASSIST, startHelper, endRun } from "./round2-helpers.ts";
 
-test("leaderLaunchSeat: the durable launch brake includes manual and leader starts and stops at its limit", async () => {
-  const server = await loadServer({ skipHealth: true });
-  for (let i = 0; i < 7; i++) assert.equal(server.launchWorker("alpha-dev", "reviewer2", `manual ${i}`).ok, true);
-  assert.equal(server.leaderLaunch("alpha-dev", "reviewer2", "eighth launch").ok, true);
-  assert.match(server.leaderLaunch("alpha-dev", "reviewer2", "ninth launch").error, /budget/);
+// Worker launches here are real fixed reservations: the current leader's launchFixedAction picks the position, the journal owns the run.
+const refusal = (promise: Promise<unknown>) => promise.then(() => "launched", (error: Error) => error.message);
+
+test("leaderLaunchSeat: the durable launch brake counts every leader start and stops at its limit", async () => {
+  const server = await loadFixed({ skipHealth: true });
+  for (let i = 0; i < 8; i++) await endRun(server, (await startHelper(server, "alpha-dev", "helper", `launch ${i}`)).runId);
+  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "ninth launch")), /budget/);
   assert.equal(server.safety().timestamps.length, 8);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the refused ninth launch left no reservation");
 });
 
 test("leaderLaunchSeat: a real reviewer launch still builds a read-only Codex command", async () => {
-  const server = await loadServer({ skipHealth: true }), runner = loadRunnerHarness();
-  assert.equal(server.leaderLaunch("alpha-dev", "reviewer2", "review the change").ok, true);
+  const server = await loadFixed({ skipHealth: true }), runner = loadRunnerHarness();
+  const started = await startHelper(server, "alpha-dev", "helper", "review the change");
   const run = server.launched[0].run;
+  assert.equal(run.runId, started.runId);
   assert.equal(run.canWrite, false);
   assert.match(runner.buildCommand(run, path.join(server.testRoot, "logs", "review.brief.txt")), /--sandbox read-only/);
-});
-
-test("leaderLaunchSeat: a real writable slot keeps its explicit write permission", async () => {
-  const server = await loadServer({ skipHealth: true }), runner = loadRunnerHarness();
-  assert.equal(server.leaderLaunch("alpha-dev", "coder", "implement the approved change").ok, true);
-  const run = server.launched[0].run;
-  assert.equal(run.canWrite, true);
-  assert.match(runner.buildCommand(run, path.join(server.testRoot, "logs", "coder.brief.txt")), /--sandbox workspace-write/);
+  await endRun(server, run.runId);
 });
 
 test("leaderLaunchSeat: every successful launch persists and broadcasts its tab, slot, and brief", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  assert.equal(server.leaderLaunch("alpha-design", "designer", "create a new layout").ok, true);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  const started = await startHelper(server, "alpha-design", "helper", "create a new layout");
   const notice = ws.messages.find((message: any) => message.type === "leaderLaunch");
-  assert.equal(notice.seatId, "alpha-design.designer"); assert.equal(notice.brief, "create a new layout");
-  assert.equal(server.safety().notices.at(-1).seatId, "alpha-design.designer");
+  assert.equal(notice.seatId, "alpha-design.helper"); assert.equal(notice.brief, "create a new layout");
+  assert.equal(server.safety().notices.at(-1).seatId, "alpha-design.helper");
+  await endRun(server, started.runId, "alpha-design");
 });
 
 test("leaderLaunchSeat: refused launches never broadcast a success notice", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  assert.equal(server.leaderLaunch("alpha-dev", "missing", "no slot").ok, false);
-  assert.equal(server.leaderLaunch("alpha-dev", "leader", "self").ok, false);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  server.createTabLeader("alpha-dev");
+  const actor = server.currentActor("alpha-dev");
+  assert.equal(await refusal(server.launchFixedAction(actor, null, ASSIST, "no slot", "missing")), "Unknown crew position.");
+  assert.equal(await refusal(server.launchFixedAction(actor, null, ASSIST, "self", "leader")), "This position does not own the approved action.");
   assert.equal(ws.messages.some((message: any) => message.type === "leaderLaunch"), false);
-});
-
-test("leaderLaunchSeat: run-start attribution distinguishes leader starts from later manual starts", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  server.leaderLaunch("alpha-dev", "coder", "leader start");
-  const leaderRun = server.launched[0].run.runId;
-  assert.equal(ws.messages.find((message: any) => message.type === "runStart" && message.runId === leaderRun).launchedBy?.kind, "leader");
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "reviewer2", prompt: "manual start" });
-  const manualRun = server.launched.at(-1).run.runId;
-  assert.equal(ws.messages.find((message: any) => message.type === "runStart" && message.runId === manualRun).launchedBy, null);
-});
-
-test("leaderLaunchSeat: concurrent same-slot launches keep distinct run ownership and notices", async () => {
-  const server = await loadServer({ skipHealth: true });
-  assert.equal(server.leaderLaunch("alpha-dev", "reviewer2", "first").ok, true);
-  assert.equal(server.leaderLaunch("alpha-dev", "reviewer2", "second").ok, true);
-  assert.notEqual(server.launched[0].run.runId, server.launched[1].run.runId);
-  assert.deepEqual(server.launched.map((entry: any) => entry.prompt), ["first", "second"]);
-});
-
-test("leaderLaunchSeat: an unknown crew slot is refused", async () => {
-  const server = await loadServer({ skipHealth: true });
-  const result = server.leaderLaunch("alpha-dev", "unknown", "task");
-  assert.equal(result.ok, false);
-  assert.equal(server.launched.length, 0, "an unknown slot launches nothing");
-  assert.match(result.error, /unknown slot/);
-});
-
-test("leaderLaunchSeat: Atlas cannot launch the tab leader as a worker", async () => {
-  const server = await loadServer({ skipHealth: true });
-  assert.match(server.leaderLaunch("alpha-dev", "leader", "self launch").error, /leader runs in-process/);
   assert.equal(server.launched.length, 0);
 });
 
+test("leaderLaunchSeat: run-start attribution names the leader that started the run", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  const started = await startHelper(server, "alpha-dev", "helper", "leader start");
+  assert.equal(ws.messages.find((message: any) => message.type === "runStart" && message.runId === started.runId).launchedBy?.kind, "leader");
+  await endRun(server, started.runId);
+});
+
+test("leaderLaunchSeat: an unknown crew slot is refused", async () => {
+  const server = await loadFixed({ skipHealth: true });
+  server.createTabLeader("alpha-dev");
+  const result = await refusal(server.launchFixedAction(server.currentActor("alpha-dev"), null, ASSIST, "task", "unknown"));
+  assert.equal(result, "Unknown crew position.");
+  assert.equal(server.launched.length, 0, "an unknown slot launches nothing");
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "an unknown slot reserves nothing");
+});
+
+test("leaderLaunchSeat: Atlas cannot launch the tab leader as a worker", async () => {
+  const server = await loadFixed({ skipHealth: true });
+  server.createTabLeader("alpha-dev");
+  const result = await refusal(server.launchFixedAction(server.currentActor("alpha-dev"), null, ASSIST, "self launch", "leader"));
+  assert.equal(result, "This position does not own the approved action.");
+  assert.equal(server.launched.length, 0);
+  assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the leader slot reserves nothing");
+});
+
 test("leaderLaunchSeat: an explicit unblock clears the durable kill block before the next leader launch", async () => {
-  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadServer({ skipHealth: true, safetyPath }), ws = connect(first);
-  first.leaderLaunch("alpha-dev", "coder", "first"); ws.message({ type: "killRun", runId: first.launched[0].run.runId });
-  assert.deepEqual(config.readLaunchSafety(safetyPath).blocked, ["alpha-dev.coder"]);
-  ws.message({ type: "unblockSeat", seatId: "alpha-dev.coder", confirm: "allow this seat to launch again" });
+  const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadFixed({ skipHealth: true, safetyPath }), ws = connect(first);
+  const started = await startHelper(first, "alpha-dev", "helper", "first"); ws.message({ type: "killRun", runId: started.runId });
+  await waitFor(() => first.executionJournal(first.testRoot, "alpha-dev").activeExecutionId === null, "the killed run to end");
+  assert.deepEqual(config.readLaunchSafety(safetyPath).blocked, ["alpha-dev.helper"]);
+  assert.match(await refusal(startHelper(first, "alpha-dev", "helper", "still blocked")), /launch blocked/);
+  ws.message({ type: "unblockSeat", seatId: "alpha-dev.helper", confirm: "allow this seat to launch again" });
   assert.deepEqual(config.readLaunchSafety(safetyPath).blocked, []);
-  assert.equal(first.leaderLaunch("alpha-dev", "coder", "after explicit unblock").ok, true);
+  const next = await startHelper(first, "alpha-dev", "helper", "after explicit unblock");
+  assert.equal(first.launched.at(-1).run.runId, next.runId);
+  await endRun(first, next.runId);
 });
 
 test("buildLeaderOptions: a resolved native CLI carries its path and effort option", () => {
@@ -105,34 +103,6 @@ test("chat project guard rejects missing and stale project-only ids before any l
   ws.message({ type: "chat", projectId: "missing", text: "stale project request" }); await tick();
   assert.equal(server.chats.length, 0); assert.equal(server.leaders.size, 0);
   assert.match(ws.messages.at(-1).message, /unknown tab/);
-});
-
-test("checkLeaderHealth: a real result logs healthy and sends no client error", async () => {
-  const info: string[] = [], errors: string[] = [], logs = { log: (text: string) => info.push(text), error: (text: string) => errors.push(text) } as any;
-  const server = await loadServer({ console: logs }); const ws = connect(server); await server.leaderHealthCheck;
-  assert.ok(info.some((line) => /health check passed/.test(line))); assert.equal(errors.length, 0);
-  assert.equal(ws.messages.some((message: any) => message.type === "error"), false);
-});
-
-test("checkLeaderHealth: an empty iterator is reported as failure rather than healthy", async () => {
-  const errors: string[] = [], logs = { log() {}, error: (text: string) => errors.push(text) } as any;
-  const server = await loadServer({ console: logs, query: () => ({ [Symbol.asyncIterator]: async function* () {} }) }); await server.leaderHealthCheck;
-  assert.ok(errors.some((line) => /ended without a result/.test(line)));
-});
-
-test("checkLeaderHealth: an is_error result is failure, never a healthy result", async () => {
-  const info: string[] = [], errors: string[] = [], logs = { log: (text: string) => info.push(text), error: (text: string) => errors.push(text) } as any;
-  const server = await loadServer({ console: logs, query: () => ({ [Symbol.asyncIterator]: async function* () { yield { type: "result", is_error: true }; } }) }); await server.leaderHealthCheck;
-  assert.equal(info.some((line) => /health check passed/.test(line)), false); assert.ok(errors.some((line) => /error result/.test(line)));
-});
-
-test("checkLeaderHealth: a Claude CLI inside the first tab's folder is refused and no query starts", async () => {
-  const info: string[] = [], errors: string[] = [], logs = { log: (text: string) => info.push(text), error: (text: string) => errors.push(text) } as any;
-  const planted = await loadServer({ console: logs, claudeCli: "C:/work/alpha/tools/claude.exe" }); await planted.leaderHealthCheck;
-  assert.equal(planted.queryCount(), 0, "no health-check query may start the planted CLI");
-  assert.ok(errors.some((line) => /lies inside the tab folder/.test(line)), errors.join("|"));
-  const outside = await loadServer({ console: logs, claudeCli: "C:/elsewhere/claude.exe" }); await outside.leaderHealthCheck;
-  assert.equal(outside.queryCount(), 1, "control: a CLI outside the tab folder still gets checked");
 });
 
 test("B8: cleanScratch keeps an old upload a saved chat still points at, and deletes an old unreferenced one", async () => {

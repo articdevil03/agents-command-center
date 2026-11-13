@@ -4,9 +4,9 @@ import { isTabSlug } from "../../chat-store.ts";
 import { broadcast, stateMessage } from "../broadcast.ts";
 import { stopLeaderSession } from "../leader-session.ts";
 import type { MessageHandler } from "./types.ts";
-import { crewSetup } from "../seats.ts";
 import { chatStore, requestsStore, selectedTabId, setSelectedTabId, settingsService, tabs, workspaces } from "../state.ts";
 import { tabLocation } from "../tabs.ts";
+import { fixedTab, validateFixedCreationMessage } from "../fixed-crew.ts";
 import {
   makeTabId, refreshTabDetails, requiredRequestId, runAsyncAction, saveWorkspaceDraft, syncWorkspace, tabHasActiveWork, validateFolderPath,
 } from "../workspace.ts";
@@ -31,15 +31,14 @@ function onResolveRequest(ws: WebSocket, message: any): void {
   return;
 }
 function onAddProject(ws: WebSocket, message: any): void {
+  validateFixedCreationMessage(message); requiredRequestId(message.requestId);
   const id = message.id;
   if (!isTabSlug(id) || workspaces.projects.some((project) => project.id.toLowerCase() === id.toLowerCase())) throw new Error(`invalid or duplicate project id: ${String(id)}`);
   const folder = validateFolderPath(typeof message.folder === "string" && message.folder.trim() ? message.folder.trim() : settingsService.state.folders.defaultProjectFolder, "project folder");
   if (typeof message.name !== "string" || !message.name.trim()) throw new Error("project name is required");
-  const template = crewSetup.pickTemplate(message);
-  const kind = message.kind ?? template.kind;
   const tabId = makeTabId(message.tabId, `${id}-development`);
   const tabFolder = validateFolderPath(message.tabFolder ?? folder, "tab folder");
-  const tab = crewSetup.newTab(tabId, "Development", kind, tabFolder, template);
+  const tab = fixedTab(tabId, "Development", tabFolder, message);
   const draft = saveWorkspaceDraft();
   draft.projects.push({ id, name: message.name.trim(), folder, tabs: [tab] });
   syncWorkspace(draft); setSelectedTabId(tabId); broadcast(stateMessage()); void refreshTabDetails(tabId);
@@ -61,14 +60,14 @@ function onRemoveProject(ws: WebSocket, message: any): void {
   const draft = saveWorkspaceDraft(); draft.projects = draft.projects.filter((item) => item.id !== message.projectId); syncWorkspace(draft); broadcast(stateMessage()); return;
 }
 function onAddTab(ws: WebSocket, message: any): void {
+  validateFixedCreationMessage(message); requiredRequestId(message.requestId);
   const projectId = message.projectId;
-  const template = crewSetup.pickTemplate(message);
-  const kind = message.kind ?? template.kind;
   const tabId = makeTabId(message.tabId, `${projectId}-tab`);
   const project = workspaces.projects.find((item) => item.id === projectId);
   if (!project) throw new Error(`unknown project: ${String(projectId)}`);
   const folder = validateFolderPath(typeof message.folder === "string" ? message.folder : project.folder || settingsService.state.folders.defaultProjectFolder, "tab folder");
-  const tab = crewSetup.newTab(tabId, typeof message.name === "string" && message.name.trim() ? message.name.trim() : template.name, kind, folder, template);
+  const name = typeof message.name === "string" && message.name.trim() ? message.name.trim() : "Development";
+  const tab = fixedTab(tabId, name, folder, message);
   const draft = saveWorkspaceDraft(); draft.projects.find((item) => item.id === projectId)!.tabs.push(tab); syncWorkspace(draft); setSelectedTabId(tabId); broadcast(stateMessage()); void refreshTabDetails(tabId);
   if (message.projectOnly === true) ws.send(JSON.stringify({ type: "projectRules", tabId, ...writeProjectRules(folder, project.name) }));
   return;

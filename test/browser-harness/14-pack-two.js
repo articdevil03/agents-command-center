@@ -5,7 +5,6 @@
     await waitFor(() => window.__latestState?.type === "state", "pack 2 fake state");
     const holdClock = installTenSecondClock(40000);
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-    const seedTab = (id = "alpha-dev") => latestTab(id, window.__ccSeed);
     const deliverSeed = () => window.__ccDeliver({ ...structuredClone(window.__ccSeed), type: "state" });
     const sentSince = (start, type) => window.__sent.slice(start).filter((message) => message.type === type);
     const reconnect = async () => {
@@ -54,6 +53,8 @@
     pressEscape(); deliverSeed();
 
     // C2 + C13: a live run's log starts from the server's tail, only appends, and is kept to the server's 200 KiB.
+    // A fixed tab runs one heavy task at a time, so the two records below are one live run and one retained unconfirmed record on the coder (the fixed seeding helper keeps every view consistent).
+    window.__ccHarness.fixed.seedLiveAndRetainedRecords("alpha-dev", "coder");
     openSeatView("coder");
     const log = () => requireElement('#view [data-output-run="audit-parallel-1"]');
     const logBefore = log().textContent, logNode = log().firstChild;
@@ -75,13 +76,12 @@
     // C9: the stalled card and notice say what the server really does.
     const stallState = structuredClone(window.__ccSeed);
     for (const run of latestTab("alpha-dev", stallState).runs.filter((item) => item.status === "working")) run.stalled = true;
-    window.__ccDeliver({ type: "runStalled", tabId: "alpha-dev", runId: "audit-parallel-1", seatKey: "alpha-dev.coder", action: "relaunch" });
+    window.__ccDeliver({ type: "runStalled", tabId: "alpha-dev", runId: "audit-parallel-1", seatKey: "alpha-dev.coder", action: "escalate" });
     window.__ccDeliver({ type: "runStalled", tabId: "alpha-dev", runId: "audit-parallel-2", seatKey: "alpha-dev.coder", action: "escalate" });
     window.__ccDeliver({ ...stallState, type: "state" });
     openInbox();
     const stallCards = [...document.querySelectorAll("#inboxList .ncard.bad")].filter((card) => card.textContent.includes("run stalled")).map((card) => card.querySelector("p").textContent);
-    const relaunchCard = stallCards.find((line) => line.startsWith("Parallel run 1")), escalateCard = stallCards.find((line) => line.startsWith("Parallel run 2"));
-    check("a stalled run the server relaunches says so, and one it leaves for you says it was not relaunched", Boolean(relaunchCard?.includes("stopping it and starting it once more") && !relaunchCard.includes("not relaunched")) && Boolean(escalateCard?.includes("It was not relaunched by itself")), { stallCards });
+    check("a stalled run is left for the owner and its card says it was not relaunched by itself", stallCards.length >= 2 && stallCards.every((line) => line.includes("It was not relaunched by itself") && !line.includes("stopping it and starting it once more")), { stallCards });
     pressEscape(); deliverSeed();
 
     // C11: a launch notice is one line in Activity, however it arrives, updated in place when its outcome is confirmed.
@@ -110,7 +110,7 @@
     $("sideBtn").click(); deliverSeed();
 
     // C10: what was sent and not answered before a drop is sent again (a held removal) or forgotten (a Stop), so nothing stays hidden or disabled.
-    const lostTab = structuredClone(seedTab("alpha-design")); lostTab.id = "alpha-lost"; lostTab.name = "Lost"; window.__ccSeed.projects[0].tabs.push(lostTab); deliverSeed();
+    window.__ccHarness.fixed.cloneIdleTab("alpha-design", "alpha-lost", "Lost"); // a whole idle fixed tab of its own, delivered by the helper
     window.__ccSwallowRemove = true;
     from = window.__sent.length;
     clickMenuItem(openTabMenu("alpha-lost"), "Remove tab");

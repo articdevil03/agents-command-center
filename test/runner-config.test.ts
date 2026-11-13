@@ -2,17 +2,20 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
-import * as processEngine from "../server/process.ts";
-import { isolatedData, config, runner, history, leader, FakeProc, makeRun, captureCallbacks, spawnReturning, configFolder, runArtifact } from "./runner-helpers.ts";
+import { isolatedData, config, runner, history, FakeProc, makeRun, captureCallbacks, spawnReturning, configFolder, runArtifact } from "./runner-helpers.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 
-// A copy of the example workspace this file's config module seeded in its own temp data root.
+const reviewer = { cli: "codex", model: "gpt-6-sol", effort: "high" } as const;
+// A saved fixed workspace of this file's own, written under a scratch config folder: one example project, one tab, the reviewer1 seat chosen.
 function workspaceCopy() {
   const { root, dir } = configFolder();
   const file = path.join(dir, "workspaces.json");
-  const workspaces = config.readWorkspaces(config.workspacesPath);
+  const folder = path.join(root, "example-project");
+  const workspaces = fixedWorkspaces([fixedProject("example", folder, [fixedTab("example-development", folder, { reviewer1: reviewer })])]);
   config.writeWorkspaces(workspaces, file);
   return { root, file, workspaces };
 }
+const seatOf = (workspaces: any, slot: string) => workspaces.projects[0].tabs[0].fixedCrew.preferences[slot];
 
 test("F1 guard: a hostile brief never reaches the command line, and no `&` sits outside quotes", () => {
   const proc = new FakeProc(), capture = captureCallbacks(), calls: unknown[][] = [];
@@ -27,87 +30,42 @@ test("F1 guard: a hostile brief never reaches the command line, and no `&` sits 
   proc.emit("close", 0);
 });
 
-test("applySeatKindAndUpdate: a kind switch alone becomes a process switch with its valid default crew", () => {
-  const current = processEngine.createTabState(processEngine.legacySetup("dev", "main"), { tabId: "work-tab", folderPath: "C:/work" });
-  const switched = processEngine.switchProcess(current, processEngine.legacySetup("dev", "duo"), 10);
-  assert.deepEqual(switched.seats.map((seat) => [seat.slotId, seat.cli, seat.model, seat.effort]), [
-    ["leader", "claude", "claude-opus-5-5[1m]", "medium"], ["coder", "codex", "gpt-6-luna", "max"],
-  ]);
-});
-
 test("applySeatKindAndUpdate: an invalid crew model leaves the whole saved workspace unchanged", () => {
   const { file, workspaces } = workspaceCopy();
   const previous = readFileSync(file, "utf8");
   const next = structuredClone(workspaces);
-  const coder = next.projects[0].tabs[0].crew.find((seat) => seat.slot === "reviewer1")!;
-  assert.equal(coder.cli, "codex", "control: this seat is a Codex seat");
-  coder.model = "not-a-codex-model";
-  coder.effort = "low";
-  assert.throws(() => config.writeWorkspaces(next, file), /invalid slot\/model\/effort/);
+  assert.equal(seatOf(next, "reviewer1").assignment.cli, "codex", "control: this seat is a Codex seat");
+  seatOf(next, "reviewer1").assignment = { cli: "codex", model: "not-a-codex-model", effort: "low" };
+  assert.throws(() => config.writeWorkspaces(next, file), /Invalid crew model/);
   assert.equal(readFileSync(file, "utf8"), previous);
 });
 
 test("applySeatKindAndUpdate: a valid model and effort update publishes together while the slot CLI stays fixed", () => {
   const { file, workspaces } = workspaceCopy();
   const next = structuredClone(workspaces);
-  const coder = next.projects[0].tabs[0].crew.find((seat) => seat.slot === "reviewer1")!;
-  assert.equal(coder.cli, "codex", "control: this seat is a Codex seat");
-  coder.model = "gpt-6-astra"; coder.effort = "low";
+  assert.equal(seatOf(next, "reviewer1").assignment.cli, "codex", "control: this seat is a Codex seat");
+  seatOf(next, "reviewer1").assignment = { cli: "codex", model: "gpt-6-astra", effort: "low" };
   config.writeWorkspaces(next, file);
-  const saved = config.readWorkspaces(file).projects[0].tabs[0].crew.find((seat) => seat.slot === "reviewer1")!;
-  assert.deepEqual([saved.cli, saved.model, saved.effort], ["codex", "gpt-6-astra", "low"]);
+  const saved = seatOf(config.readWorkspaces(file), "reviewer1");
+  assert.deepEqual([saved.assignment.cli, saved.assignment.model, saved.assignment.effort, saved.source], ["codex", "gpt-6-astra", "low", "user"]);
 });
 
 test("applySeatKindAndUpdate: an invalid effort rolls the model update back before file publication", () => {
   const { file, workspaces } = workspaceCopy();
   const previous = readFileSync(file, "utf8");
   const next = structuredClone(workspaces);
-  const coder = next.projects[0].tabs[0].crew.find((seat) => seat.slot === "reviewer1")!;
-  assert.equal(coder.cli, "codex", "control: this seat is a Codex seat");
-  coder.model = "gpt-6-astra"; coder.effort = "wild";
-  assert.throws(() => config.writeWorkspaces(next, file), /invalid slot\/model\/effort/);
+  seatOf(next, "reviewer1").assignment = { cli: "codex", model: "gpt-6-astra", effort: "wild & x" };
+  assert.throws(() => config.writeWorkspaces(next, file), /Invalid crew assignment/);
   assert.equal(readFileSync(file, "utf8"), previous);
 });
 
-test("applySeatKindAndUpdate: an invalid process or unknown slot is rejected without changing the current process", () => {
-  const current = processEngine.createTabState(processEngine.legacySetup("dev", "main"), { tabId: "work-tab", folderPath: "C:/work" });
-  assert.throws(() => processEngine.switchProcess(current, processEngine.legacySetup("dev", "missing") as any), /unknown kind\/process/);
-  assert.equal(current.seats.length, 6, "the tab keeps its own crew");
-  assert.equal(current.steps.length, 7, "and its own steps");
+test("applySeatKindAndUpdate: an unknown crew slot is rejected without changing the saved workspace", () => {
   const { file, workspaces } = workspaceCopy();
-  const next = structuredClone(workspaces);
-  // A crew the roles refuse is not written (steps are derived from the roles, so a step with an unknown owner cannot exist any more): a second seat with the role Leader.
-  (next.projects[0].tabs[0].crew.filter((seat) => !seat.isLeader).at(-1) as { role: string }).role = "Leader";
-  assert.throws(() => config.writeWorkspaces(next, file), /only the leader can have the role Leader/);
-});
-
-test("applySeatKindUpdate: a process switch cannot carry an old CLI model into a different fixed slot", () => {
-  const current = processEngine.createTabState(processEngine.legacySetup("dev", "main"), { tabId: "work-tab", folderPath: "C:/work" });
-  const switched = processEngine.switchProcess(current, processEngine.legacySetup("dev", "solo"), 20);
-  assert.deepEqual(switched.seats.map((seat) => seat.slotId), ["leader"]);
-  assert.equal(switched.seats[0].cli, "claude");
-  assert.equal(switched.seats[0].model, "claude-opus-5-5[1m]");
-});
-
-test("applySeatKindUpdate: an invalid model or effort cannot remain attached to a rebuilt crew slot", () => {
-  const current = processEngine.createTabState(processEngine.legacySetup("dev", "main"), { tabId: "work-tab", folderPath: "C:/work" });
-  const switched = processEngine.switchProcess(current, processEngine.legacySetup("dev", "duo"), 20);
-  const coder = switched.seats.find((seat) => seat.slotId === "coder")!;
-  assert.equal(config.isValidModel(coder.cli, coder.model), true);
-  assert.equal(config.isValidEffort(coder.cli, coder.effort), true);
-});
-
-test("applySeatKindUpdate: unknown process, slot, and leader worker launch are refused", () => {
-  assert.throws(() => processEngine.getProcessDefinition("dev", "bad" as any), /unknown kind\/process/, "an unknown process is a plain error now, not undefined");
-  const serverState = processEngine.createTabState(processEngine.legacySetup("dev", "main"), { tabId: "work-tab", folderPath: "C:/work" });
-  assert.equal(serverState.seats.some((seat) => seat.slotId === "no-such-slot"), false);
-  assert.equal(serverState.seats.find((seat) => seat.slotId === "leader")?.isLeader, true);
-});
-
-test("applySeatKindUpdate: switching to a process preserves its own valid default crew, not stale settings", () => {
-  const switched = processEngine.switchProcess(processEngine.createTabState(processEngine.legacySetup("dev", "main")), processEngine.legacySetup("dev", "duo"), 20);
-  assert.deepEqual(switched.seats.map((seat) => seat.slotId), ["leader", "coder"]);
-  assert.equal(switched.seats.find((seat) => seat.slotId === "coder")?.canWrite, true);
+  const previous = readFileSync(file, "utf8");
+  const next = structuredClone(workspaces) as any;
+  next.projects[0].tabs[0].fixedCrew.preferences["no-such-slot"] = { assignment: null, source: "auto" };
+  assert.throws(() => config.writeWorkspaces(next, file), /Unknown or locked crew field/);
+  assert.equal(readFileSync(file, "utf8"), previous);
 });
 
 test("applySeatUpdate: effort validation accepts a supported Codex effort and rejects an unknown one", () => {
@@ -123,8 +81,8 @@ test("applySeatUpdate: OpenCode models must match the provider/model allow patte
 test("applySeatUpdate: a model outside the kind allow-list cannot replace a valid saved model", () => {
   const { file, workspaces } = workspaceCopy();
   const previous = readFileSync(file, "utf8"), next = structuredClone(workspaces);
-  next.projects[0].tabs[0].crew.find((seat) => seat.slot === "reviewer2")!.model = "other/model";
-  assert.throws(() => config.writeWorkspaces(next, file), /invalid slot\/model\/effort/);
+  next.projects[0].tabs[0].fixedCrew!.preferences.reviewer2 = { assignment: { cli: "codex", model: "other/model", effort: "high" }, source: "user" };
+  assert.throws(() => config.writeWorkspaces(next, file), /Invalid crew model/);
   assert.equal(readFileSync(file, "utf8"), previous);
 });
 
@@ -198,16 +156,19 @@ test("canSeatWrite: OpenCode stays potentially writable even when its slot canWr
   assert.equal(runner.canRunWrite(makeRun({ cli: "opencode", canWrite: false })), true);
 });
 
-test("config.ts: workspace projects and each crew shape field are independently required", () => {
+test("config.ts: workspace projects and each fixed preference field are independently required", () => {
   const { file, workspaces } = workspaceCopy();
-  for (const mutate of [
-    (value: any) => { delete value.projects; },
-    (value: any) => { delete value.projects[0].tabs[0].crew[0].cli; },
-    (value: any) => { delete value.projects[0].tabs[0].crew[0].effort; },
-  ]) {
-    const value = structuredClone(workspaces) as any; mutate(value);
-    writeFileSync(file, JSON.stringify(value));
-    assert.throws(() => config.readWorkspaces(file), /malformed/);
+  const value = structuredClone(workspaces) as any; delete value.projects;
+  writeFileSync(file, JSON.stringify(value));
+  assert.throws(() => config.readWorkspaces(file), /malformed/);
+  // A damaged fixed preference is never a thrown load: the tab loads on a fresh crew and the damage is recorded.
+  for (const field of ["source", "assignment"]) {
+    const copy = workspaceCopy(), damaged = structuredClone(copy.workspaces) as any;
+    delete seatOf(damaged, "reviewer1")[field];
+    writeFileSync(copy.file, JSON.stringify(damaged));
+    const loaded = config.readWorkspaces(copy.file);
+    assert.ok(config.fixedCrewRecovery("example-development", copy.file), `${field}: the damage is recorded`);
+    assert.equal(seatOf(loaded, "reviewer1").assignment, null, `${field}: the tab loads on a fresh crew`);
   }
 });
 
@@ -228,18 +189,19 @@ test("config.ts: malformed JSON reports the isolated config filename", () => {
   assert.throws(() => config.readWorkspaces(file), (error: any) => error.message.includes(file) && /valid JSON/.test(error.message));
 });
 
-test("config.ts: a malformed crew object is rejected even when its JSON is valid", () => {
+test("config.ts: a malformed fixed crew object loads on a fresh crew even when its JSON is valid", () => {
   const { file, workspaces } = workspaceCopy(), value = structuredClone(workspaces) as any;
-  value.projects[0].tabs[0].crew[0] = null;
+  value.projects[0].tabs[0].fixedCrew = null;
   writeFileSync(file, JSON.stringify(value));
-  assert.throws(() => config.readWorkspaces(file), /invalid crew or steps in tab .*not an object/);
+  const loaded = config.readWorkspaces(file);
+  assert.match(config.fixedCrewRecovery("example-development", file) ?? "", /Expected a crew object/);
+  assert.equal(seatOf(loaded, "reviewer1").assignment, null);
 });
 
 test("disk-load guard: a legitimate multi-tab workspace with ordinary IDs loads", () => {
   const { file, workspaces } = workspaceCopy();
   const value = structuredClone(workspaces);
-  value.projects[0].tabs.push(structuredClone(value.projects[0].tabs[0]));
-  value.projects[0].tabs[1].id = "alpha-review";
+  value.projects[0].tabs.push(fixedTab("example-review", value.projects[0].folder));
   config.writeWorkspaces(value, file);
   assert.equal(config.readWorkspaces(file).projects[0].tabs.length, 2);
 });
@@ -277,17 +239,11 @@ test("disk-load guard: a workspace whose PROJECT id is not a slug is refused at 
   assert.equal(config.readWorkspaces(file).projects[0].id, "example", "control: the slug id loads");
 });
 
-test("disk-load guard: duplicate project and tab IDs are rejected case-insensitively before writing", () => {
+test("disk-load guard: duplicate project and tab IDs are rejected before writing", () => {
   const { file, workspaces } = workspaceCopy(), value = structuredClone(workspaces);
   value.projects.push(structuredClone(value.projects[0]));
   assert.throws(() => config.writeWorkspaces(value, file), /duplicate project id/);
-});
-
-test("disk-load guard: invalid model and effort errors identify the workspace tab and crew slot", () => {
-  const { file, workspaces } = workspaceCopy(), value = structuredClone(workspaces);
-  assert.equal(value.projects[0].tabs[0].id, "example-development", "the seeded example tab");
-  const reviewer2 = value.projects[0].tabs[0].crew.find((seat) => seat.slot === "reviewer2");
-  assert.ok(reviewer2, "the default dev crew has a reviewer2 slot");
-  reviewer2.effort = "unsafe";
-  assert.throws(() => config.writeWorkspaces(value, file), (error: any) => error.message.includes("example-development.reviewer2"), "the error names the tab and slot");
+  const tabs = structuredClone(workspaces);
+  tabs.projects.push(fixedProject("beta", "C:/work/beta", [fixedTab("example-development", "C:/work/beta")]));
+  assert.throws(() => config.writeWorkspaces(tabs, file), /duplicate tab id/);
 });

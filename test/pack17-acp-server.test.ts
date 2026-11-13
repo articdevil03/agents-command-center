@@ -11,7 +11,8 @@ import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
-import { sleep, SECRET, scratch, MAIN, LEADER_SLOT, crewFor } from "./pack17-acp-helpers.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
+import { sleep, SECRET, LEADER_SLOT, WORKER, WORKER_SLOT, CLAUDE_LEADER, ACP_DEFAULT } from "./pack17-acp-helpers.ts";
 
 const TAB_COUNT = 12;
 const tabId = (n: number) => `p17-${n}`;
@@ -22,9 +23,10 @@ async function boot(): Promise<Server> {
   for (const dir of [home, work, bin, join(data, "config"), join(data, "chats"), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
   writeFileSync(join(bin, "fake-acp.cmd"), "@echo off\r\n"); // found on PATH (outside every project folder); the test spawn runs the fake agent in its place
   writeFileSync(join(work, "evilacp.cmd"), "@echo off\r\n"); // a program planted INSIDE the tab folder, which is on PATH
-  const tab = (id: string, leader?: { cli: string; model: string; effort: string }) => ({ id, name: id, kind: "dev", process: "main", folder: work, crew: crewFor(leader) });
-  const tabs = [...Array.from({ length: TAB_COUNT }, (_, index) => tab(tabId(index + 1))), tab("p17-evil", { cli: "acp:evil", model: "default", effort: "default" }), tab("p17-ghost", { cli: "acp:ghost", model: "default", effort: "default" })];
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p17", name: "P17", folder: work, tabs }] }));
+  // Fixed saved tabs: every tab starts on the Claude leader (the roster's own pick); two start on an ACP leader (one planted inside the tab folder, one that is not in the list).
+  const tab = (id: string, leader: { cli: string; model: string; effort: string } = CLAUDE_LEADER) => fixedTab(id, work, { leader: leader as any }, id);
+  const tabs = [...Array.from({ length: TAB_COUNT }, (_, index) => tab(tabId(index + 1))), tab("p17-evil", { cli: "acp:evil", ...ACP_DEFAULT }), tab("p17-ghost", { cli: "acp:ghost", ...ACP_DEFAULT })];
+  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p17", work, tabs), name: "P17" }])));
   writeFileSync(join(data, "config", "acp-clis.json"), JSON.stringify({ clis: [{ id: "evil", name: "Evil", program: "evilacp", args: [] }] }));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: Object.fromEntries(["claude", "codex"].map((cli) => [JSON.stringify([cli, "--version"]), { code: 0, stdout: `${cli} 1.0.0`, stderr: "" }])) }));
   const key = randomBytes(32).toString("hex");
@@ -93,19 +95,27 @@ type Client = Awaited<ReturnType<typeof client>>;
 const fakeLog = (server: Server): any[] => (existsSync(join(server.temp, "fake-leader.log")) ? readFileSync(join(server.temp, "fake-leader.log"), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []);
 const chatFile = (server: Server, id: string): any[] => readFileSync(join(server.data, "chats", `${id}.jsonl`), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 const workspaceFile = (server: Server): any => JSON.parse(readFileSync(join(server.data, "config", "workspaces.json"), "utf8"));
-const leaderOf = (tab: any) => tab.crew.find((member: any) => member.slot === LEADER_SLOT);
+const seatOf = (tab: any, slot: string) => tab.fixedCrew.preferences[slot].assignment;
+const leaderOf = (tab: any) => seatOf(tab, LEADER_SLOT);
 
+// A saved crew assignment is made on the tab the person has selected (the fixed crew's own rule). Returns the server's reply.
+// The Full access consent for an ACP pick stays in the page (model picker); the server's assignment message carries no confirm.
+async function assign(c: Client, id: string, slot: string, assignment: any) {
+  c.send({ type: "selectTab", tabId: id });
+  return c.request({ type: "setCrewAssignment", tabId: id, slot, assignment });
+}
 // Adds the scenario's CLI (once) and makes it the tab's leader, the way the page does.
 async function useAcp(c: Client, id: string, scenario: string): Promise<string> {
   const name = `Fake ${scenario}`, kind = `acp:fake-${scenario}`;
   if (!c.state().acpClis.some((cli: any) => cli.kind === kind)) assert.deepEqual(await c.request({ type: "addAcpCli", name, command: `fake-acp --scenario=${scenario}` }), { ok: true });
-  const from = c.messages.length;
-  c.send({ type: "updateSeat", tabId: id, slot: LEADER_SLOT, cli: kind, model: "default", confirm: true });
-  await c.wait(() => leaderOf(c.tabState(id)).cli === kind, `${id} leads with ${kind}: ${JSON.stringify(c.messages.slice(from).filter((m) => m.type === "error"))}`);
+  assert.deepEqual(await c.request({ type: "refreshSettings" }), { ok: true });
+  const reply = await assign(c, id, LEADER_SLOT, { cli: kind, ...ACP_DEFAULT });
+  assert.deepEqual(reply, { ok: true }, `${id} leads with ${kind}: ${reply.message}`);
+  assert.equal(leaderOf(c.tabState(id)).cli, kind);
   return kind;
 }
 
-test("D1: Settings adds a CLI by its start command; nothing that needs a shell is saved; it cannot be removed while it leads a tab", async () => {
+test("D1: Settings adds a CLI by its start command; nothing that needs a shell is saved; it cannot be removed while the fixed crew uses it", async () => {
   const server = await boot(); const c = await client(server);
   try {
     assert.deepEqual(c.state().acpClis.map((cli: any) => cli.id), ["evil"], "the saved list is loaded at start");
@@ -125,49 +135,41 @@ test("D1: Settings adds a CLI by its start command; nothing that needs a shell i
     assert.equal(c.state().acpClis.length, 2);
     await useAcp(c, tabId(1), "basic");
     const refusal = await c.request({ type: "removeAcpCli", id: "fake-basic" });
-    assert.equal(refusal.ok, false); assert.match(refusal.message!, /Fake basic is used by Atlas \(Leader\) in "p17-1"/);
+    assert.equal(refusal.ok, false); assert.match(refusal.message!, /^Fake basic is used by the fixed crew in "p17-1"\. Pick another CLI first\.$/);
     assert.ok(c.state().acpClis.some((cli: any) => cli.id === "fake-basic"));
     assert.deepEqual(await c.request({ type: "refreshSettings" }), { ok: true });
-    c.send({ type: "updateSeat", tabId: tabId(1), slot: LEADER_SLOT, cli: "claude", model: "claude-opus-5-5[1m]" });
-    await c.wait(() => leaderOf(c.tabState(tabId(1))).cli === "claude", "back to Claude");
+    assert.deepEqual(await assign(c, tabId(1), LEADER_SLOT, CLAUDE_LEADER), { ok: true });
+    assert.equal(leaderOf(c.tabState(tabId(1))).cli, "claude", "back to Claude");
     assert.deepEqual(await c.request({ type: "removeAcpCli", id: "fake-basic" }), { ok: true });
     assert.deepEqual(c.state().acpClis.map((cli: any) => cli.id), ["evil"]);
     assert.deepEqual(JSON.parse(readFileSync(join(server.data, "config", "acp-clis.json"), "utf8")).clis.map((cli: any) => cli.id), ["evil"]);
   } finally { c.close(); await server.stop(); }
 });
 
-test("D2: picking an ACP leader needs the Full access confirmation, a crew seat may use it too (with the confirmation), and the leader shows Full access only", async () => {
+test("D2: a fixed crew takes an ACP CLI on the leader and on a worker seat (default model and effort only), and the leader shows Full access only", async () => {
   const server = await boot(); const c = await client(server);
   try {
     assert.deepEqual(await c.request({ type: "addAcpCli", name: "Fake basic", command: "fake-acp --scenario=basic" }), { ok: true });
-    const slots = MAIN.map((seat) => seat.slotId);
-    const crewSlot = slots.find((slot) => slot !== LEADER_SLOT)!;
-    let from = c.messages.length;
-    c.send({ type: "updateSeat", tabId: tabId(2), slot: LEADER_SLOT, cli: "acp:fake-basic", model: "default" });
-    const noConfirm = await c.wait(() => c.messages.slice(from).find((m) => m.type === "error"), "refused without the confirmation");
-    assert.match(noConfirm.message, /Full access confirmation is required: Fake basic may edit files and run commands without asking/);
-    assert.equal(leaderOf(c.tabState(tabId(2))).cli, "claude");
-    from = c.messages.length;
-    c.send({ type: "updateSeat", tabId: tabId(2), slot: crewSlot, cli: "acp:fake-basic", model: "default", confirm: true });
-    const crewModel = c.tabState(tabId(2)).crew.find((seat: any) => seat.slot === crewSlot).model;
-    await c.wait(() => c.tabState(tabId(2)).crew.find((seat: any) => seat.slot === crewSlot).cli === "acp:fake-basic", "a crew seat takes an ACP CLI with the confirmation (pack 18)");
-    assert.notEqual(c.tabState(tabId(2)).permissionMode, "bypass", "a crew seat on an ACP CLI does not change the tab's mode: only an ACP LEADER shows Full access");
     assert.deepEqual(await c.request({ type: "refreshSettings" }), { ok: true });
-    c.send({ type: "updateSeat", tabId: tabId(2), slot: crewSlot, cli: "codex", model: crewModel });
-    await c.wait(() => c.tabState(tabId(2)).crew.find((seat: any) => seat.slot === crewSlot).cli === "codex", "the crew seat is back on Codex");
-    from = c.messages.length;
-    c.send({ type: "updateSeat", tabId: tabId(2), slot: LEADER_SLOT, cli: "acp:nobody", model: "default", confirm: true });
-    assert.match((await c.wait(() => c.messages.slice(from).find((m) => m.type === "error"), "unknown ACP CLI")).message, /not in your ACP CLIs list/);
-    from = c.messages.length;
-    c.send({ type: "updateSeat", tabId: tabId(2), slot: LEADER_SLOT, cli: "acp:fake-basic", model: "opus", confirm: true });
-    assert.match((await c.wait(() => c.messages.slice(from).find((m) => m.type === "error"), "a model of another CLI")).message, /valid acp:fake-basic model is required/);
+    const workerBefore = seatOf(c.tabState(tabId(2)), WORKER_SLOT);
+    assert.deepEqual(await assign(c, tabId(2), WORKER_SLOT, { cli: "acp:fake-basic", ...ACP_DEFAULT }), { ok: true }, "a worker seat takes an ACP CLI");
+    assert.deepEqual(seatOf(c.tabState(tabId(2)), WORKER_SLOT), { cli: "acp:fake-basic", ...ACP_DEFAULT });
+    assert.notEqual(c.tabState(tabId(2)).permissionMode, "bypass", "a worker seat on an ACP CLI does not change the tab's mode: only an ACP LEADER shows Full access");
+    assert.deepEqual(await assign(c, tabId(2), WORKER_SLOT, { cli: WORKER.preferred.cli, model: WORKER.preferred.model, effort: WORKER.preferred.effort }), { ok: true });
+    assert.equal(seatOf(c.tabState(tabId(2)), WORKER_SLOT).cli, WORKER.preferred.cli, "the worker seat is back on its own CLI");
+    assert.notDeepEqual(workerBefore.cli, "acp:fake-basic");
+    const nobody = await assign(c, tabId(2), LEADER_SLOT, { cli: "acp:nobody", ...ACP_DEFAULT });
+    assert.equal(nobody.ok, false); assert.match(nobody.message!, /CLI is unavailable/, "an ACP CLI that is not in the list is refused");
+    const other = await assign(c, tabId(2), LEADER_SLOT, { cli: "acp:fake-basic", model: "opus", effort: "default" });
+    assert.equal(other.ok, false); assert.match(other.message!, /ACP assignment uses its default model and effort/, "a model of another CLI is refused");
+    assert.equal(leaderOf(c.tabState(tabId(2))).cli, "claude", "the refused picks changed nothing");
     await useAcp(c, tabId(2), "basic");
     const tab = c.tabState(tabId(2));
     assert.equal(leaderOf(tab).model, "default"); assert.equal(leaderOf(tab).effort, "default");
     assert.equal(tab.permissionMode, "bypass", "an ACP leader shows Full access");
     assert.deepEqual(tab.acpLeader, { name: "Fake basic", model: null });
     const saved = workspaceFile(server).projects[0].tabs.find((t: any) => t.id === tabId(2));
-    assert.equal(saved.crew.find((m: any) => m.slot === LEADER_SLOT).cli, "acp:fake-basic");
+    assert.equal(saved.fixedCrew.preferences.leader.assignment.cli, "acp:fake-basic");
     // Ask, Plan and Accept are refused for it; Full access is what it already has (nothing changes, and the tab's saved mode stays as it was).
     for (const mode of ["ask", "accept", "plan"]) {
       const result = await c.request({ type: "setPermissionMode", tabId: tabId(2), mode });
@@ -177,11 +179,9 @@ test("D2: picking an ACP leader needs the Full access confirmation, a crew seat 
     assert.equal(c.state().settings.permissionModes[tabId(2)], undefined, "the saved mode is untouched (it applies again if the leader is switched back)");
     assert.equal(c.tabState(tabId(2)).permissionMode, "bypass");
     // Switching back restores the tab's own saved mode.
-    assert.deepEqual(await c.request({ type: "refreshSettings" }), { ok: true });
-    c.send({ type: "updateSeat", tabId: tabId(2), slot: LEADER_SLOT, cli: "claude", model: "claude-opus-5-5[1m]" });
-    await c.wait(() => leaderOf(c.tabState(tabId(2))).cli === "claude", "back to Claude");
+    assert.deepEqual(await assign(c, tabId(2), LEADER_SLOT, CLAUDE_LEADER), { ok: true });
+    assert.equal(leaderOf(c.tabState(tabId(2))).cli, "claude", "back to Claude");
     assert.equal(c.tabState(tabId(2)).permissionMode, c.tabState(tabId(12)).permissionMode, "the tab's own saved mode applies again"); assert.equal(c.tabState(tabId(2)).acpLeader, null);
-    assert.equal(leaderOf(c.tabState(tabId(2))).effort !== "default", true);
   } finally { c.close(); await server.stop(); }
 });
 
@@ -241,7 +241,7 @@ test("D4: Stop ends the ACP leader's process; the next message starts a new one"
   } finally { c.close(); await server.stop(); }
 });
 
-test("D5: the crew tools reach an ACP leader through the real bridge with its own token; an error and a death are shown plainly", async () => {
+test("D5: the nine fixed tools reach an ACP leader through the real bridge with its own token; an error and a death are shown plainly", async () => {
   const server = await boot(); const c = await client(server);
   try {
     await useAcp(c, tabId(5), "crew");
@@ -250,8 +250,8 @@ test("D5: the crew tools reach an ACP leader through the real bridge with its ow
     assert.match(c.answers(tabId(5)).at(-1)!.text, /^crew ok: 200$/);
     const row = fakeLog(server).find((entry) => entry.bridgeTools);
     assert.ok(row, "the agent used the bridge");
-    assert.deepEqual([...row.bridgeTools].sort(), ["get_crew_status", "launch_seat", "list_requests", "send_request"]);
-    assert.match(row.bridgeCrew, /"tab":"p17-5"/);
+    assert.deepEqual([...row.bridgeTools].sort(), ["accept_planner_report", "begin_planning", "finish_fixed_task", "get_fixed_task", "get_task_archive", "list_task_archives", "reconcile_task_execution", "request_task_action", "verify_task_evidence"], "the nine fixed tools, nothing of the old crew tools");
+    assert.deepEqual(Object.keys(JSON.parse(row.bridgeTask)).sort(), ["executions", "task"], "get_fixed_task answered through the bridge with this tab's saved task");
     const labels = c.messages.filter((m) => m.type === "leaderActivity" && m.tabId === tabId(5)).map((m) => m.label).filter(Boolean);
     assert.ok(!labels.some((label: string) => /crew/i.test(label)), `a crew tool shows as a crew run, not a step: ${JSON.stringify(labels)}`);
     // Not signed in.
@@ -281,15 +281,9 @@ test("D5: the crew tools reach an ACP leader through the real bridge with its ow
   } finally { c.close(); await server.stop(); }
 });
 
-test("D6: a program found only inside the tab folder is refused (at the pick and at the start); a removed CLI says so", async () => {
+test("D6: a program found only inside the tab folder is refused at the start; a removed CLI says so", async () => {
   const server = await boot(); const c = await client(server);
   try {
-    // Picked from Settings: refused before it is saved.
-    const from = c.messages.length;
-    c.send({ type: "updateSeat", tabId: tabId(10), slot: LEADER_SLOT, cli: "acp:evil", model: "default", confirm: true });
-    const refusal = await c.wait(() => c.messages.slice(from).find((m) => m.type === "error"), "inside-folder pick refused");
-    assert.match(refusal.message, /evilacp was found only inside a project folder/);
-    assert.equal(leaderOf(c.tabState(tabId(10))).cli, "claude");
     // Saved as the leader already: the start is refused, nothing runs.
     await c.chat("p17-evil", "hello");
     await c.finished("p17-evil", 1, "evil start");
@@ -303,14 +297,13 @@ test("D6: a program found only inside the tab folder is refused (at the pick and
   } finally { c.close(); await server.stop(); }
 });
 
-test("D7: a tab whose process changes keeps its ACP leader; a Claude tab still starts as Claude (not the ACP adapter)", async () => {
+test("D7: the legacy setup messages are refused and leave an ACP leader alone; a Claude tab still starts as Claude (not the ACP adapter)", async () => {
   const server = await boot(); const c = await client(server);
   try {
     await useAcp(c, tabId(11), "basic");
-    const before = c.tabState(tabId(11)).setupName;
+    const from = c.messages.length;
     c.send({ type: "useSetup", tabId: tabId(11), templateId: "duo" });
-    await sleep(300);
-    assert.equal(c.tabState(tabId(11)).setupName, "The Duo", `the tab really switched setup (was ${before})`);
+    await c.wait(() => c.messages.slice(from).find((m) => m.type === "error" && /Fixed crews use task decisions/.test(m.message)), "the legacy setup switch is refused");
     assert.equal(leaderOf(c.tabState(tabId(11))).cli, "acp:fake-basic");
     await c.chat(tabId(12), "hello claude");
     await c.finished(tabId(12), 1, "claude turn");

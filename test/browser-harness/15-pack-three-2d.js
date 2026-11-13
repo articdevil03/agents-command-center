@@ -77,6 +77,7 @@
 
     // A run's live log.
     await part("live output", async () => {
+      window.__ccHarness.fixed.seedLiveAndRetainedRecords(tabId, "coder");
       openSeatView("coder");
       const pre = () => requireElement('#view [data-output-run="audit-parallel-1"]'), jump = () => requireElement("#view [data-jump-log]");
       const lines = (from, to) => Array.from({ length: to - from }, (_, index) => `\nstreamed line ${from + index}`).join("");
@@ -98,6 +99,7 @@
 
     // Watch on a run row of the seat card.
     await part("Watch a run", async () => {
+      window.__ccHarness.fixed.seedLiveAndRetainedRecords(tabId, "coder"); // one live run and one retained unconfirmed record on the coder
       openSeatView("coder");
       requireElement("#view [data-seat-more]").click();
       const rows = [...document.querySelectorAll("#seatPop [data-watch-run]")].map((button) => button.dataset.watchRun);

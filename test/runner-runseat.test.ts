@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import * as path from "node:path";
+
 import { setEnv } from "./temp-root.ts";
 import { config, runner, history, leader, FakeProc, makeRun, captureCallbacks, spawnReturning, runArtifact, startRunnerRun } from "./runner-helpers.ts";
 
@@ -26,7 +26,9 @@ test("runSeat: late output from a retired process cannot reach callbacks or its 
   const next = makeRun({ runId: "late-chunk" }); const newTimestamp = startRunnerRun(next, "new", newCapture.callbacks, spawnReturning(newProc));
   newProc.stdout.emit("data", Buffer.from("current bytes"));
   const oldLog = readFileSync(runArtifact(old, oldTimestamp, "log"), "utf8");
-  const newLog = readFileSync(runArtifact(next, newTimestamp, "log"), "utf8");
+  const newPath = runArtifact(next, newTimestamp, "log");
+  const newLog = existsSync(newPath) ? readFileSync(newPath, "utf8") : ""; // a log that was never written is a failed assertion below, not a crash
+  assert.ok(newLog.includes("current bytes"), "the live run's output reaches its own log");
   oldProc.stdout.emit("data", Buffer.from("late old bytes"));
   oldProc.stderr.emit("data", Buffer.from("late old stderr"));
   assert.deepEqual(newCapture.outputs.map((entry) => entry.text), ["current bytes"]); assert.equal(newCapture.statuses.length, 1);
@@ -129,6 +131,36 @@ test("runSeat: an unterminated stderr decoder tail reaches both callback and rea
   assert.ok(log.includes("€"));
 });
 
+test("runSeat: a stderr decoder tail left incomplete at close is flushed to the callback and the real log", () => {
+  const proc = new FakeProc(), capture = captureCallbacks(), run = makeRun({ runId: "stderr-tail-incomplete" });
+  const timestamp = startRunnerRun(run, "x", capture.callbacks, spawnReturning(proc));
+  proc.stderr.emit("data", Buffer.from([0xe2, 0x82])); // half a character: only the decoder's end() can release it
+  assert.equal(capture.outputs.length, 0, "nothing is released before close");
+  proc.emit("close", 0);
+  assert.equal(capture.outputs.map((entry) => entry.text).join(""), "�");
+  assert.ok(readFileSync(runArtifact(run, timestamp, "log"), "utf8").includes("�"));
+});
+
+test("runSeat: a stdout decoder tail left incomplete at close is flushed to the callback and the real log", () => {
+  const proc = new FakeProc(), capture = captureCallbacks(), run = makeRun({ runId: "stdout-tail-incomplete" });
+  const timestamp = startRunnerRun(run, "x", capture.callbacks, spawnReturning(proc));
+  proc.stdout.emit("data", Buffer.from([0xe2, 0x82]));
+  assert.equal(capture.outputs.length, 0, "nothing is released before close");
+  proc.emit("close", 0);
+  assert.equal(capture.outputs.map((entry) => entry.text).join(""), "�");
+  assert.ok(readFileSync(runArtifact(run, timestamp, "log"), "utf8").includes("�"));
+});
+
+test("runSeat: a Claude result line shows its text before its usage is broadcast", () => {
+  const proc = new FakeProc(), order: string[] = [];
+  const callbacks = { ...captureCallbacks().callbacks, onOutput: (_: unknown, text: string) => order.push(`output:${text}`), onUsage: () => order.push("usage") } as runner.RunnerCallbacks;
+  const run = makeRun({ runId: "text-before-usage", cli: "claude", model: "claude-opus-5-5[1m]", effort: "medium" });
+  startRunnerRun(run, "x", callbacks, spawnReturning(proc));
+  proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "result", result: "final answer", usage: { input_tokens: 10 } })}\n`));
+  proc.emit("close", 0);
+  assert.deepEqual(order.slice(0, 2), ["output:final answer\n", "usage"]);
+});
+
 test("runSeat: a spawn error flushes held output, writes one exit marker, and ignores a later close", () => {
   const proc = new FakeProc(), capture = captureCallbacks();
   const run = makeRun({ runId: "spawn-error-final", cli: "claude", model: "claude-opus-5-5[1m]", effort: "medium" });
@@ -147,10 +179,8 @@ test("runSeat: a spawn error flushes held output, writes one exit marker, and ig
   assert.equal(runner.isRunning("spawn-error-final"), false);
 });
 
-// ---- Pack 18, Block 2: the advisor flag, and how a seat that runs the process reaches the crew tools (url + token) in each CLI ----
+// ---- Pack 18, Block 2: the advisor flag, and the command and environment each CLI gets ----
 const BRIEF = "C:/logs/work-tab.reviewer1-100.brief.txt";
-
-const CREW = { url: "http://127.0.0.1:4317/api/leader-mcp/work-tab.run-18", token: "tok-p18-0123456789abcdef0123456789abcdef" };
 
 const CLAUDE = { cli: "claude" as const, model: "claude-opus-5-5[1m]", effort: "high" };
 
@@ -182,130 +212,22 @@ test("R1: a Claude run gets --advisor after the model check, a bad advisor throw
   assert.equal(runner.isRunning("r1-bad"), false);
 });
 
-test("R6: a Claude seat that runs the process gets the MCP config and its tools, a read-only one default mode instead of plan, and the config file is gone when the run ends", async () => {
-  const crewTools = CREW;
-  const orch = runner.buildCommand(makeRun({ ...CLAUDE, canWrite: false, crewTools }), BRIEF);
-  assert.match(orch, /--permission-mode default --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit --mcp-config "%CC_MCP_CONFIG%" --allowedTools mcp__tab-crew --output-format stream-json/);
-  assert.doesNotMatch(orch, /--permission-mode plan/, "plan mode blocks the MCP tools");
+test("R6: a Claude seat that may write runs in acceptEdits mode, a read-only one in plan mode with the edit tools denied, and neither gets an MCP flag", () => {
   const worker = runner.buildCommand(makeRun({ ...CLAUDE, canWrite: false }), BRIEF);
-  assert.match(worker, /--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit --output-format stream-json/, "a read-only seat that does not run the process keeps plan mode, byte for byte");
+  assert.match(worker, /--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit --output-format stream-json/, "a read-only seat keeps plan mode, byte for byte");
   assert.doesNotMatch(worker, /mcp|--permission-mode default/);
-  const writer = runner.buildCommand(makeRun({ ...CLAUDE, canWrite: true, crewTools }), BRIEF);
-  assert.match(writer, /--permission-mode acceptEdits --mcp-config "%CC_MCP_CONFIG%" --allowedTools mcp__tab-crew /);
-  assert.doesNotMatch(writer, /--disallowedTools/);
-  assert.ok(!orch.includes(crewTools.token) && !orch.includes(crewTools.url), "the token and the url are not on the command line");
-  assert.throws(() => runner.buildCommand(makeRun({ ...CLAUDE, canWrite: false, crewTools: { ...crewTools, url: "http://127.0.0.1:1/x & calc" } }), BRIEF), /unsafe crew tools url/);
-  assert.throws(() => runner.buildCommand(makeRun({ ...CLAUDE, canWrite: false, crewTools: { ...crewTools, token: "bad token" } }), BRIEF), /unsafe crew tools token/);
-
-  // The real call site, through every way a run can end: the file exists while it runs, holds the config, and is deleted at the end.
-  const before = mcpFiles().length;
-  const ends: Array<[string, (proc: FakeProc) => void | Promise<void>]> = [
-    ["close", (proc) => { proc.emit("close", 0); }],
-    ["spawn error", (proc) => { proc.emit("error", new Error("spawn failed")); }],
-    ["exit without close", async (proc) => { proc.emit("exit", 0); await new Promise((resolve) => setTimeout(resolve, 1000)); }],
-  ];
-  for (const [label, end] of ends) {
-    const runId = `r6-${label.replace(/ /g, "-")}`;
-    const started = spawnedRun(makeRun({ ...CLAUDE, runId, canWrite: false, crewTools }));
-    const file = started.options.env.CC_MCP_CONFIG as string;
-    assert.ok(file && file.endsWith(".mcp.json") && path.dirname(file).toLowerCase() === runner.logsDir.toLowerCase(), `${label}: the config is a file in the logs folder`);
-    assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { mcpServers: { "tab-crew": { type: "http", url: crewTools.url, headers: { Authorization: `Bearer ${crewTools.token}` } } } }, `${label}: the config holds the http server with the auth header`);
-    assert.match(started.command, /--mcp-config "%CC_MCP_CONFIG%"/);
-    assert.ok(!started.command.includes(crewTools.token), `${label}: no token on the command line`);
-    await end(started.proc);
-    assert.equal(existsSync(file), false, `${label}: the config file is deleted when the run ends`);
-    assert.equal(runner.isRunning(runId), false);
-  }
-  // A start that throws, and a start that is refused (the CLI is not on PATH): no file is left either way.
-  assert.throws(() => runner.runSeat(makeRun({ ...CLAUDE, runId: "r6-throws", canWrite: false, crewTools }), "p", captureCallbacks().callbacks, (() => { throw new Error("spawn exploded"); }) as any), /spawn exploded/);
-  const restore = setEnv({ PATH: "" });
-  try {
-    const refused = runner.runSeat(makeRun({ ...CLAUDE, runId: "r6-refused", canWrite: false, crewTools }), "p", captureCallbacks().callbacks, spawnReturning(new FakeProc()));
-    assert.equal(refused.ok, false, "a refused start");
-  } finally { restore(); }
-  assert.equal(mcpFiles().length, before, "no config file is left behind by any of the paths");
+  const writer = runner.buildCommand(makeRun({ ...CLAUDE, canWrite: true }), BRIEF);
+  assert.match(writer, /--permission-mode acceptEdits --output-format stream-json/);
+  assert.doesNotMatch(writer, /--disallowedTools|mcp/);
 });
 
-test("R7: Codex reaches the crew tools with three -c keys and the url and token in the environment; the token is never on the command line", () => {
-  const run = makeRun({ runId: "r7-codex", canWrite: false, crewTools: CREW });
-  const command = runner.buildCommand(run, BRIEF);
-  assert.match(command, / -c "mcp_servers\.tab-crew\.url=%CC_CREW_URL%"/);
-  assert.match(command, / -c mcp_servers\.tab-crew\.bearer_token_env_var=CC_CREW_TOKEN /);
-  assert.match(command, / -c mcp_servers\.tab-crew\.default_tools_approval_mode=approve /);
-  assert.match(command, /--sandbox read-only /);
-  assert.ok(!command.includes(CREW.token), "the token is not on the command line");
-  const env = runner.commandEnv(run, BRIEF);
-  assert.equal(env.CC_CREW_URL, CREW.url); assert.equal(env.CC_CREW_TOKEN, CREW.token);
-  // The real call site.
-  const started = spawnedRun(run);
-  assert.ok(!started.command.includes(CREW.token), "the command the spawn receives has no token");
-  assert.match(started.command, /mcp_servers\.tab-crew\.default_tools_approval_mode=approve/);
-  assert.equal(started.options.env.CC_CREW_URL, CREW.url); assert.equal(started.options.env.CC_CREW_TOKEN, CREW.token);
-  assert.equal(started.options.env.CC_MCP_CONFIG, undefined, "Codex has no config file");
+test("R8: a read-only OpenCode seat gets the deny rules as its only config, a writing seat gets none", () => {
+  const started = spawnedRun(makeRun({ runId: "r8-plain", cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: false }));
+  assert.equal(started.options.env.OPENCODE_CONFIG_CONTENT, JSON.stringify({ $schema: "https://opencode.ai/config.json", permission: { edit: "deny", bash: "deny" } }), "the read-only config is exactly the deny rules");
   started.proc.emit("close", 0);
-});
-
-test("R8: a read-only OpenCode seat that runs the process gets ONE config holding both the deny rules and the crew tools", () => {
-  const run = makeRun({ runId: "r8-both", cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: false, crewTools: CREW });
-  const started = spawnedRun(run);
-  const merged = JSON.parse(started.options.env.OPENCODE_CONFIG_CONTENT);
-  assert.deepEqual(merged.permission, { edit: "deny", bash: "deny" }, "the deny part is kept");
-  assert.deepEqual(merged.mcp, { "tab-crew": { type: "remote", url: CREW.url, headers: { Authorization: "Bearer {env:CC_CREW_TOKEN}" }, oauth: false } }, "the crew tools are in the same config");
-  assert.ok(!started.options.env.OPENCODE_CONFIG_CONTENT.includes(CREW.token), "the config names the environment variable, not the token");
-  assert.equal(started.options.env.CC_CREW_TOKEN, CREW.token);
-  started.proc.emit("close", 0);
-  const writer = spawnedRun(makeRun({ runId: "r8-writer", cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: true, crewTools: CREW }));
-  const writerConfig = JSON.parse(writer.options.env.OPENCODE_CONFIG_CONTENT);
-  assert.equal(writerConfig.permission, undefined, "a writing seat is not denied anything");
-  assert.ok(writerConfig.mcp["tab-crew"]);
+  const writer = spawnedRun(makeRun({ runId: "r8-writer", cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: true }));
+  assert.equal(writer.options.env.OPENCODE_CONFIG_CONTENT, undefined, "a writing seat is not denied anything and gets no config");
   writer.proc.emit("close", 0);
-  const plain = spawnedRun(makeRun({ runId: "r8-plain", cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: false }));
-  assert.equal(plain.options.env.OPENCODE_CONFIG_CONTENT, JSON.stringify({ $schema: "https://opencode.ai/config.json", permission: { edit: "deny", bash: "deny" } }), "without crew tools the read-only config is exactly as before");
-  plain.proc.emit("close", 0);
-});
-
-test("R9: the crew token never reaches the log or a single output chunk, whole or split across writes (stdout, stderr, Claude events, a run ended inside it)", () => {
-  const token = "tok-r9-0123456789abcdef0123456789abcdef";
-  const check = (label: string, outputs: string[], log: string): void => {
-    assert.ok(!outputs.join("").includes(token) && !log.includes(token), `${label}: the token is not shown or saved`);
-    for (const chunk of outputs) assert.ok(!chunk.includes(token.slice(0, 12)), `${label}: no output chunk starts the token: ${JSON.stringify(chunk)}`);
-    assert.ok(outputs.join("").includes("[hidden]") && log.includes("[hidden]"), `${label}: it is replaced where it was`);
-  };
-  const plain = makeRun({ runId: "r9-plain", cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: true, crewTools: { ...CREW, token } });
-  const proc = new FakeProc(), capture = captureCallbacks();
-  const stamp = startRunnerRun(plain, "p", capture.callbacks, spawnReturning(proc));
-  proc.stdout.emit("data", Buffer.from(`before ${token} after `));
-  proc.stdout.emit("data", Buffer.from(`split ${token.slice(0, 10)}`));
-  assert.ok(!capture.outputs.map((entry) => entry.text).join("").includes(token.slice(0, 10)), "the start of a token waits for the next write");
-  proc.stdout.emit("data", Buffer.from(`${token.slice(10)} end `));
-  proc.stderr.emit("data", Buffer.from(`err ${token.slice(0, 30)}`));
-  proc.stderr.emit("data", Buffer.from(`${token.slice(30)} done`));
-  proc.emit("close", 0);
-  const shown = capture.outputs.map((entry) => entry.text).join("");
-  check("plain", capture.outputs.map((entry) => entry.text), readFileSync(runArtifact(plain, stamp, "log"), "utf8"));
-  assert.match(shown, /before \[hidden\] after split \[hidden\] end /, "the text around the token is kept, in order");
-  assert.match(shown, /err \[hidden\] done/);
-  // A Claude run: the token inside an assistant event, then an event whose JSON line is split across two writes.
-  const claude = makeRun({ runId: "r9-claude", ...CLAUDE, canWrite: true, crewTools: { ...CREW, token } });
-  const cproc = new FakeProc(), ccapture = captureCallbacks();
-  const cstamp = startRunnerRun(claude, "p", ccapture.callbacks, spawnReturning(cproc));
-  const event = (text: string) => JSON.stringify({ type: "assistant", message: { model: claude.model, content: [{ type: "text", text }] } });
-  const line = event(`key ${token} end`);
-  const cut = line.indexOf(token) + 20;
-  cproc.stdout.emit("data", Buffer.from(event(`first ${token} second`) + "\n"));
-  cproc.stdout.emit("data", Buffer.from(line.slice(0, cut)));
-  cproc.stdout.emit("data", Buffer.from(line.slice(cut) + "\n"));
-  cproc.emit("close", 0);
-  check("claude", ccapture.outputs.map((entry) => entry.text), readFileSync(runArtifact(claude, cstamp, "log"), "utf8"));
-  assert.match(ccapture.outputs.map((entry) => entry.text).join(""), /first \[hidden\] second\n/);
-  // A run that ends inside the token: the start of it is hidden, not shown.
-  const ended = makeRun({ runId: "r9-cut", cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: true, crewTools: { ...CREW, token } });
-  const p2 = new FakeProc(), c2 = captureCallbacks();
-  const s2 = startRunnerRun(ended, "p", c2.callbacks, spawnReturning(p2));
-  p2.stdout.emit("data", Buffer.from(`ends in ${token.slice(0, 25)}`));
-  p2.emit("close", 0);
-  assert.ok(!c2.outputs.map((entry) => entry.text).join("").includes(token.slice(0, 12)));
-  assert.ok(!readFileSync(runArtifact(ended, s2, "log"), "utf8").includes(token.slice(0, 12)));
 });
 
 test("R11: a seat that does not run the process gets no MCP config, no crew variables and no extra flag, in any CLI", () => {
@@ -326,16 +248,4 @@ test("R11: a seat that does not run the process gets no MCP config, no crew vari
   }
   assert.equal(mcpFiles().length, before, "no config file was written");
   assert.deepEqual(runner.commandEnv(makeRun({ canWrite: true }), BRIEF), { CC_BRIEF_PATH: BRIEF }, "the environment holds the brief path alone");
-});
-
-test("R6b: the MCP config of a released (unconfirmed-kill) run is deleted when its process really closes", () => {
-  const proc = new FakeProc(), killer = new FakeProc();
-  const started = spawnedRun(makeRun({ ...CLAUDE, runId: "r6b-released", canWrite: false, crewTools: CREW }), proc);
-  const file = started.options.env.CC_MCP_CONFIG as string;
-  runner.killRun("r6b-released", ((command: string) => (command === "taskkill" ? killer : proc)) as any);
-  killer.emit("error", new Error("no taskkill"));
-  assert.equal(runner.releaseUnconfirmedRun("r6b-released"), true);
-  assert.equal(existsSync(file), true, "the process may still be alive: its config stays until it closes");
-  proc.emit("close", 1);
-  assert.equal(existsSync(file), false, "deleted at the real close");
 });

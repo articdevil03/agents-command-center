@@ -14,7 +14,10 @@ import { beginTurnWindow, endTurnWindow, setLeaderActivity } from "./activity.ts
 import { approvalWaitMessage, hasPendingApproval, leaderNameOf } from "./approvals.ts";
 import { broadcast, sendError, stateMessage } from "./broadcast.ts";
 import { refuseIfFolderBusy } from "./launch-gates.ts";
-import { applyQueuedLeaderChange, createTabLeader, retiredLeaderState, stopLeaderSession, waitForRetiredLeaders } from "./leader-session.ts";
+import { createTabLeader, fixedLeaderSignature, retiredLeaderState, stopLeaderSession, waitForRetiredLeaders } from "./leader-session.ts";
+import { fixedLeaderSettings, fixedTasks } from "./state.ts";
+import { fixedCrewOf, isFixedTab } from "../fixed-crew/runtime.ts";
+import { composeCrewRolePrompt } from "../fixed-crew/role-prompts.ts";
 import {
   activeLeaderTurns, approvalSettledListeners, chatStore, describeError, handoverReadTurns, lateSteers, leaderTurnResolvers, leaderTurnText,
   leaderTurnWaiters, leaderUsage, leaders, pendingHandoverReads, savingTabs, steeredTurns,
@@ -49,7 +52,6 @@ export function finishLeaderTurn(tabId: string, failed: boolean, error?: string)
   const reply = (pending?.earlier ?? "") + text;
   pending?.onReply?.(error ? `${reply}${reply ? "\n" : ""}${error}` : reply);
   pending?.resolve(!failed);
-  applyQueuedLeaderChange(tabId);
   broadcast(stateMessage());
   void refreshTabDetails(tabId);
   // A steer the CLI handed back during this turn goes out now, as the next turn. After a failed turn nothing goes out on its own (the message stays in the chat).
@@ -172,6 +174,8 @@ function leaderChatContext(tabId: string, currentRevision?: number): { lines: st
 }
 export function sendLeaderTurn(tabId: string, text: string, images: string[] = [], files: string[] = [], currentRevision?: number, onReply?: (text: string) => void): Promise<boolean> {
   if (activeLeaderTurns.has(tabId)) return Promise.resolve(false);
+  const fixedTab = tabLocation(tabId)?.tab;
+  if (fixedTab && isFixedTab(fixedTab) && leaders.has(tabId) && fixedLeaderSettings.get(tabId) !== fixedLeaderSignature(tabId)) stopLeaderSession(tabId);
   let leader = leaders.get(tabId);
   let afterRetired = false;
   if (!leader || leader.isDead()) {
@@ -206,6 +210,8 @@ export function sendLeaderTurn(tabId: string, text: string, images: string[] = [
         handoverReadTurns.add(tabId);
       }
       if (files.length) outgoingText += `\n\nAttached files. Read these local paths if they are useful:\n${files.map((path) => `- ${path}`).join("\n")}`;
+      if (fixedTab && isFixedTab(fixedTab)) outgoingText = composeCrewRolePrompt("leader", fixedCrewOf(fixedTab).roleExtras.leader ?? "",
+        `Use get_fixed_task before each task operation. Ask begin_planning for a saved plan and accept_planner_report for its ended report. Only the owner approves scope and rough. Use request_task_action and verify_task_evidence for execution. Legacy crew/step tools are unavailable. Saved task status: ${JSON.stringify(fixedTasks.summary(tabId))}\n\nCurrent message:\n${outgoingText}`);
       live.send(outgoingText, images);
     };
     if (!afterRetired) { deliver(leader!); return; }

@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { CLIS, type Cli, tabOf, SOLO_TAB, SPARE_TAB, sleep, slow, fakeLog, reached, PAD, HEAD, chatFile, withServer, unansweredNotices } from "./pack12-server-helpers.ts";
+import { CLIS, type Cli, tabOf, SPARE_TAB, sleep, slow, fakeLog, reached, PAD, HEAD, chatFile, withServer, unansweredNotices, outsideOpencodeSession } from "./pack12-server-helpers.ts";
 
 test("refusals: an approval card waiting and a Save running refuse the steer with a typed reply carrying the request id, and nothing reaches the CLI", { timeout: 90_000 }, async () => {
   await withServer({ CC_TEST_SAVE_WRITE_DELAY_MS: "1500" }, async (server, c) => {
@@ -62,8 +62,8 @@ test("folder busy: a steer is held with the same request id (nothing steered), C
     const tab = tabOf("codex", 6), text = "STEER-BUSY";
     await c.start(tab, JSON.stringify([{ say: "a " }, { sleep: 3500 }, { say: "b" }]));
     await c.wait(() => c.streamed(tab).includes("a"), "the target is replying");
-    // A Stand-alone tab's leader codes itself: its turn in the same folder is a writer.
-    await c.start(SOLO_TAB, JSON.stringify([{ sleep: 3000 }, { say: "solo" }]));
+    // Another tool working in the same folder outside Command Center (a fixed tab's leader never writes code itself, so no other tab of ours is a writer).
+    outsideOpencodeSession(server, "outside-writer");
     const held = c.steer(tab, text);
     const busy = await c.wait(() => c.messages.find((m) => m.type === "folderBusy" && m.requestId === held), "the steer is held");
     assert.deepEqual([busy.action, busy.tabId], ["chat", tab]);
@@ -79,7 +79,6 @@ test("folder busy: a steer is held with the same request id (nothing steered), C
     await c.wait(() => c.messages.find((m) => m.type === "folderBusy" && m.requestId === auto), "the normal send is held");
     assert.equal(c.answers(SPARE_TAB).length, 0);
     await c.finished(tab, 1, "the target ends", 20_000);
-    await c.finished(SOLO_TAB, 1, "the solo tab ends", 20_000);
   });
 });
 

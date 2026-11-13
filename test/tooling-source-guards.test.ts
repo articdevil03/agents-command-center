@@ -8,7 +8,6 @@ import { mutations, COPIED_PATHS, hasDesignFolder, isRealRed, removeWithRetry } 
 import { tempRoot } from "./temp-root.ts";
 import { harnessSource } from "./source-text.ts";
 import { spawn, spawnSync } from "node:child_process";
-import { runInNewContext } from "node:vm";
 
 const root = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -19,9 +18,9 @@ test("no test file calls rmSync with recursive: false (it always throws on a fol
   assert.deepEqual(bad, []);
 });
 
- test("approval mutation catalogue contains all 81 registered guards", () => {
+ test("approval mutation catalogue contains all 80 registered guards", () => {
   const entries = mutations.filter(([name]) => name.startsWith("guard-approval-"));
-  assert.equal(entries.length, 81);
+  assert.equal(entries.length, 80);
   for (const [name, file, from] of entries) {
     if (process.env.CC_MUTATION_PROOF !== "1") assert.ok(readFileSync(join(root,file),"utf8").replaceAll("\r\n","\n").includes(from), name);
   }
@@ -31,13 +30,6 @@ test("no test file calls rmSync with recursive: false (it always throws on a fol
   const entries = mutations.filter(([name]) => name.startsWith("guard-packc-final2-"));
   assert.equal(entries.length, 28);
   if (process.env.CC_MUTATION_PROOF !== "1") for (const [name, file, from] of entries) assert.equal(readFileSync(join(root, file), "utf8").replaceAll("\r\n", "\n").split(from).length - 1, 1, name + " targets exactly one guard");
-});
-
-test("the Electron process proof starts its disposable copy on the first-run seed, never on a bundled or personal projects file", () => {
-  const proof = readFileSync(join(root, "scripts/electron-process-proof.mjs"), "utf8");
-  // config/ is not in the copy list at all, so no bundled or personal workspace can reach the disposable copy.
-  assert.match(proof, /for \(const name of \["electron", "server", "public", "package\.json"\]\) \{\s*cpSync\(join\(root, name\), join\(dir, name\), \{ recursive: true \}\);/);
-  assert.doesNotMatch(proof, /writeFileSync\(join\(dir, "config\/projects\.json"\)/);
 });
 
 // Source-text guards for pack 3 review round 1 (the browser tests are too slow to run per mutation, and these fixes are about where a call sits).
@@ -102,40 +94,4 @@ test("mutation-proof: design/ counts as part of the checkout exactly when the de
     assert.equal(hasDesignFolder(base), true, "an empty design folder still counts, so a missing file inside it fails loudly");
   } finally { removeWithRetry(base); }
   assert.equal(COPIED_PATHS.includes("design/simple/mutate.py"), hasDesignFolder(root), "the copy list follows the design folder");
-});
-
-// scripts/electron-process-proof.mjs opens a real window, so it is never run here; its tracking helpers are run from the real source text.
-test("electron-process-proof: a tracked process is told from one that got its pid later, children of a reused pid are not adopted, and cleanup never uses /T", () => {
-  const source = readFileSync(join(root, "scripts/electron-process-proof.mjs"), "utf8").replaceAll("\r\n", "\n");
-  const start = source.indexOf("// Tracked only while the process is in"), end = source.indexOf("function alive(");
-  assert.ok(start > 0 && end > start, "the tracking helpers were found");
-  const load = () => runInNewContext(`const tracked = new Map(); ${source.slice(start, end)}; ({ track, isTracked, adoptDescendants, isThisRunsWorker, tracked })`, {});
-  const proc = (ProcessId: number, ParentProcessId: number, Name: string, Created: number, CommandLine: string | null = null) => ({ ProcessId, ParentProcessId, Name, Created, CommandLine });
-  const list = [proc(10, 1, "electron.exe", 1000, "electron main"), proc(11, 10, "node.exe", 1100, "node server"), proc(12, 11, "cmd.exe", 1200), proc(13, 11, "node.exe", 900, "older than its parent"), proc(99, 1, "node.exe", 1000, "unrelated")];
-  const api = load();
-  api.track(10, "electron.exe", list);
-  api.track(777, "node.exe", list); // not in the list: nothing to verify it against
-  api.adoptDescendants(list);
-  assert.equal(JSON.stringify([...api.tracked.keys()].sort()), JSON.stringify([10, 11, 12]), "the root and its younger descendants are tracked; a child older than its parent, an unrelated process and an unseen pid are not");
-  assert.equal(api.isTracked(proc(11, 10, "node.exe", 1100, "node server")), true, "the same process");
-  assert.equal(api.isTracked(proc(11, 10, "node.exe", 5000, "node server")), false, "same pid and name, another creation time: another program that got the pid");
-  assert.equal(api.isTracked(proc(11, 10, "node.exe", 1100, "node another-script.js")), false, "same pid, name and time, another command line");
-  assert.equal(api.isTracked(proc(11, 10, "cmd.exe", 1100, "node server")), false, "another name");
-  // The root's pid now belongs to something else: its children are not this run's.
-  const reused = [proc(10, 1, "electron.exe", 9000, "somebody else's"), proc(50, 10, "node.exe", 9100, "their child")];
-  api.adoptDescendants(reused);
-  assert.equal(api.tracked.has(50), false, "a child of a reused pid is not adopted");
-  assert.doesNotMatch(source, /"\/T"/, "no process is ended together with its whole tree");
-  // The worker's own report of its pid is checked against the live list before it is tracked.
-  const workerPath = "C:\proof\.cc-test-electron-proof-AAA\worker.cjs";
-  const chain = [proc(10, 1, "electron.exe", 1000, "electron main"), proc(11, 10, "node.exe", 1100, "node server"), proc(12, 11, "cmd.exe", 1200, "cmd /c claude.cmd"), proc(20, 12, "node.exe", 1300, `"C:\node.exe" "${workerPath}"`)];
-  const claim = { pid: 20, ppid: 12 };
-  assert.equal(api.isThisRunsWorker(chain, claim, workerPath, 10), true, "control: the real worker passes");
-  assert.equal(api.isThisRunsWorker(chain.map((p) => p.ProcessId === 20 ? proc(20, 12, "node.exe", 1300, "node somebody-elses-script.js") : p), claim, workerPath, 10), false, "a stale pid now held by another program is not this run's worker");
-  assert.equal(api.isThisRunsWorker(chain.map((p) => p.ProcessId === 20 ? proc(20, 12, "node.exe", 1300, `"C:\node.exe" "C:\proof\.cc-test-electron-proof-BBB\worker.cjs"`) : p), claim, workerPath, 10), false, "another run's worker.cjs is not this run's");
-  assert.equal(api.isThisRunsWorker(chain.filter((p) => p.ProcessId !== 20), claim, workerPath, 10), false, "a pid that is no longer in the list");
-  assert.equal(api.isThisRunsWorker(chain.map((p) => p.ProcessId === 11 ? proc(11, 99, "node.exe", 1100, "node server") : p), claim, workerPath, 10), false, "a parent chain that does not reach the process this run started");
-  assert.equal(api.isThisRunsWorker(chain, { pid: 20, ppid: 11 }, workerPath, 10), false, "a parent other than the reported one");
-  const order = [source.indexOf('assert.ok(isThisRunsWorker(before, worker, join(dir, "worker.cjs"), desktop.pid)'), source.indexOf('track(worker.pid, "node.exe", before)')];
-  assert.ok(order[0] > 0 && order[1] > order[0], "the worker is verified before it is tracked");
 });

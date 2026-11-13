@@ -2,13 +2,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { delay, J, type Page, withPage, skipped, sentOf, setActive, typeAndEnter, queueOf, deliver, chatMsg, waitQueue } from "./pack12-page-helpers.ts";
 
-// The leader's Stop is the button in its seat card (a real click on the crew picture, then on Stop).
-const stopLeader = async (ev: Page["ev"], waitFor: Page["waitFor"]): Promise<void> => {
-  const slot = await ev(`window.__ccSeed.projects[0].tabs.find((t)=>t.id===window.__ccSeed.selectedTabId).crew.find((s)=>s.isLeader).slot`);
-  await ev(`document.querySelector('#crew [data-seat-pic="${slot}"]').click();true`);
+// The leader's Stop is the button in the leader's read-only seat card (a real click on the seat picture, then on Stop). The leader is the tab's assigned fixed leader; the opener and the
+// Stop button are looked up and asserted present before any click, and the message that reaches the server must name this tab and the leader's slot.
+const stopLeader = async (ev: Page["ev"], waitFor: Page["waitFor"], tabId: string): Promise<void> => {
+  await waitFor(`document.querySelector('#tabs [role=tab][aria-selected="true"]')?.dataset.tabId===${J(tabId)}`, `tab ${tabId} is shown`);
+  const leader = await ev(`(()=>{const tab=window.__ccSeed.projects[0].tabs.find((t)=>t.id===${J(tabId)});const seat=tab.crew.find((s)=>s.isLeader);return {slot:seat?.slot,assigned:Boolean(tab.fixedCrew?.preferences?.leader?.assignment)}})()`);
+  assert.equal(leader.slot, "leader", "the tab's leader is the fixed leader seat");
+  assert.equal(leader.assigned, true, "the fixed leader has an assigned model");
+  assert.equal(await ev(`document.querySelector('#crew [data-seat-pic="${leader.slot}"]')!==null`), true, "control: the leader's seat picture (the card opener) is on the page");
+  await ev(`document.querySelector('#crew [data-seat-pic="${leader.slot}"]').click();true`);
   await waitFor(`document.querySelector("#seatPop [data-stop-seat]")!==null`, "the leader's card shows Stop");
   await ev(`document.querySelector("#seatPop [data-stop-seat]").click();true`);
   await waitFor(`window.__sent.some((m)=>m.type==="stopSeat")`, "the stop reaches the server");
+  assert.deepEqual((await sentOf(ev, "stopSeat")).map((m) => [m.tabId, m.slot]), [[tabId, leader.slot]], "exactly one stop, for this tab's leader");
 };
 
 test("fix 2a: the owner clicks the leader's Stop while the finished reply's chatDone is still on the way: the queue is held, and the arriving chatDone sends nothing", async (t) => {
@@ -17,7 +23,7 @@ test("fix 2a: the owner clicks the leader's Stop while the finished reply's chat
     await setActive(ev, tabA, true);
     await typeAndEnter(ev, "alpha"); await waitQueue(waitFor, 1, "alpha");
     await typeAndEnter(ev, "beta"); await waitQueue(waitFor, 2, "beta");
-    await stopLeader(ev, waitFor); // the server has no turn to stop, so no chatError ever comes
+    await stopLeader(ev, waitFor, tabA); // the server has no turn to stop, so no chatError ever comes
     await deliver(ev, { type: "chatDone", tabId: tabA, revision: 1, savedRevision: 0 });
     await setActive(ev, tabA, false);
     await delay(500);
@@ -34,17 +40,19 @@ test("fix 2b: Stop all holds every tab's queue the same way, also a hidden tab w
     await setActive(ev, tabA, true, `tab.derived.busy=true;`);
     await typeAndEnter(ev, "gamma"); await waitQueue(waitFor, 1, "gamma");
     await open(tabB);
-    await setActive(ev, tabB, true);
+    await setActive(ev, tabB, true, `tab.derived.busy=true;`);
     await typeAndEnter(ev, "delta"); await waitQueue(waitFor, 1, "delta is queued in tab B");
     await open(tabA); // Stop all is clicked while B is hidden
     await waitQueue(waitFor, 1, "tab A shows gamma");
     await waitFor(`!document.querySelector("#stopAll").disabled`, "Stop all is on");
+    assert.equal(await ev(`document.querySelector("#stopAll")!==null`), true, "control: the Stop all button is on the page");
     await ev(`document.querySelector("#stopAll").click();true`);
     await waitFor(`window.__sent.some((m)=>m.type==="stopAll")`, "stop all reaches the server");
+    assert.equal((await sentOf(ev, "stopAll")).length, 1, "one Stop all reached the server");
     await deliver(ev, { type: "chatDone", tabId: tabA, revision: 1, savedRevision: 0 });
-    await setActive(ev, tabA, false);
+    await setActive(ev, tabA, false, `tab.derived.busy=false;`);
     await deliver(ev, { type: "chatDone", tabId: tabB, revision: 1, savedRevision: 0 }); // B's reply ends late, after the Stop
-    await setActive(ev, tabB, false);
+    await setActive(ev, tabB, false, `tab.derived.busy=false;`);
     await delay(500);
     assert.equal((await sentOf(ev, "chat")).length, 0, "nothing went out after Stop all, from either tab");
     assert.deepEqual((await queueOf(ev)).map((item) => [item.text, item.go]), [["gamma", "Send"]]);
@@ -60,7 +68,7 @@ test("fix 2c: a flush already waiting for the state (chatDone came first) is can
     await setActive(ev, tabA, true);
     await typeAndEnter(ev, "alpha"); await waitQueue(waitFor, 1, "alpha");
     await deliver(ev, { type: "chatDone", tabId: tabA, revision: 1, savedRevision: 0 }); // arms the flush; the state still says replying
-    await stopLeader(ev, waitFor);
+    await stopLeader(ev, waitFor, tabA);
     await typeAndEnter(ev, "typed after the stop"); await waitQueue(waitFor, 2, "typed after the stop");
     await setActive(ev, tabA, false);
     await delay(500);
@@ -84,7 +92,7 @@ test("fix 9: queues are per tab: a reply that ends in tab A sends A's message wi
     // Tab A's reply ends normally while B is shown.
     await deliver(ev, { type: "chatDone", tabId: tabA, revision: 1, savedRevision: 0 });
     await setActive(ev, tabA, false);
-    await waitFor(`window.__sent.some((m)=>m.type==="chat")`, "A's first message goes out");
+    await waitFor(`window.__sent.some((m)=>m.type==="chat"||m.type==="steer")`, "A's first message goes out (any outbound attempt, so a wrong-tab send is read, not timed out)");
     await delay(300);
     const chats = await sentOf(ev, "chat");
     assert.deepEqual(chats.map((m) => [m.text, m.tabId]), [["A one", tabA]], "A's message went out with A's tab id, and only that one");

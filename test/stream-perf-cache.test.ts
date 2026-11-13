@@ -71,6 +71,34 @@ test("message cache: a same-revision message re-renders when its text, time, rol
   });
 });
 
+// The cache also depends on the PERSONAL picture (cached.pic, from mePic()), which no seat change touches. A user row is shown at a fixed revision; the real personal picker
+// chooses two pictures and the cached row must wear each one without its revision or text changing. Dropping `cached.pic === pic` from the cache check turns it red.
+test("message cache: the personal picture changes on a cached user message", async (t) => {
+  if (process.env.CC_SKIP_BROWSER === "1") { t.skip("CC_SKIP_BROWSER=1 was explicitly set"); return; }
+  await withPage(async ({ ev, waitFor, tabA }) => {
+    const user = { role: "user", text: "personal picture text", at: 1_700_000_000_000, revision: 7 };
+    await ev(`__ccDeliver({type:"chatHistory",tabId:${J(tabA)},messages:${J([user])},revision:9,savedRevision:9});true`);
+    const row = `(()=>{const r=document.querySelector("#view .msg.mine");return r?{id:r.dataset.messageId,text:r.querySelector(".bubble p")?.textContent,src:r.querySelector("img.uav")?.getAttribute("src")}:null})()`;
+    await waitFor(`${row}!==null`, "the user row is shown");
+    const first = await ev(row);
+    assert.deepEqual([first.id, first.text], ["7", "personal picture text"], "the user row is revision 7 with its text");
+    const initial = await ev(`me.av`) as string;
+    assert.equal(first.src, `/avatars/${initial}`, "the cached row starts with the current personal picture");
+    const picks = (await ev(`AVATAR_PRESETS`) as string[]).filter((name) => `${name}.svg` !== initial).slice(0, 2);
+    assert.equal(picks.length, 2, "two presets other than the current one exist");
+    assert.equal(await ev(`(()=>{const b=document.querySelector("#meBtn");if(!b)return false;b.click();return true})()`), true, "the personal picture control #meBtn was found");
+    await waitFor(`document.querySelector("#avModal")?.hidden===false`, "the picture dialog opens");
+    for (const name of picks) {
+      assert.equal(await ev(`(()=>{const b=document.querySelector(${J(`#avgrid [data-avatar="${name}"]`)});if(!b)return false;b.click();return true})()`), true, `the preset ${name} was found`);
+      await waitFor(`me.av===${J(`${name}.svg`)}`, `the picker applied ${name}.svg`);
+      await delay(60); // the chat redraw that follows the choice
+      const shown = await ev(row);
+      assert.deepEqual([shown.id, shown.text, shown.src], ["7", "personal picture text", `/avatars/${name}.svg`], `the same revision and text now wear ${name}.svg; got ${JSON.stringify(shown)}`);
+    }
+    assert.notEqual(picks[0], picks[1], "the two chosen pictures differ");
+  });
+});
+
 // Live chatMessages arrive by tab revision: out-of-order ones are inserted in order, a repeated revision is dropped.
 // Turning the ordered insert into a plain push breaks the order check; removing the repeat check breaks the count.
 test("live chat messages: revisions 1, 3, 2 then 3 again show exactly three messages in the order 1, 2, 3", async (t) => {

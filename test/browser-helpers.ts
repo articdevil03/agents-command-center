@@ -9,17 +9,17 @@ import { join } from "node:path";
 import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { keyedWsUrl } from "./temp-root.ts";
+import { freshFixedCrew, setCrewAssignment } from "../server/fixed-crew/preferences.ts";
+import type { FixedSlot } from "../server/fixed-crew/roster.ts";
 import { HOST, APP_KEY, CHROME, REPO, CHROME_CAP_HEADROOM_MS } from "./browser-constants.ts";
 
-// The workspace file is written in the old (kind, process) format on purpose: the server loads it through its migration to a tab with its own crew and steps.
-// The seats are the old Main Crew, Duo and Design defaults as they were when this fixture was made (they no longer come from a table in the server).
-export const OLD_SEATS = {
-  "dev/main": [["leader", "Atlas", "claude", "claude-opus-5-5[1m]", "medium"], ["coder", "Sonny", "codex", "gpt-6-luna", "max"], ["reviewer1", "Vera", "claude", "claude-opus-5-5[1m]", "medium"], ["reviewer2", "Sol", "codex", "gpt-6-sol", "high"], ["fixer", "Nova", "claude", "claude-opus-5-5[1m]", "medium"], ["finalReviewer", "Terra", "codex", "gpt-6-sol", "high"]],
-  "design/main": [["leader", "Atlas", "claude", "claude-opus-5-5[1m]", "high"], ["designer", "Terra", "claude", "claude-opus-5-5[1m]", "high"], ["imageAndAssets", "X", "codex", "gpt-6-astra", "medium"], ["designReviewer", "Sol", "codex", "gpt-6-sol", "high"]],
-  "dev/duo": [["leader", "Atlas", "claude", "claude-opus-5-5[1m]", "medium"], ["coder", "Sonny", "codex", "gpt-6-luna", "max"]],
-} as const;
-export function defaults(kind: "dev" | "design", process: "main" | "duo") {
-  return OLD_SEATS[`${kind}/${process}` as keyof typeof OLD_SEATS].map(([slot, name, cli, model, effort]) => ({ slot, name, cli, model, effort }));
+// Every saved tab is a fixed crew tab with its own freshFixedCrew() and the explicit assignments the browser checks need (never shared between tabs).
+// Assignments hold only cli, model and effort: the server derives names, roles, write rights and runtime identity from the fixed contract.
+const claude = (model: string, effort: string) => ({ cli: "claude", model, effort }), codex = (model: string, effort: string) => ({ cli: "codex", model, effort });
+const SONNET = "claude-sonnet-5-5[1m]", OPUS = "claude-opus-5-5[1m]", SOL = "gpt-6.1-sol";
+function fixedTab(id: string, name: string, kind: "dev" | "design", folder: string, picks: Array<[FixedSlot, { cli: string; model: string; effort: string }]>) {
+  const fixedCrew = picks.reduce((crew, [slot, assignment]) => setCrewAssignment(crew, slot, assignment), freshFixedCrew());
+  return { id, name, kind, setupName: "Fixed crew", folder, crew: [], steps: [], lookPause: false, fixedCrew };
 }
 
 export function workspaces(root: string) {
@@ -30,11 +30,11 @@ export function workspaces(root: string) {
   };
   return { projects: [
     { id: "alpha", name: "Alpha", folder: folder("alpha"), tabs: [
-      { id: "alpha-dev", name: "Development", kind: "dev", process: "main", folder: folder("alpha-dev"), crew: defaults("dev", "main") },
-      { id: "alpha-design", name: "Design", kind: "design", process: "main", folder: folder("alpha-design"), crew: defaults("design", "main") },
+      fixedTab("alpha-dev", "Development", "dev", folder("alpha-dev"), [["leader", claude(SONNET, "high")], ["planner", codex(SOL, "xhigh")], ["coder", codex(SOL, "medium")], ["reviewer1", claude(SONNET, "high")], ["fixer1", codex(SOL, "medium")]]),
+      fixedTab("alpha-design", "Design", "design", folder("alpha-design"), [["leader", claude(OPUS, "high")], ["designCoder", claude(OPUS, "high")], ["designFinal", codex(SOL, "medium")]]),
     ] },
     { id: "beta", name: "Beta", folder: folder("beta"), tabs: [
-      { id: "beta-dev", name: "Development", kind: "dev", process: "duo", folder: folder("beta-dev"), crew: defaults("dev", "duo") },
+      fixedTab("beta-dev", "Development", "dev", folder("beta-dev"), [["leader", claude(SONNET, "high")], ["coder", codex(SOL, "medium")]]),
     ] },
   ] };
 }
@@ -86,48 +86,19 @@ export async function getServerState(port: number): Promise<any> {
   });
 }
 
+// The page's seed: the real server's own state (every tab fixed, each with its own seat keys and process state), idle. The literal-text probe stays:
+// the alpha-dev leader is named with markup, and the page must show it as text. Active runs, history and unconfirmed stops are explicit scenarios
+// (withActiveFixedRun, withRetainedFixedRun, withUnconfirmedStop in test/browser-fixed-steps.ts); nothing here claims a run.
 export function fakeParallelState(state: any) {
   const copy = structuredClone(state);
   const tab = copy.projects.flatMap((project: any) => project.tabs).find((item: any) => item.id === "alpha-dev");
   const lead = tab.crew.find((item: any) => item.isLeader || item.slot === "leader");
   if (lead) lead.name = '<img src=x onerror="window.__ccXss()">';
-  const seat = tab.crew.find((item: any) => item.slot === "coder");
-  const start = Date.now();
-  const runs = ["audit-parallel-1", "audit-parallel-2"].map((runId, index) => ({
-    id: runId,
-    runId,
-    seatSlotId: "coder",
-    seatKey: "alpha-dev.coder",
-    seatName: seat.name,
-    seatIsLeader: false,
-    label: `Parallel run ${index + 1}`,
-    status: "working",
-    outcome: null,
-    cli: seat.cli,
-    model: seat.model,
-    effort: seat.effort,
-    folderPath: tab.folder,
-    startedAt: start + index,
-    endedAt: null,
-    output: `real runner output ${index + 1}`,
-    launchedBy: null,
-  }));
-  tab.runs = [...tab.runs.filter((run: any) => run.status !== "working"), ...runs];
-  seat.status = "working"; seat.task = "Working · parallel tasks"; seat.runs = runs.map((run: any) => run.runId);
-  tab.processState.runs = [...tab.processState.runs.filter((run: any) => run.status !== "working"), ...runs.map((run: any) => ({
-    id: run.runId, crewGenerationId: tab.processState.crewGenerationId, seatSlotId: "coder", seatName: seat.name,
-    seatIsLeader: false, label: run.label, status: "working", outcome: null, cli: seat.cli, model: seat.model,
-    effort: seat.effort, folderPath: tab.folder, startedAt: run.startedAt, endedAt: null,
-  }))];
-  tab.processState.seats.find((item: any) => item.slotId === "coder").status = "working";
-  tab.derived.busy = true;
-  tab.derived.workingSeats = [...tab.derived.workingSeats.filter((item: any) => item.slotId !== "coder"), { slotId: "coder", name: seat.name, isLeader: false }];
-  tab.derived.runViews.liveBySeat.coder = tab.processState.runs.filter((run: any) => run.seatSlotId === "coder");
   copy.selectedTabId = "alpha-dev";
   return copy;
 }
 
-export function proxyServer(backendPort: number, options: { folder: string; mode: string; seed?: any; storageBlocked?: boolean; windowButtons?: boolean; oldMe?: { saved: string; expected: string } }, auditScript: string) {
+export function proxyServer(backendPort: number, options: { folder: string; mode: string; seed?: any; fixedTasks?: Record<string, any>; storageBlocked?: boolean; windowButtons?: boolean; oldMe?: { saved: string; expected: string } }, auditScript: string) {
   // The window-button bridge only the real Electron window has (electron/preload.cjs): this page records each call, starts maximized,
   // and window.__ccWinEmit(true|false) plays the main process telling the page the window was maximized or restored.
   // window.__ccWinAskClose() plays the main process asking the page about a close; window.__ccWin.answers records each answer.
@@ -136,13 +107,15 @@ export function proxyServer(backendPort: number, options: { folder: string; mode
   const backendOrigin = `http://${backendHost}`;
   // A picture saved before the simple look now reaches the page the only way a saved picture can: in the server's client prefs.
   const seedScript = options.seed ? `window.__ccSeed=${JSON.stringify(options.seed).replace(/</g, "\\u003c")};${options.oldMe ? `window.__ccSeed.clientPrefs={...window.__ccSeed.clientPrefs,avatar:${JSON.stringify(options.oldMe.saved)}};` : ""}` : "";
+  // A fixed task's whole record by tab id (the page asks for it with getFixedTask); the matching summary rides in the seed's tab.fixedTask.
+  const taskScript = `window.__ccFixedTasks=${JSON.stringify(options.fixedTasks ?? {}).replace(/</g, String.fromCharCode(92) + "u003c")};`;
   const storageScript = options.storageBlocked
     ? `window.__ccStorageBlocked=true;Storage.prototype.getItem=function(){throw new DOMException("blocked","SecurityError")};Storage.prototype.setItem=function(){throw new DOMException("blocked","SecurityError")};`
     : `window.__ccStorageBlocked=false;${options.oldMe ? `window.__ccOldMe=${JSON.stringify(options.oldMe.saved)};window.__ccExpectMe=${JSON.stringify(options.oldMe.expected)};` : ""}`;
   const bootstrap = `
 window.__ccErrors=[];window.__sent=[];window.__states=[];window.__received=[];window.__latestState=null;window.__ccHoldChatDone=false;window.__ccPendingChatDone=null;window.__ccDelaySelect=false;window.__ccDelayedSelect=null;window.__ccRejectHeldAction=null;window.__ccHoldNextRemoveState=false;window.__ccHeldRemoveState=null;window.__ccHistoryOverride=null;window.__ccChatHistory={};
 window.__ccXss=()=>window.__ccErrors.push("escaped text ran as HTML");
-window.__ccConfirms=[];window.__ccConfirmResult=true;window.confirm=(message)=>{window.__ccConfirms.push(String(message));return window.__ccConfirmResult};window.__ccOpenedObsidian=[];window.__ccFolderChoice=${JSON.stringify(options.folder)};window.cc={appKey:async()=>${JSON.stringify(APP_KEY)},pickFolder:async()=>window.__ccFolderChoice,openObsidian:async(url)=>{window.__ccOpenedObsidian.push(String(url));return {ok:true}}};${seedScript}${storageScript}${windowScript}
+window.__ccConfirms=[];window.__ccConfirmResult=true;window.confirm=(message)=>{window.__ccConfirms.push(String(message));return window.__ccConfirmResult};window.__ccOpenedObsidian=[];window.__ccFolderChoice=${JSON.stringify(options.folder)};window.cc={appKey:async()=>${JSON.stringify(APP_KEY)},pickFolder:async()=>window.__ccFolderChoice,openObsidian:async(url)=>{window.__ccOpenedObsidian.push(String(url));return {ok:true}}};${seedScript}${taskScript}${storageScript}${windowScript}
 window.__ccAuditFinished=false;
 const __ccSetTimeout=window.setTimeout.bind(window);
 window.setTimeout=(fn,delay,...args)=>window.__ccAuditFinished?0:__ccSetTimeout(fn,delay,...args);
@@ -186,7 +159,10 @@ if(new URLSearchParams(location.search).get("mode")==="fake"){
    else if(message.type==="killRun"){if(window.__ccSwallowKill>0){window.__ccSwallowKill--;return}this.sendMessage({type:"killAccepted",runId:message.runId})}
    else if(message.type==="refreshSettings"){if(window.__ccRefreshReply==="error")this.sendMessage({type:"error",action:"refreshSettings",requestId:message.requestId,message:"Check failed in the harness"});else if(window.__ccRefreshReply==="ok")this.sendMessage({type:"actionResult",action:"refreshSettings",requestId:message.requestId})}
    else if(message.type==="resolveRequest"&&window.__ccStrictRequests){const request=(window.__ccSeed.requests||[]).find(item=>item.id===message.id);if(!request||message.tabId!==request.toTabId)this.sendMessage({type:"error",action:"resolveRequest",requestId:message.requestId,message:"request is not addressed to this tab"});else{request.status=message.status;this.sendMessage({type:"actionResult",action:"resolveRequest",requestId:message.requestId,id:request.id,status:request.status,toTabId:request.toTabId});this.sendMessage({...structuredClone(window.__ccSeed),type:"state"})}}
-   else if(message.type==="run")this.sendMessage({type:"runAccepted",tabId:message.tabId,runId:"fake-run-"+(window.__ccRunSequence=(window.__ccRunSequence||0)+1)})
+   else if(message.type==="getFixedTask"){if(window.__ccFixedTaskReply==="hold")return;if(window.__ccFixedTaskReply==="refuse")this.sendMessage({type:"error",action:"getFixedTask",tabId:message.tabId,requestId:message.requestId,message:"cannot read the task"});else this.sendMessage({type:"fixedTask",requestId:message.requestId,tabId:message.tabId,task:window.__ccFixedTasks[message.tabId]??null})}
+   else if((message.type==="setCrewAssignment"||message.type==="clearCrewAssignment")&&window.__ccAssignmentReply==="refuse")this.sendMessage({type:"error",action:message.type,tabId:message.tabId,requestId:message.requestId,message:"the server refused this assignment"})
+   else if((message.type==="setCrewAssignment"||message.type==="clearCrewAssignment")&&window.__ccAssignmentReply==="ack"){window.__ccHarness.fixed.changeAssignment(message.tabId,message.slot,message.type==="clearCrewAssignment"?null:message.assignment);this.sendMessage({type:"actionResult",action:message.type,requestId:message.requestId,tabId:message.tabId});this.sendMessage({...structuredClone(window.__ccSeed),type:"state"})}
+   else if(message.type==="run")this.sendMessage(window.__ccSeed.projects.flatMap(p=>p.tabs).find(t=>t.id===message.tabId)?.fixedCrew?{type:"fixedRunRequested",tabId:message.tabId,slot:message.slot}:{type:"runAccepted",tabId:message.tabId,runId:"fake-run-"+(window.__ccRunSequence=(window.__ccRunSequence||0)+1)})
    else if(message.type==="stopAll")this.sendMessage({type:"stopAllAccepted"})
   }
     sendHistory(tabId){const base=tabId==="alpha-dev" ? [{tabId,role:"assistant",text:"Saved transcript from the server",at:Date.now(),revision:1}] : tabId ? [{tabId,role:"assistant",text:"Saved transcript for "+tabId,at:Date.now(),revision:1}] : [];const override=window.__ccHistoryOverride?.tabId===tabId?window.__ccHistoryOverride.messages:null;if(override)window.__ccHistoryOverride=null;const messages=override??[...base,...(window.__ccChatHistory[tabId]||[])];if(window.__ccHoldHistory){window.__ccHeldHistory={tabId,messages,revision:1,savedRevision:1};return}this.sendMessage({type:"chatHistory",tabId,messages,revision:1,savedRevision:1})}
@@ -265,7 +241,7 @@ export function chromeAudit(args: { port: number; mode: string; folder: string; 
     // args.chrome swaps in a stand-in program (a test of the cap and the tree kill); the audits always run the installed Chrome.
     const proc = spawn(args.chrome?.exe ?? CHROME, args.chrome?.args ?? [
     "--headless=new", "--dump-dom", `--virtual-time-budget=${args.virtualMs}`,
-    `--window-size=${args.width + 16},1000`, `--user-data-dir=${args.profile}`,
+    `--window-size=${args.width + 16},1000`, "--window-position=1920,0", `--user-data-dir=${args.profile}`,
     "--no-sandbox", "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--disable-gpu-sandbox",
       "--use-gl=swiftshader", "--disable-dev-shm-usage", "--disable-background-networking", "--no-proxy-server", "--hide-scrollbars", url,
     ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });

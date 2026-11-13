@@ -1,12 +1,14 @@
+import { connect, lastState, settleLeaderTurns, tick, waitFor, flushMicrotasks } from "./round2-test-clients.ts";
+export { connect, lastState, settleLeaderTurns, tick, waitFor, flushMicrotasks } from "./round2-test-clients.ts";
+import { loadRunnerHarness, isolatedRunnerProc } from "./round2-runner-fixture.ts";
+export { loadRunnerHarness, isolatedRunnerProc, isolatedRunnerCapture, isolatedRun, startIsolatedRunner } from "./round2-runner-fixture.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { WAIT_MAX_RUNS, WAIT_MAX_SECONDS } from "../server/leader-tools.ts";
 import { writeProjectRules } from "../server/project-rules.ts";
 import { EventEmitter } from "node:events";
 import { appendFileSync, readFileSync, readdirSync, mkdirSync, realpathSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, lstat, realpath, unlink, writeFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
-import { StringDecoder } from "node:string_decoder";
 import { runInNewContext } from "node:vm";
 import * as path from "node:path";
 import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
@@ -20,7 +22,7 @@ import { createTestCliRunner } from "../server/test-cli-runner.ts";
 import { isSafeRequestId } from "../server/chat-store.ts";
 import { RequestsStore } from "../server/requests.ts";
 import { createFolderActivity, relatedFolders } from "../server/folder-activity.ts";
-import { SettingsService, permissionModeForSdk, pruneAvatars, ModeBusyError, runCli } from "../server/settings.ts";
+import { SettingsService, permissionModeForSdk, ModeBusyError, runCli } from "../server/settings.ts";
 import * as agentUsage from "../server/agent-usage.ts";
 import * as leaderCommon from "../server/leader-common.ts";
 import * as changesApi from "../server/changes.ts";
@@ -28,44 +30,25 @@ import { leaderChildEnv, withResolvedCli, isInsideFolder, setCliSkipFolders, win
 import { keepBadCopy } from "../server/safe-file.ts";
 import { scratchDir, tempRoot, newAppKey } from "./temp-root.ts";
 import { sourceText } from "./source-text.ts";
-import { config, createCrewSetup, leaderApi, createCodexLeader, createOpencodeLeader, createAcpLeader, createLeaderBridge, buildLeaderToolSpecs } from "./round2-setup.ts";
+import { config, leaderApi, createCodexLeader, createOpencodeLeader, createAcpLeader, createLeaderBridge, buildLeaderToolSpecs } from "./round2-setup.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
+import { createTaskStore } from "../server/fixed-crew/task-store.ts";
+import { isFixedTab, fixedMembers, fixedState, fixedCrewOf } from "../server/fixed-crew/runtime.ts";
+import { DEFAULTS_VERSION } from "../server/fixed-crew/role-prompts.ts";
+import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
+import { unavailableWorkspace } from "../server/fixed-crew/recovery.ts";
+import { fixedDependencies, round2FixedTab } from "./round2-fixed-deps.ts";
 
-export function fixtureTab(id: string, name: string, kind: processEngine.ProcessKind, processId: processEngine.ProcessId, folder: string) {
-  const setup = processEngine.legacySetup(kind, processId);
-  return { id, name, kind, folder, setupName: setup.name, crew: setup.crew, lookPause: setup.lookPause, steps: setup.steps };
-}
-
-export function fixtureWorkspaces() {
-  return { projects: [
-    { id: "alpha", name: "Alpha", folder: "C:/work/alpha", tabs: [
-      fixtureTab("alpha-dev", "Development", "dev", "main", "C:/work/alpha"),
-      fixtureTab("alpha-design", "Design", "design", "main", "C:/work/alpha/design"),
-      fixtureTab("alpha-marketing", "Marketing", "mkt", "main", "C:/work/alpha/marketing"),
-    ] },
-    { id: "beta", name: "Beta", folder: "C:/work/beta", tabs: [
-      fixtureTab("beta-dev", "Development", "dev", "main", "C:/work/beta"),
-    ] },
-  ] };
-}
-
-export function tempWorkspaceFolders() {
-  const root = tempRoot();
-  const workspaces = fixtureWorkspaces();
-  for (const project of workspaces.projects) for (const tab of project.tabs) {
-    tab.folder = path.join(root, tab.id);
-    mkdirSync(tab.folder, { recursive: true });
-  }
-  return workspaces;
-}
+import { fixtureTab, fixtureWorkspaces, tempWorkspaceFolders } from "./round2-workspaces.ts";
+export { fixtureTab, fixtureWorkspaces, tempWorkspaceFolders } from "./round2-workspaces.ts";
 
 export const source = stripTypeScriptTypes(sourceText("server/index.ts"))
   .replace(/^import\s+(?:.|\r?\n)*?from\s+["'][^"']+["'];\r?\n/gm, "")
   .replace(/^export /gm, "")
   .replaceAll("import.meta.url", '"file:///server/index.ts"');
 
-export async function loadServer(options: { relaunchable?: boolean; failSafety?: () => boolean; onSafetyWrite?: (value: config.LaunchSafety) => void; skipHealth?: boolean; leaderDelayMs?: number; hangLeader?: boolean; hangTab?: string; hangSave?: boolean; failSave?: boolean; writeHandover?: boolean; safetyPath?: string; deferKill?: boolean; rejectNextRun?: boolean; query?: (args: any) => any; healthTimeoutMs?: number; readdir?: typeof readdir; console?: Console; releaseUnconfirmed?: (runId: string) => boolean; workspaces?: any; leaderDead?: boolean; setModelResult?: boolean; setPermissionResult?: boolean; deferFirstPermission?: boolean; usageDelta?: any; realLeaderOptions?: boolean; sdkLeader?: (args: any) => any; stat?: typeof stat; now?: () => number; leaderSeamOnly?: boolean; bothSeams?: boolean; gitChanges?: (folder: string) => Promise<any>; runCli?: any; seatCapability?: () => boolean; claudeCli?: string; preload?: (testRoot: string) => void; failWorkspaceWrite?: () => boolean; createLeaderThrows?: boolean; opencodeThrows?: boolean; failAssistantAppend?: boolean; neverListen?: boolean; writeFile?: typeof writeFile } = {}) {
-  const testRoot = tempRoot();
+export async function loadServer(options: { testRoot?: string; serverSource?: string; fixed?: boolean; treeWatch?: () => leaderCommon.TreeWatch | null; relaunchable?: boolean; failSafety?: () => boolean; onSafetyWrite?: (value: config.LaunchSafety) => void; skipHealth?: boolean; leaderDelayMs?: number; hangLeader?: boolean; hangTab?: string; hangSave?: boolean; failSave?: boolean; writeHandover?: boolean; safetyPath?: string; deferKill?: boolean; rejectNextRun?: boolean; query?: (args: any) => any; readdir?: typeof readdir; console?: Console; releaseUnconfirmed?: (runId: string) => boolean; workspaces?: any; leaderDead?: boolean; setModelResult?: boolean; setPermissionResult?: boolean; deferFirstPermission?: boolean; usageDelta?: any; realLeaderOptions?: boolean; sdkLeader?: (args: any) => any; stat?: typeof stat; now?: () => number; leaderSeamOnly?: boolean; bothSeams?: boolean; gitChanges?: (folder: string) => Promise<any>; runCli?: any; seatCapability?: () => boolean; claudeCli?: string; preload?: (testRoot: string) => void; failWorkspaceWrite?: () => boolean; createLeaderThrows?: boolean; opencodeThrows?: boolean; failAssistantAppend?: boolean; neverListen?: boolean; writeFile?: typeof writeFile } = {}) {
+  const testRoot = options.testRoot ?? tempRoot();
   mkdirSync(path.join(testRoot, "server"), { recursive: true });
   mkdirSync(path.join(testRoot, "logs"), { recursive: true });
   options.preload?.(testRoot);
@@ -95,7 +78,7 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
     }
     return proc;
   };
-  const realRunner = loadRunnerHarness({ testRoot, spawn: fakeSpawn });
+  const realRunner = loadRunnerHarness({ testRoot, spawn: fakeSpawn, treeWatch: options.treeWatch });
   const leaderDeps = new Map<string, any>();
   const leaderCreates: Array<{ settings: any; folder: string; cliPath: string | null }> = [];
   const leaderToolOptions: any[] = [];
@@ -150,13 +133,15 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
       send: (text: string, _images: string[]) => {
         const tabId = folder.includes("beta") ? "beta-dev" : folder.includes("design") ? "alpha-design" : "alpha-dev";
         chats.push({ tabId, text });
-        const isSave = text.startsWith("Save a concise handover");
+        const currentMessage = text.slice(text.lastIndexOf("Current message:\n") + "Current message:\n".length);
+        const saveText = text.includes("Current message:\n") ? currentMessage : text;
+        const isSave = saveText.startsWith("Save a concise handover");
         if (isSave) { saveActive++; maxSaveActive = Math.max(maxSaveActive, saveActive); }
         if ((options.hangLeader && (!options.hangTab || options.hangTab === tabId)) || (isSave && options.hangSave)) return;
         if (isSave && options.writeHandover && !options.failSave) {
-          const pathStart = text.indexOf(" to ") + 4;
-          const pathEnd = text.indexOf(". Include current decisions", pathStart);
-          const handoverPath = pathStart >= 4 && pathEnd > pathStart ? text.slice(pathStart, pathEnd) : "";
+          const pathStart = saveText.indexOf(" to ") + 4;
+          const pathEnd = saveText.indexOf(". Include current decisions", pathStart);
+          const handoverPath = pathStart >= 4 && pathEnd > pathStart ? saveText.slice(pathStart, pathEnd) : "";
           if (!handoverPath) { callbacks.onError("Save prompt did not contain a handover path"); return; }
           mkdirSync(path.dirname(handoverPath), { recursive: true });
           writeFileSync(handoverPath, "test handover", "utf8");
@@ -184,6 +169,7 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
     };
   };
   const readPrefsPath = path.join(testRoot, "client-prefs.json");
+  const recoveryState = { blocked: false, recovered: false };
   const testEnv: NodeJS.ProcessEnv = {
     CC_DATA_DIR: testRoot,
     HOME: path.join(testRoot, "home"),
@@ -200,6 +186,12 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
   if (options.leaderSeamOnly) delete testEnv.CC_TEST_FAKE_CLI;
   const testPathExists = (value: string) => /^C:[\\/]work(?:[\\/]|$)/i.test(value);
   const dependencies = {
+    ...fixedDependencies, structuredClone,
+    createTaskStore, isFixedTab, fixedMembers, fixedState, fixedCrewOf, DEFAULTS_VERSION, FIXED_CREW,
+    // The start-up recovery runs in its own tests (fixed-crew-recovery*.test.ts); here the saved workspace is the one the test gives, so recovery state is per server and starts clear.
+    workspaceRecovery: () => ({ ...recoveryState }), blockWorkspaceRecovery: () => { recoveryState.blocked = true; }, unavailableWorkspace,
+    assertWorkspaceRecoveryReady: (operation: string) => { if (recoveryState.blocked) throw new Error(`Workspace unavailable (${operation})`); },
+    assertTaskRecoveryReady: () => { if (recoveryState.blocked) throw new Error("Workspace unavailable (task-action)"); },
     ...path,
     ...config,
     ...security,
@@ -207,7 +199,7 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
     ...stall,
     ...history,
     ...processEngine,
-    Buffer, URL, AbortController, EventEmitter, randomUUID, randomBytes, timingSafeEqual, console: options.console ?? console,
+    Error, Buffer, URL, AbortController, EventEmitter, randomUUID, randomBytes, timingSafeEqual, console: options.console ?? console,
     setTimeout, clearTimeout, setInterval: setIntervalStub, clearInterval: () => {},
     fileURLToPath: () => path.join(testRoot, "server", "index.ts"),
     readWorkspaces: () => {
@@ -217,7 +209,7 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
       return value;
     },
     writeWorkspaces: (value: unknown) => { if (options.failWorkspaceWrite?.()) throw new Error("workspace disk failed"); savedWorkspaces = JSON.parse(JSON.stringify(value)); },
-    readClientPrefs: () => ({ ...config.DEFAULT_CLIENT_PREFS }),
+    readClientPrefs: () => config.readClientPrefs(readPrefsPath),
     writeClientPrefs: (value: unknown, _path?: string, onlyIfMissing = false) => {
       prefWrites.push({ value: JSON.parse(JSON.stringify(value)), onlyIfMissing });
       return config.writeClientPrefs(value as config.ClientPrefs, readPrefsPath, onlyIfMissing);
@@ -252,8 +244,7 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
     buildLeaderOptions: options.realLeaderOptions ? leaderApi.buildLeaderOptions : (settings: any, folder: string) => ({ model: settings.model, cwd: folder, settingSources: ["user", "project", "local"] }),
     createLeader: options.createLeaderThrows ? () => { throw new Error("leader could not start"); } : options.sdkLeader ? loadLeaderHarness(options.sdkLeader) : createLeaderStub,
     createLeaderTools: (deps: any) => { leaderDeps.set(deps.tabName, deps); return { deps }; },
-    createCrewSetup, createCodexLeader, createAcpLeader, createOpencodeLeader: options.opencodeThrows ? () => { throw new Error("opencode could not start"); } : createOpencodeLeader, createLeaderBridge, buildLeaderToolSpecs,
-    LEADER_ALLOWED_TOOLS: ["get_crew_status", "launch_seat", "send_request", "list_requests"],
+    createCodexLeader, createAcpLeader, createOpencodeLeader: options.opencodeThrows ? () => { throw new Error("opencode could not start"); } : createOpencodeLeader, createLeaderBridge, buildLeaderToolSpecs,
     runSeat: runSeatReal,
     killRun: killRunReal,
     stopProcessSeat: processEngine.stopSeat,
@@ -262,6 +253,7 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
     isSeatRunning: realRunner.isSeatRunning,
     runIdsForSeat: realRunner.runIdsForSeat,
     stopAllRunning: realRunner.stopAllRunning,
+    closeWorkerAdmission: realRunner.closeWorkerAdmission, drainWorkers: realRunner.drainWorkers,
     // The real canRunWrite counts every run as able to write (no CLI read-only mode is a safe boundary), so no real run is ever
     // relaunched by itself. "relaunchable" fakes a run that is not, only to keep the relaunch machinery itself under test.
     canRunWrite: options.relaunchable ? () => false : realRunner.canRunWrite,
@@ -270,7 +262,7 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
     releaseUnconfirmedRun: options.releaseUnconfirmed ?? realRunner.releaseUnconfirmedRun,
     logsDir: realRunner.logsDir,
     ChatStore: options.failAssistantAppend ? class extends ChatStore { appendMessage(tabId: string, role: any, ...rest: any[]) { if (role === "assistant") throw new Error("chat disk failed"); return (super.appendMessage as any)(tabId, role, ...rest); } } : ChatStore,
-    SettingsService, pruneAvatars, ModeBusyError, runCli, spawnSync, writeProjectRules, WAIT_MAX_RUNS, WAIT_MAX_SECONDS,
+    SettingsService, ModeBusyError, runCli, spawnSync: (fixedDependencies as { spawnSync?: typeof spawnSync }).spawnSync ?? spawnSync, writeProjectRules,
     RequestsStore,
     // This harness runs the server with fake runs and a made-up clock: it never reads the tools' real records or watches a folder (pack9-folder-activity-*.test.ts covers that through real servers).
     createFolderActivity: (given: any) => createFolderActivity({ ...given, home: null }),
@@ -289,91 +281,45 @@ export async function loadServer(options: { relaunchable?: boolean; failSafety?:
     realpathSync: (value: string) => testPathExists(value) ? value : realpathSync(value),
     statSync: (value: string) => testPathExists(value) ? { isDirectory: () => true, isFile: () => false } : statSync(value),
     permissionModeForSdk,
-    leaderCheckTimeout: options.healthTimeoutMs ?? 100,
   };
-  const result = await runInNewContext(`(async () => { ${source}
-    return { wss, server, handleMessage, stateMessage, broadcast, leaders, tabs, runContexts, launchSafety, leaderHealthCheck, settingsService, requestsStore,
-      activeLeaderTurns, pendingHandoverReads, pendingClearUndos, expiredClearUndos, pendingRelaunch, runOutput, runUsage, userKilledRuns, stallKillRuns, isRunning,
-      cleanScratch, scratchDir, stallTrackers, leaderLaunch, launchWorker, listHistory, getQueue: () => Promise.all([...chatOperationQueues.values()]), unconfirmedRunIds, pendingApprovals, leaderInstances, gatedLeaderLaunch, savingTabs, approvalSummary,
-      chatStore, leaderSeats, leaderBridge, queuedLeaderChanges, blockedSeatKeys, requestActions };
+  const result = await runInNewContext(`(async () => { ${options.serverSource ?? source}
+    return { wss, server, handleMessage, stateMessage, broadcast, leaders, tabs, runContexts, launchSafety, settingsService, requestsStore,
+      activeLeaderTurns, pendingHandoverReads, pendingClearUndos, expiredClearUndos, runOutput, runUsage, isRunning,
+      cleanScratch, scratchDir, stallTrackers, launchWorker, listHistory, getQueue: () => Promise.all([...chatOperationQueues.values()]), unconfirmedRunIds, pendingApprovals, leaderInstances, savingTabs, approvalSummary,
+      chatStore, leaderSeats, leaderBridge, blockedSeatKeys, requestActions,
+      fixedTasks, runRecords, createTabLeader, stopLeaderSession, launchFixedAction, reserveFixedExecution, assertFixedTaskLaunch,
+      acceptPlannerReport, verifyFixedEvidence, tabLocation, sendLeaderTurn, executionJournal, fixedExecution,
+      currentActor: (tabId) => ({ tabId, instance: leaderInstances.get(tabId), sessionId: "fixture-" + tabId }) };
   })()`, dependencies);
   return { ...result, testRoot, exitCodes, getWorkspaces: () => JSON.parse(JSON.stringify(savedWorkspaces)), launched, active, kills, runnerProcesses, leaderDeps, leaderCreates, leaderHandles, leaderModes, leaderToolOptions, chats, processHandlers, prefWrites, detailReads, noteReads, noteTabs, listenCalls: () => listenCalls, listenedPort: () => listenedPort, queryCount: () => queryCount, maxSaveActive: () => maxSaveActive, safety: () => safety, rejectRun: () => { rejectNextRun = true; }, throwRun: () => { throwNextRun = true; }, closeRun: (runId: string, code = 1) => runnerProcesses.get(runId)?.emit("close", code), emitOutput: (runId: string, text: string, stream: "stdout" | "stderr" = "stdout") => runnerProcesses.get(runId)?.[stream]?.emit("data", Buffer.from(text)), tick: () => ticks[0](), tickResync: () => ticks[1](), flush: () => Promise.resolve(result.getQueue()) };
 }
 
-export function loadRunnerHarness(options: { testRoot?: string; spawn?: (command: string, argsOrOptions: any, options?: any) => any } = {}) {
-  const testRoot = options.testRoot ?? tempRoot();
-  mkdirSync(path.join(testRoot, "server"), { recursive: true });
-  mkdirSync(path.join(testRoot, "logs"), { recursive: true });
-  // The runner and the crew-tools helpers it imports (runner-crew.ts) are loaded as one source.
-  const runnerSource = ["server/runner-crew.ts", "server/runner.ts"].map((file) => stripTypeScriptTypes(readFileSync(file, "utf8"))
-    .replace(/^import\s+(?:.|\r?\n)*?from\s+["'][^"']+["'];\r?\n/gm, "")
-    .replaceAll("import.meta.url", '"file:///server/runner.ts"')
-    .replaceAll("export ", "")).join("\n");
-  const module = runInNewContext(`(() => { ${runnerSource}\n const optional = (name) => { try { return eval(name); } catch { return undefined; } };
- return { buildCommand, runSeat, killRun, killRunAndConfirm: optional("killRunAndConfirm"), isRunning, isSeatRunning: optional("isSeatRunning"), runIdsForSeat, canRunWrite, unconfirmedPid, releaseUnconfirmedRun, stopAllRunning, logsDir }; })()`, {
-    ...path, mkdirSync, writeFileSync, appendFileSync, Buffer, StringDecoder, spawn: options.spawn ?? (() => isolatedRunnerProc(0)),
-    fileURLToPath: () => path.join(testRoot, "server", "runner.ts"), process: { env: { CC_DATA_DIR: "C:/never-open-this", CC_TEST_FORCE_PACKAGED: "1" } },
-    isValidModel: config.isValidModel, isValidEffort: config.isValidEffort, isAcpKind: config.isAcpKind, createAcpLeader, formatExitMarker: history.formatExitMarker,
-    // Everything the runner imports from leader-common reaches the loaded source whole (new exports included); the fake pids here name no real process tree, so none is watched.
-    resolveDataRoot: () => testRoot, ...agentUsage, ...leaderCommon, watchProcessTree: () => null, leaderChildEnv, withResolvedCli, isInsideFolder, setTimeout, clearTimeout, console,
-  }) as any;
-  return { ...module, testRoot };
+// Fixed-mode entry for the converted Round2 files: every server here runs a saved fixed crew, with Claude and Codex marked installed
+// (a whole-assignment save is checked against the installed tools) and, unless a test brings its own, a tree watch that confirms every
+// closed run's process tree ended (a fixed crew runs one heavy execution at a time and a close alone is not proof).
+export async function loadFixed(options: Parameters<typeof loadServer>[0] = {}) {
+  const server = await loadServer({ fixed: true, treeWatch: () => ({ sweep: async () => 0, release() {}, failed: 0 }), ...options });
+  server.settingsService.state.tools.claude.installed = true;
+  server.settingsService.state.tools.codex.installed = true;
+  return server;
 }
 
-export function isolatedRunnerProc(pid = 9123) {
-  return Object.assign(new EventEmitter(), { pid, stdout: new EventEmitter(), stderr: new EventEmitter() }) as any;
-}
+import { ASSIST } from "./round2-fixed-deps.ts";
+export { ASSIST, startHelper, setAssignment, endRun, fixedCreation } from "./round2-fixed-deps.ts";
 
-export function isolatedRunnerCapture() {
-  const events: any[] = [];
-  return { events, callbacks: {
-    onOutput: (_run: any, text: string) => events.push({ type: "output", text }),
-    onStatus: (_run: any, status: string, code?: number) => events.push({ type: "status", status, code }),
-    onUsage: (_run: any, usage: any) => events.push({ type: "usage", usage }),
-    onRateLimit: (windows: any) => events.push({ type: "rateLimit", windows }),
-    onUnconfirmedKill: (_run: any, pid?: number) => events.push({ type: "unconfirmed", pid }),
-  } };
-}
-
-export function isolatedRun(overrides: any = {}) {
-  return { runId: "isolated-run", seatKey: "alpha-tab.reviewer", slotId: "reviewer", name: "Vera", cli: "claude", model: "claude-opus-5-5[1m]", effort: "medium", folder: "C:/work/alpha", canWrite: false, startedAt: Date.now(), ...overrides };
-}
-
-export function startIsolatedRunner(harness: any, run: any, prompt: string, capture: any, proc: any) {
-  const result = harness.runSeat(run, prompt, capture.callbacks, ((_command: string, _options: any) => proc) as any);
-  if (!result.ok) throw new Error(result.error);
-  return result.timestamp;
-}
-
-export function connect(server: any) {
-  const ws = new EventEmitter() as any;
-  ws.OPEN = ws.readyState = 1;
-  ws.bufferedAmount = 0;
-  ws.messages = [];
-  ws.send = (raw: string) => ws.messages.push(JSON.parse(raw));
-  server.wss.emit("connection", ws);
-  ws.message = (message: unknown) => ws.emit("message", Buffer.from(typeof message === "string" ? message : JSON.stringify(message)));
-  return ws;
-}
-
-export function lastState(ws: any) { return [...ws.messages].reverse().find((message: any) => message.type === "state"); }
-
-// A test that fails part-way leaves its leader turns running; they write to the chat store after the file is done and re-create its folder. A finally waits them out.
-export async function settleLeaderTurns(...servers: any[]) {
-  for (const server of servers) {
-    await waitFor(() => server.activeLeaderTurns.size === 0, "the leader turns settle", 3_000).catch(() => {});
-    await server.getQueue();
+export async function fixedGateServer(mode: "ask" | "plan" | "accept" | "bypass") {
+  const server = await loadFixed({ skipHealth: true });
+  const ws = connect(server);
+  ws.message({ type: "chat", tabId: "alpha-dev", text: "create leader" });
+  await tick();
+  if (mode !== "accept") {
+    ws.message({ type: "setPermissionMode", requestId: `launch_gate_${mode}`, tabId: "alpha-dev", mode });
+    await waitFor(() => server.settingsService.permissionMode("alpha-dev") === mode, `${mode} saved`);
   }
+  // The fixed launch call site (launchFixedAction, the leader's one launch path) behind the old deps.launch shape: a refusal comes back as { ok: false, error }.
+  const launch = async (slot: string, brief: string) => {
+    try { return { ok: true, ...(await server.launchFixedAction(server.currentActor("alpha-dev"), null, ASSIST, brief, slot)) }; }
+    catch (error) { return { ok: false, error: (error as Error).message }; }
+  };
+  return { server, ws, deps: { ...server.leaderDeps.get("Development"), launch } };
 }
-
-export async function tick(ms = 20) { await new Promise((resolvePromise) => setTimeout(resolvePromise, ms)); }
-
-export async function waitFor(check: () => boolean, description: string, timeoutMs = 2_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (!check()) {
-    if (Date.now() >= deadline) assert.fail(`Timed out waiting for ${description}`); // an assertion, so the mutation sweep counts a red wait
-    await tick(10);
-  }
-}
-
-export async function flushMicrotasks(rounds = 12) { for (let i = 0; i < rounds; i++) await Promise.resolve(); }

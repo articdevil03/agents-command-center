@@ -82,11 +82,11 @@ test("POST /api/paste-image with a foreign Origin is rejected (403)", async () =
 });
 
 test("new upload routes enforce Host and Origin and echo the request id on refusal", async () => {
-  const badOrigin = await request({ method: "POST", path: "/api/avatar", headers: {
-    Origin: "https://evil.example", "Content-Type": "image/png", "X-Request-Id": "avatar_bad_origin",
+  const badOrigin = await request({ method: "POST", path: "/api/paste-image", headers: {
+    Origin: "https://evil.example", "Content-Type": "image/png", "X-Request-Id": "image_bad_origin",
   }, body: "x" });
   assert.equal(badOrigin.status, 403);
-  assert.deepEqual(JSON.parse(badOrigin.body), { error: "forbidden origin", requestId: "avatar_bad_origin" });
+  assert.deepEqual(JSON.parse(badOrigin.body), { error: "forbidden origin", requestId: "image_bad_origin" });
 
   const badHost = await request({ method: "POST", path: "/api/paste-file", headers: {
     Host: "evil.example", Origin: BASE_ORIGIN, "Content-Type": "text/plain", "X-File-Name": "source.txt", "X-Request-Id": "file_bad_host",
@@ -99,7 +99,7 @@ test("new upload routes enforce Host and Origin and echo the request id on refus
     const stateP = nextMessage(ws);
     ws.send(JSON.stringify({ type: "hello" }));
     const state = await stateP;
-    assert.equal(state.settings.uploads.avatar_bad_origin, undefined, "a refused Origin records no status");
+    assert.equal(state.settings.uploads.image_bad_origin, undefined, "a refused Origin records no status");
     assert.equal(state.settings.uploads.file_bad_host, undefined, "a refused Host records no status");
   } finally { ws.close(); }
 });
@@ -145,7 +145,7 @@ test("SVG is served as a static preset but every upload path still refuses it", 
   assert.equal(preset.status, 200);
   assert.match(preset.contentType, /^image\/svg\+xml/);
   const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>');
-  for (const path of ["/api/avatar", "/api/paste-image"]) {
+  for (const path of ["/api/paste-image"]) {
     const refused = await request({ method: "POST", path, headers: {
       Origin: BASE_ORIGIN, "Content-Type": "image/svg+xml", "X-Request-Id": "svg_upload_1",
     }, body: svg });
@@ -205,11 +205,10 @@ test("WebSocket: the key is checked for a client with no Origin header at all to
 const UPLOAD_ROUTES: Array<{ path: string; headers: Record<string, string> }> = [
   { path: "/api/paste-image", headers: { "Content-Type": "image/png" } },
   { path: "/api/paste-file", headers: { "Content-Type": "text/plain", "X-File-Name": "source.txt" } },
-  { path: "/api/avatar", headers: { "Content-Type": "image/png" } },
 ];
 
 test("every upload route refuses a missing or wrong X-App-Key (403) and writes nothing; the right key is accepted (control)", async () => {
-  const stored = () => [join(root, "data", "scratch"), join(root, "data", "scratch"), join(root, "data", "avatars"), join(root, "data", "avatars")].flatMap((dir) => existsSync(dir) ? readdirSync(dir).map((name) => join(dir, name)) : []);
+  const stored = () => [join(root, "data", "scratch")].flatMap((dir) => existsSync(dir) ? readdirSync(dir).map((name) => join(dir, name)) : []);
   for (const route of UPLOAD_ROUTES) {
     const before = stored().length;
     for (const [label, appKey] of [["no key", null], ["wrong key", "0".repeat(64)], ["empty key", ""]] as const) {
@@ -220,6 +219,17 @@ test("every upload route refuses a missing or wrong X-App-Key (403) and writes n
     const ok = await request({ method: "POST", path: route.path, headers: { Origin: BASE_ORIGIN, "X-Request-Id": "key_control", ...route.headers }, body: "keyed" });
     assert.equal(ok.status, 200, `${route.path} with the right key: ${ok.body}`);
   }
+});
+
+test("the retired POST /api/avatar needs the key (403) and, with it, is refused (405) and writes nothing", async () => {
+  const dirs = [join(root, "data", "scratch"), join(root, "data", "avatars")];
+  const stored = () => dirs.flatMap((dir) => existsSync(dir) ? [dir, ...readdirSync(dir).map((name) => join(dir, name))] : []).sort();
+  const before = stored();
+  const headers = { Origin: BASE_ORIGIN, "Content-Type": "image/png", "X-Request-Id": "avatar_retired_key" };
+  assert.equal((await request({ method: "POST", path: "/api/avatar", appKey: null, headers, body: "x" })).status, 403, "no key");
+  const refused = await request({ method: "POST", path: "/api/avatar", headers, body: "x" });
+  assert.equal(refused.status, 405, `with the right key: ${refused.body}`);
+  assert.deepEqual(stored(), before, "nothing was written");
 });
 
 test("any other non-GET request needs the key too, while the static page still loads without it", async () => {

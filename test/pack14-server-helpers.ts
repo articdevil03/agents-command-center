@@ -8,16 +8,16 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 
-export const MAIN = getProcessDefinition("dev", "main").seats;
-export const crewFor = (seats: typeof MAIN, leader?: { cli: string; model: string; effort: string }) => seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort, ...(seat.isLeader ? leader : {}) }));
+const LEADER_SEAT = FIXED_CREW.find((seat) => seat.slot === "leader")!;
 export const CLIS = ["claude", "codex", "opencode"] as const;
 export type Cli = (typeof CLIS)[number];
-export const LEADERS: Record<Cli, { cli: string; model: string; effort: string } | undefined> = {
-  claude: undefined, codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" },
+export const LEADERS: Record<Cli, { cli: string; model: string; effort: string }> = {
+  claude: { cli: LEADER_SEAT.preferred.cli, model: LEADER_SEAT.preferred.model, effort: LEADER_SEAT.preferred.effort }, codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" },
 };
 export const TAB_COUNT = 14;
 export const tabOf = (cli: Cli, n: number) => `p14-${cli}-${n}`;
@@ -34,9 +34,8 @@ export async function boot(env: Record<string, string> = {}): Promise<Server> {
   const temp = mkdtempSync(join(tmpdir(), "cc-pack14-"));
   const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work");
   for (const dir of [home, work, join(temp, "work2"), join(data, "config"), join(data, "chats"), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
-  const tab = (id: string, leader?: { cli: string; model: string; effort: string }) => ({ id, name: id, kind: "dev", process: "main", folder: work, crew: crewFor(MAIN, leader) });
-  const tabs = CLIS.flatMap((cli) => Array.from({ length: TAB_COUNT }, (_, index) => tab(tabOf(cli, index + 1), LEADERS[cli])));
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p14", name: "P14", folder: work, tabs }] }));
+  const tabs = CLIS.flatMap((cli) => Array.from({ length: TAB_COUNT }, (_, index) => fixedTab(tabOf(cli, index + 1), work, { leader: LEADERS[cli] as any }, tabOf(cli, index + 1))));
+  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p14", work, tabs), name: "P14" }])));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: Object.fromEntries(["claude", "codex"].map((cli) => [JSON.stringify([cli, "--version"]), { code: 0, stdout: `${cli} 1.0.0`, stderr: "" }])) }));
   const key = randomBytes(32).toString("hex");
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
@@ -122,7 +121,7 @@ export const CLAUDE_STEPS = [
   { toolUse: { id: "t5", name: "Edit", input: { file_path: "C:/x", old_string: SECRET, new_string: SECRET } } }, { toolResult: { id: "t5" } },
   { toolUse: { id: "t6", name: "Skill", input: { skill: "deep-research", args: SECRET } } }, { toolResult: { id: "t6" } },
   { toolUse: { id: "t6b", name: "Skill", input: { skill: DIRTY_SKILL } } }, { toolResult: { id: "t6b" } },
-  { toolUse: { id: "t7", name: "mcp__tab-crew__get_crew_status", input: { note: SECRET } } }, { toolResult: { id: "t7", output: SECRET } },
+  { toolUse: { id: "t7", name: "mcp__tab-crew__get_fixed_task", input: { note: SECRET } } }, { toolResult: { id: "t7", output: SECRET } },
   { toolUse: { id: "t8", name: "Task", input: { prompt: SECRET } } }, { toolUse: { id: "t9", name: "Agent", input: { prompt: SECRET } } }, { toolResult: { id: "t8" } }, { toolResult: { id: "t9" } },
   { toolUse: { id: "t10", name: "TodoWrite", input: { todos: [SECRET] } } }, { toolResult: { id: "t10" } },
   { toolUse: { id: "t11", name: "WebFetch", input: { url: `https://${SECRET}` } } }, { toolResult: { id: "t11" } },
@@ -138,8 +137,8 @@ export const CODEX_STEPS = [
   { itemRun: { type: "commandExecution", id: "c3", command: `ls ${SECRET}`, aggregatedOutput: SECRET, commandActions: [{ type: "listFiles", command: `ls ${SECRET}`, path: SECRET }] } },
   { itemRun: { type: "fileChange", id: "f1", changes: [{ path: `C:/${SECRET}`, kind: { type: "add" }, diff: `+${SECRET}` }] } },
   { itemRun: { type: "webSearch", id: "w1", query: SECRET, action: { type: "search", query: SECRET }, results: [{ url: `https://${SECRET}`, title: SECRET, snippet: SECRET }] } },
-  { itemRun: { type: "mcpToolCall", id: "m1", server: "tab-crew", tool: "get_crew_status", arguments: { x: SECRET } } },
-  { itemRun: { type: "dynamicToolCall", id: "d1", tool: "get_crew_status", arguments: { x: SECRET } } },
+  { itemRun: { type: "mcpToolCall", id: "m1", server: "tab-crew", tool: "get_fixed_task", arguments: { x: SECRET } } },
+  { itemRun: { type: "dynamicToolCall", id: "d1", tool: "get_fixed_task", arguments: { x: SECRET } } },
   { itemRun: { type: "mcpToolCall", id: "m2", server: "other", tool: "thing", arguments: { x: SECRET }, result: SECRET } },
   { itemRun: { type: "agentMessage", id: "am1", text: SECRET, hold: 10 } },
   { say: "All done." },
@@ -155,7 +154,7 @@ export const OPENCODE_STEPS = [
   { toolPart: { tool: "webfetch", id: "p6", input: { url: `https://${SECRET}` }, output: SECRET } },
   { toolPart: { tool: "task", id: "p7", input: { prompt: SECRET }, output: SECRET } },
   { toolPart: { tool: "todowrite", id: "p8", input: { todos: [SECRET] }, output: SECRET } },
-  { toolPart: { tool: "tab-crew_get_crew_status", id: "p9", input: { x: SECRET }, output: SECRET } },
+  { toolPart: { tool: "tab-crew_get_fixed_task", id: "p9", input: { x: SECRET }, output: SECRET } },
   { toolPart: { tool: "mystery", id: "p10", input: { x: SECRET }, output: SECRET } },
   { say: "All done." },
 ];

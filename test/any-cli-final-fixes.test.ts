@@ -121,7 +121,7 @@ test("Codex leader: a request with no thread id, another thread, or an old v1 na
     await h.action({ type: "setPermissionMode", tabId: TAB, mode: "ask" });
     const base = { turnId: "$turn", itemId: "i9", command: "echo hi", cwd: "C:/work", reason: "x" };
     const raws = [
-      { method: "item/tool/call", params: { turnId: "$turn", callId: "c9", tool: "get_crew_status", arguments: {} } },
+      { method: "item/tool/call", params: { turnId: "$turn", callId: "c9", tool: "get_fixed_task", arguments: {} } },
       { method: "item/commandExecution/requestApproval", params: base },
       { method: "item/fileChange/requestApproval", params: { turnId: "$turn", itemId: "f9" } },
       { method: "item/commandExecution/requestApproval", params: { ...base, threadId: "thread-other" } },
@@ -188,14 +188,19 @@ test("Codex leader: a command or file approval that lands before the turn/start 
   });
 });
 
-test("Codex leader: a crew-tool call that lands before the turn/start reply waits for it, runs when it names the turn and is refused when it names another", { timeout: 60000 }, async () => {
+// The fake Codex CLI still names the retired get_crew_status tool in its early and stale calls, so a call that is handled answers "unknown tool"
+// and the delta reads "refused" either way: what tells "dispatched" from "refused as another turn's" is the text the CLI received.
+const toolAnswers = (h: any) => h.cliEntries().filter((e: any) => e.response >= 1000 && e.result?.contentItems).map((e: any) => e.result.contentItems[0].text as string);
+
+test("Codex leader: a tool call that lands before the turn/start reply waits for it, is dispatched when it names the turn and is refused when it names another", { timeout: 60000 }, async () => {
   await withServer({ leader: CODEX_LEADER }, async (h) => {
     let start = h.chat(script({ earlyOwnNext: true }, { say: "one" })); await h.wait(() => h.turnEnded(start).length === 1, "first turn"); await h.idle();
     start = h.chat(script({ say: "own" })); await h.wait(() => h.turnEnded(start).length === 1, "second turn"); await h.idle();
-    assert.equal(h.deltas(start), "[early call ran]own", "a call naming the coming turn ran once the reply named it");
+    assert.deepEqual(toolAnswers(h), ["unknown tool: get_crew_status"], "a call naming the coming turn reached the tool runner once the reply named it (the retired tool is unknown)");
     start = h.chat(script({ earlyOtherNext: true }, { say: "three" })); await h.wait(() => h.turnEnded(start).length === 1, "third turn"); await h.idle();
     start = h.chat(script({ say: "other" })); await h.wait(() => h.turnEnded(start).length === 1, "fourth turn");
     assert.equal(h.deltas(start), "[early call refused]other", "a call naming another turn was refused on the reply");
+    assert.deepEqual(toolAnswers(h), ["unknown tool: get_crew_status", "leader stopped"], "the other turn's call was refused as stale, never dispatched");
   });
 });
 

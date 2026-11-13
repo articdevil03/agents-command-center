@@ -119,7 +119,7 @@
   function currentProject() { return activeEntry()?.project ?? null; }
   function engineSeat(tab, slot) { return tab?.processState?.seats?.find((item) => item.slotId === slot) ?? null; }
   function seatRole(tab, seat) { return seat?.role || (seat?.isLeader ? "Leader" : cliLabel(seat?.cli)); }
-  function leader(tab) { return tab?.crew?.find((seat) => seat.isLeader) ?? tab?.crew?.find((seat) => seat.slot === "leader") ?? tab?.crew?.[0] ?? null; }
+  function leader(tab) { return tab?.crew?.find((seat) => seat.isLeader) ?? tab?.crew?.find((seat) => seat.slot === "leader") ?? (tab?.fixedCrew ? null : tab?.crew?.[0]) ?? null; }
   function leaderName(tab) { return leader(tab)?.name ?? "the leader"; }
   function seatFor(tab, slot) { return tab?.crew?.find((seat) => seat.slot === slot) ?? null; }
   function selectedSeat(tab) {
@@ -129,14 +129,8 @@
   }
   function seatKeyOf(tab, seat) { return seat?.seatKey ?? `${tab.id}.${seat?.slot}`; }
   function liveRuns(tab, seat) { return (tab?.runs ?? []).filter((run) => run.seatSlotId === seat?.slot && run.status === "working"); }
-  // A crew seat with working runs keeps its model, effort and CLI until they end (the server refuses too); the leader never locks.
-  // An unconfirmed stop (launchSafety.uncertain) may still be running, so it locks the seat too; the server counts it the same way.
-  function seatLocked(tab, seat) { return Boolean(seat) && !seat.isLeader && (liveRuns(tab, seat).length > 0 || uncertainRows().some((row) => (row.seatKey ?? row.seatId) === seatKeyOf(tab, seat))); }
   const LOCK_TIP = "Model, effort and tool can change when its runs finish.";
   function activeTabBusy(tab) { return Boolean(tab?.derived?.busy || (tab?.runs ?? []).some((run) => run.status === "working")); }
-  // The name of the setup (template or saved setup) the tab was last switched to; the crew and steps themselves are the tab's own copy.
-  function setupLabel(tab) { return tab?.setupName || "Custom setup"; }
-  function kindLabel(id) { return KINDS.find((item) => item.id === id)?.name ?? id; }
   function tabLabel(tabId) { for (const { project, tab } of allTabs()) if (tab.id === tabId) return `${project.name} / ${tab.name}`; return ""; }
   function folderName(value) { return String(value ?? "").split(/[\\/]/).filter(Boolean).at(-1) ?? String(value ?? ""); }
   // Which preset a seat wears: its own saved preset, else the default for its slot.
@@ -145,7 +139,7 @@
     if (key && AVATAR_PRESETS.includes(key)) return key;
     return SLOT_PRESET[seat?.slot] ?? NAME_PRESET[String(seat?.name ?? "").toLowerCase()] ?? "ash";
   }
-  // An uploaded seat picture is exactly the route the server hands back from POST /api/avatar, nothing else.
+  // An uploaded seat picture is exactly the route the server hands back from GET /api/avatar, nothing else.
   const UPLOADED_PIC = /^\/api\/avatar\/avatar-[0-9a-f-]{36}\.(?:png|jpg|webp)$/i;
   function seatPic(seat) {
     const value = String(seat?.pic ?? "");
@@ -306,7 +300,7 @@
   function seatNameOfKey(key) { return seatOfKey(key).seat?.name ?? String(key ?? "A seat"); }
   // The events worth a signal. The desktop notice follows Notifications; the chime follows the sound button, on its own.
   function notableEvent(kind) {
-    if (["routine", "internal-stop"].includes(kind)) return false;
+    if (kind === "routine") return false;
     if (kind === "leader-turn") return !document.hasFocus();
     return ["worker-finish", "worker-fail", "worker-stall", "needs-user"].includes(kind);
   }
@@ -363,9 +357,6 @@
     for (const tab of (next?.projects ?? []).flatMap((project) => project.tabs)) {
       const oldIds = new Set((oldTabs.get(tab.id)?.pendingApprovals ?? []).map((item) => item.approvalId));
       for (const item of tab.pendingApprovals ?? []) if (!oldIds.has(item.approvalId)) notify("needs-user", `${item.askedBy?.name ?? leaderName(tab)} needs your answer`,`${tab.name}: ${String(item.summary).split("\n")[0].slice(0, 200)}`);
-      if (tab.processState?.approval?.state === "pending" && oldTabs.get(tab.id)?.processState?.approval?.state !== "pending") {
-        notify("needs-user", "Your look is needed", `${tab.name} is waiting for your approval.`);
-      }
     }
   }
   function chatInfo(tabId, message) {

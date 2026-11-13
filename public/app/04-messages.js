@@ -1,6 +1,8 @@
 // Command Center page script, part 4 of 12: the server message handler. Ordered classic scripts (index.html loads public/app/*.js in name order) share one scope.
   "use strict";
   function onMessage(message) {
+    // A reply only the fixed crew understands (public/fixed-crew/events.js) ends here; its saves and refusals go on through the handling below.
+    if (fixedCrewUi?.onMessage(message)) { if (!$("setModal").hidden) renderSettings(); return; }
     // Settings "Check again": the server answers its refreshSettings request with an actionResult, or an error, carrying the page's requestId.
     if ((message.type === "actionResult" || message.type === "error") && typeof message.requestId === "string" && refreshState?.status === "running" && refreshState.requestId === message.requestId) {
       refreshState = { status: message.type === "error" ? "failed" : "done", at: Date.now() };
@@ -206,10 +208,8 @@
     }
     if (message.type === "runStalled") {
       const seat = (findTab(message.tabId) ?? findTab(tabIdOfKey(message.seatKey)))?.crew?.find((item) => item.seatKey === message.seatKey);
-      // The server says what it does about it: "relaunch" (it stops the run and starts it once more) or "escalate" (it leaves it for you).
-      const action = message.action === "relaunch" ? "relaunch" : "escalate";
-      if (typeof message.runId === "string") stallActions.set(message.runId, action);
-      if (seat) notify(seat.isLeader ? "leader-turn" : "worker-stall", `${seat.name} is stalled`, action === "relaunch" ? "No output for 5 minutes. It is being stopped and started once more." : "Check the run before it can continue.");
+      // The server only leaves a stalled run for the owner; it never stops or restarts it by itself.
+      if (seat) notify(seat.isLeader ? "leader-turn" : "worker-stall", `${seat.name} is stalled`, "Check the run before it can continue.");
       recordActivity(`${seat?.name ?? message.seatKey ?? "A seat"} stalled`, "waiting", message.tabId ?? tabIdOfKey(message.seatKey)); renderSide(); return;
     }
     if (message.type === "leaderLaunch") { noteNotice(message); renderAll(); return; }
@@ -230,6 +230,15 @@
       historyDetails.set(detailKey, { ...message, full: message.full === true });
       historyFullRequested.delete(detailKey);
       renderStage(); return;
+    }
+    if (message.type === "fixedRunRequested") {
+      if (pendingRun && pendingRun.tabId === message.tabId && pendingRun.slot === message.slot) {
+        const seat = seatFor(findTab(pendingRun.tabId), pendingRun.slot);
+        pendingRun = null;
+        if (runTarget?.tabId === message.tabId && runTarget?.slot === message.slot) closeLayerOf($("runModal"));
+        showToast(`Work from ${seat?.name ?? "the position"} requested`);
+      }
+      renderAll(); return;
     }
     if (message.type === "runAccepted") {
       if (pendingRun && pendingRun.tabId === message.tabId) {
@@ -319,11 +328,6 @@
       }
       // A refused stop frees only its own run: the server answers killRun messages in order and the refusal names no run, so it is the oldest one unanswered.
       if (message.action === "killRun") { const refused = message.runId ?? killOrder.shift(); if (message.runId) killOrder = killOrder.filter((id) => id !== message.runId); if (stopStates.get(refused) === "requested") stopStates.delete(refused); }
-      if (["approveLook", "advanceStep", "reviewFindings", "finishFix", "reviewClean", "selectFixer"].includes(message.action)) { processPending.delete(message.tabId); processPendingSince.delete(message.tabId); stepActionSent.delete(message.tabId); }
-      if (message.action === "updateSeat" && avatarPending && (!message.tabId || message.tabId === avatarPending.tabId)) {
-        avatarPending = null;
-        if ($("avatarStatus")) { $("avatarStatus").textContent = `Picture not changed: ${message.message ?? "the server refused it"}`; $("avatarStatus").dataset.status = "failed"; }
-      }
       if (message.action === "refreshSettings" && refreshState?.status === "running" && refreshState.requestId === message.requestId) { refreshState = { status: "failed", at: Date.now() }; if (!$("setModal").hidden) renderSettings(); }
       restoreRejectedActions(message);
       showToast(message.message ?? "The server refused that request");
@@ -339,10 +343,6 @@
     for (const [id, item] of pendingActions) {
       if (item.type === "removeTab" && !findTab(item.tabId)) finishPending(id, true);
       else if (item.type === "removeProject" && !findProject(item.projectId)) finishPending(id, true);
-      else if (item.type === "useSetup") {
-        const tab = findTab(item.message.tabId);
-        if (tab && (item.sent || item.lost) && (tab.processState?.crewGenerationId !== item.crewGenerationId)) finishPending(id);
-      }
     }
     // What is still waiting after the first state since a reconnect was never applied: send it again.
     let resend = false;

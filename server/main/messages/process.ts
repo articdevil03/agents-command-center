@@ -1,39 +1,19 @@
 import type { WebSocket } from "ws";
 import { writeClientPrefs, applyClientPrefUpdate, isSafeSeatId } from "../../config.ts";
 import { isRunning, unconfirmedPid, releaseUnconfirmedRun } from "../../runner.ts";
-import { runEvent, approveLook, advanceStep, reviewFindings, finishFix, reviewClean, selectFixer } from "../../process.ts";
+import { runEvent } from "../../process.ts";
 import { endRunWindow } from "../activity.ts";
 import { denyRunApprovals } from "../approvals.ts";
 import { broadcast, sendError, stateMessage } from "../broadcast.ts";
 import { listHistory, loadHistoryRun } from "../http.ts";
 import { endRunRecord, revokeRunBridge } from "../launch.ts";
-import { markUserKilled } from "../launch-gates.ts";
 import { persistLaunchSafety } from "../launch-safety.ts";
 import type { MessageHandler } from "./types.ts";
-import { updateProcessState } from "../seats.ts";
 import {
-  blockedSeatKeys, clientPrefs, describeError, launchSafety, pendingRelaunch, runContexts, runOutput, runUsage, setClientPrefs, stallKillRuns,
-  stallTrackers, tabs, unconfirmedRunIds,
+  blockedSeatKeys, clientPrefs, describeError, launchSafety, runContexts, runOutput, runUsage, setClientPrefs,
+  tabs, unconfirmedRunIds,
 } from "../state.ts";
 
-function onApproveLook(ws: WebSocket, message: any): void {
-  updateProcessState(message.tabId, approveLook); return;
-}
-function onAdvanceStep(ws: WebSocket, message: any): void {
-  updateProcessState(message.tabId, (state) => advanceStep(state)); return;
-}
-function onReviewFindings(ws: WebSocket, message: any): void {
-  updateProcessState(message.tabId, reviewFindings); return;
-}
-function onFinishFix(ws: WebSocket, message: any): void {
-  updateProcessState(message.tabId, finishFix); return;
-}
-function onReviewClean(ws: WebSocket, message: any): void {
-  updateProcessState(message.tabId, reviewClean); return;
-}
-function onSelectFixer(ws: WebSocket, message: any): void {
-  updateProcessState(message.tabId, (state) => selectFixer(state, message.slot)); return;
-}
 function onUpdateClientPref(ws: WebSocket, message: any): void {
   const result = applyClientPrefUpdate(clientPrefs, message.key, message.value);
   if (!result.ok) throw new Error(result.error);
@@ -111,12 +91,8 @@ function onReleaseUnconfirmed(ws: WebSocket, message: any): void {
     if (!row.runId || !isRunning(row.runId)) continue;
     if (!releaseUnconfirmedRun(row.runId)) { broadcast({ type: "error", message: `process could not be released from the runner: ${row.runId}` }); continue; }
     const context = runContexts.get(row.runId);
-    pendingRelaunch.delete(row.runId);
-    stallTrackers.markKilled(row.runId);
-    markUserKilled(row.runId);
     runOutput.delete(row.runId);
     runUsage.delete(row.runId);
-    stallKillRuns.delete(row.runId);
     if (context) {
       const runtime = tabs.get(context.tabId);
       if (runtime) {
@@ -133,12 +109,6 @@ function onReleaseUnconfirmed(ws: WebSocket, message: any): void {
 }
 export function processMessages(): Array<[string, MessageHandler]> {
   return [
-    ["approveLook", onApproveLook],
-    ["advanceStep", onAdvanceStep],
-    ["reviewFindings", onReviewFindings],
-    ["finishFix", onFinishFix],
-    ["reviewClean", onReviewClean],
-    ["selectFixer", onSelectFixer],
     ["updateClientPref", onUpdateClientPref],
     ["setClientPref", onUpdateClientPref],
     ["clearLaunchBlock", onClearLaunchBlock],

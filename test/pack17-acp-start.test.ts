@@ -3,13 +3,14 @@ import assert from "node:assert/strict";
 import { writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { appSource, sourceFiles, sourceText, styleSource } from "./source-text.ts";
 import { join, resolve } from "node:path";
-import { getProcessDefinition } from "../server/process.ts";
+import { validateAssignment } from "../server/fixed-crew/assignment.ts";
+import { fixedProject, fixedTab, fixedWorkspaces, type FixedChoices } from "./fixed-server-fixture.ts";
 import { readWorkspaces, parseAcpStartCommand, validateAcpCli, readAcpClis, writeAcpClis, isAcpKind, isValidModel, isValidEffort, defaultEffort, ACP_MAX_CLIS } from "../server/config.ts";
 import { KNOWN_CLI_NAMES, leaderKindOf, resolveCliOrThrow, resolveCliPath, spawnAcpChild, withResolvedCli } from "../server/leader-common.ts";
 import { createAcpLeader } from "../server/leader-acp.ts";
 import { buildCommand } from "../server/runner.ts";
 import { CLI_IDS } from "../server/settings.ts";
-import { scratch, LEADER_SLOT } from "./pack17-acp-helpers.ts";
+import { scratch, WORKER_SLOT, ACP_DEFAULT } from "./pack17-acp-helpers.ts";
 
 // ---------------------------------------------------------------- A: the start command and the saved list
 test("A1: a start command is a program and plain words; anything that needs a shell is refused", () => {
@@ -51,7 +52,7 @@ test("A2: the list is saved with the safe-write pattern, read back, and a damage
   assert.throws(() => readAcpClis(file), /duplicate/);
 });
 
-test("A3: an ACP kind is valid only with the CLI's own default model and effort, and only for the leader seat", () => {
+test("A3: an ACP kind is valid only with the CLI's own default model and effort", () => {
   assert.equal(isAcpKind("acp:gemini"), true);
   for (const bad of ["acp:", "acp:A", "acp:a b", "acp:a/b", "claude", "gemini", "acp:-x", `acp:${"a".repeat(40)}`]) assert.equal(isAcpKind(bad), false, bad);
   assert.equal(isValidModel("acp:gemini", "default"), true);
@@ -62,17 +63,16 @@ test("A3: an ACP kind is valid only with the CLI's own default model and effort,
   assert.equal(isValidModel("claude", "default"), false, "the ACP default is not a model of another CLI");
 });
 
-test("A4: a saved workspace may use an ACP kind on any seat, an unknown kind is refused, and a command is never made up for it", () => {
+test("A4: a saved fixed crew may use an ACP kind on any seat (default model and effort only), an unknown kind is refused, and a command is never made up for it", () => {
   const dir = scratch(); const file = join(dir, "workspaces.json");
-  const seats = getProcessDefinition("dev", "main").seats;
-  const workspace = (cliFor: (seat: (typeof seats)[number]) => string) => ({ projects: [{ id: "a", name: "A", folder: dir, tabs: [{ id: "a-1", name: "A", kind: "dev", process: "main", folder: dir, crew: seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: cliFor(seat), model: cliFor(seat).startsWith("acp:") ? "default" : seat.model, effort: cliFor(seat).startsWith("acp:") ? "default" : seat.effort })) }] }] });
-  writeFileSync(file, JSON.stringify(workspace((seat) => (seat.isLeader ? "acp:gemini" : seat.cli))));
-  assert.equal(readWorkspaces(file).projects[0].tabs[0].crew.find((member) => member.slot === LEADER_SLOT)!.cli, "acp:gemini");
-  const crewSeat = seats.find((seat) => !seat.isLeader)!;
-  writeFileSync(file, JSON.stringify(workspace((seat) => (seat.isLeader || seat.slotId === crewSeat.slotId ? "acp:gemini" : seat.cli))));
-  assert.equal(readWorkspaces(file).projects[0].tabs[0].crew.find((member) => member.slot === crewSeat.slotId)!.cli, "acp:gemini", "an ACP kind on a crew seat loads (pack 18: any seat)");
-  writeFileSync(file, JSON.stringify(workspace((seat) => (seat.isLeader ? "gemini" : seat.cli))));
-  assert.throws(() => readWorkspaces(file), /unknown CLI/, "an unknown kind is refused");
+  const saved = (choices: FixedChoices) => { writeFileSync(file, JSON.stringify(fixedWorkspaces([fixedProject("a", dir, [fixedTab("a-1", dir, choices, "A")])]))); return readWorkspaces(file).projects[0].tabs[0]; };
+  const acp = { cli: "acp:gemini", ...ACP_DEFAULT } as const;
+  assert.deepEqual(saved({ leader: acp }).fixedCrew!.preferences.leader.assignment, acp, "an ACP kind on the leader loads");
+  assert.deepEqual(saved({ [WORKER_SLOT]: acp }).fixedCrew!.preferences[WORKER_SLOT].assignment, acp, "an ACP kind on a worker seat loads (pack 18: any seat)");
+  for (const bad of [{ cli: "gemini", ...ACP_DEFAULT }, { cli: "acp:gemini", model: "opus", effort: "default" }, { cli: "acp:gemini", model: "default", effort: "high" }]) {
+    assert.throws(() => validateAssignment(bad), /Invalid crew assignment|ACP assignment uses its default model and effort/, JSON.stringify(bad));
+    assert.equal(saved({ leader: bad as any }).fixedCrew!.preferences.leader.assignment, null, `a saved ${JSON.stringify(bad)} is recovered to a fresh crew, never kept`);
+  }
   const run = { runId: "p17-run", seatKey: "p17-tab.reviewer1", slotId: "reviewer1", name: "Vera", cli: "acp:gemini" as any, model: "default", effort: "default", folder: dir, canWrite: false, startedAt: 1 };
   assert.throws(() => buildCommand(run, join(dir, "brief.txt")), /no command for CLI "acp:gemini"/, "a run command is never made up for an ACP kind");
 });
@@ -117,16 +117,24 @@ const ROOT = resolve(".");
 const SCANNED = sourceFiles().filter((file) => (file.startsWith("server/") && file.endsWith(".ts")) || (file.startsWith("public/") && file.endsWith(".js")));
 const DECIDES = /\bcli\b[^;]{0,50}(?:===|!==|==|!=)\s*"(?:claude|codex|opencode)"|"(?:claude|codex|opencode)"\s*(?:===|!==)\s*[A-Za-z_.?]*cli\b|case "(?:claude|codex|opencode)":|"opencode"|leaderKind\s*===\s*"|\bconst isAcp\b|\bisAcp(?:Kind|Cli)?\(|\[\s*(?:kind|cli|[A-Za-z_.?]*\.(?:cli|kind))\s*\]|\bas SeatKind\b|\b(?:kind|leaderKind|[A-Za-z_.?]*\.(?:cli|kind))\s*(?:===|!==)\s*"(?:claude|codex|opencode|gemini)"|"(?:claude|codex|opencode|gemini)"\s*(?:===|!==)\s*(?:kind|leaderKind)\b|\[\s*"(?:claude|codex|opencode)"\s*,\s*"/;
 const VERDICTS: Array<[string, string, string]> = [
-  ["public/setup-editor.js", "const isAcp =", "works: the editor recognizes every acp: kind by its prefix"],
+  ["public/fixed-crew/task-view.js", "for (const run of (task.executions ?? []).filter", "n/a: KIND[run.kind] labels interrupted execution types, not CLI kinds; ACP uses the same display"],
+  ["server/fixed-crew/assignment.ts", "if (isAcpCli(cli) &&", "works: saved ACP assignments accept only default model and default effort"],
+  ["server/fixed-crew/assignment.ts", "if (isAcpCli(cli.id)) return", "works: the ACP model list contains only default"],
+  ["server/fixed-crew/assignment.ts", "const models = cli.models ??", "works: OpenCode uses supplied suggestions; ACP returned its default above"],
+  ["server/fixed-crew/assignment.ts", "return isAcpCli(cli.id) ?", "works: ACP effort is default; other CLIs use their advertised safe efforts"],
+  ["server/fixed-crew/assignment.ts", "if (!seat.preferredAdvisor ||", "works: advisor support is limited to an advertised Claude capability"],
+  ["server/fixed-crew/assignment.ts", "return isAcpCli(id) ?", "works: deterministic built-in preference order puts ACP after known providers"],
+  ["server/fixed-crew/assignment.ts", "if (!assignment || isAcpCli", "works: ACP company identity is unknown and cannot establish review independence"],
+  ["server/fixed-crew/assignment.ts", '|| (assignment.cli === "claude"', "works: bare family aliases identify Anthropic only on the Claude transport"],
+  ["server/fixed-crew/assignment.ts", "const sameModel = !isAcpCli", "works: two ACP defaults never establish equal model identity"],
+  ["server/index.ts", "if (!models.includes(assignment.model)", "works: manual model choices use inventory; OpenCode accepts validated custom provider models"],
+  ["server/index.ts", "return { clis: buildClis(", "works: fixed inventory includes every configured ACP CLI alongside discovered built-ins"],
+  ["public/fixed-crew/events.js", "if (page.isAcpCli(cli)) return \"default\";", "works: a fixed crew pick on an ACP CLI always sends its default effort, as the server requires"],
+  ["public/fixed-crew/events.js", "else if (page.isAcpCli(seat.cli)) list.push(", "works: the fixed crew's model menu says an ACP CLI runs with Full access only"],
+  ["public/fixed-crew/view.js", "return pref.source === \"auto\" && Boolean(cli) && (cli === \"opencode\"", "works: an automatic OpenCode or ACP pick asks the user to check they can use that model; manual picks do not"],
   ["public/logos.js", "window.CC_LOGOS =", "n/a: logo path data for the known CLIs; ACP uses its name initial"],
-  ["public/setup-editor.js", "if (isAcp(seat.cli) && !seat.canWrite)", "works: a read-only ACP seat is told it cannot use crew tools or write"],
-  ["public/setup-editor.js", "const base = tab.crew.find((seat) => !seat.isLeader && !isAcp(seat.cli))", "works: a new seat prefers a known CLI; if only ACP seats exist it inherits their default settings"],
-  ["public/setup-editor.js", "if (isAcp(next.cli))", "works: an ACP draft seat gets the default model and effort"],
   ["server/config.ts", "export const isAcpKind = (value: unknown)", "works: the one test for the acp:<id> shape (process.ts isAcpCli); every seat may carry such a kind"],
   ["server/config.ts", "const builtIn = (Object.keys(CLI_CAPS) as SeatKind[])", "works: the three known kinds come from the capability table; every ACP CLI is added after them"],
-  ["server/config-migrate.ts", "if (seat.isLeader && isObject(tab.advisor) && old.cli === \"claude\") next.advisor", "n/a: moves an old tab's advisor onto a Claude leader; an ACP leader never had one"],
-  ["server/config.ts", "if (!isAcpKind(seat.cli)) { found.models", "works: an ACP seat adds nothing to the known kinds' template lists"],
-  ["server/config.ts", "const models = (kind: SeatKind) =>", "works: the three known kinds only (saved plus template models)"],
   ["server/config.ts", "if (!isAcpKind(seat.cli)) { SAVED_MODELS", "works: an ACP seat adds nothing to the known kinds' saved lists"],
   ["server/index.ts", "clis: buildClis(", "works: the capability list the page reads: the three known kinds, then every ACP CLI"],
   ["server/index.ts", "if (isAcpKind(member.cli)) {", "works: a crew seat on an ACP CLI runs through its start command; one removed in Settings is refused with its name before anything is counted"],
@@ -135,8 +143,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["server/process-types.ts", "export const CLI_CAPS: Record<", "works: the one capability table of the three known kinds; an ACP kind is answered by acpCaps"],
   ["server/process-types.ts", "opencode: { id: \"opencode\"", "works: one row of the capability table"],
   ["server/process-types.ts", "return isAcpCli(cli) ? acpCaps(cli) : null;", "works: an ACP kind gets the ACP capabilities (read-only not enforced, crew tools by HTTP MCP)"],
-  ["server/setup.ts", "if (isAcpCli(raw.cli) && (raw.model !== \"default\"", "works: an ACP seat runs only the CLI's own default model and effort"],
-  ["server/setup.ts", "if (isAcpCli(raw.cli) && !raw.canWrite)", "works: an ACP seat that runs the process must be able to write"],
   ["server/runner.ts", "const acp = isAcpKind(run.cli);", "works: an ACP crew run goes through the ACP worker path (Block 2)"],
   // [file, start of the line (trimmed), verdict]
   ["server/cli-discovery.ts", "// \"--help\", \"opencode\"/\"models\"), never user input, so building one command", "n/a: a comment about the models list command"],
@@ -149,7 +155,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["server/index.ts", "if (leaderKind === \"acp\") {", "works: the ACP adapter is started with the CLI's saved start command, a bridge token of its own, and the tab folder"],
   ["server/index.ts", "} else if (leaderKind === \"codex\") {", "works: leaderKindOf picks the adapter; \"acp\" goes to createAcpLeader, an unknown kind throws"],
   ["server/index.ts", "} else if (leaderKind === \"opencode\") {", "works: same dispatch"],
-  ["server/index.ts", "if (!tab || !lead || lead.cli !== \"claude\") return;", "n/a: the start-up health check is a Claude turn; an ACP leader has none"],
   ["server/runner.ts", "return { [BRIEF_VAR]: briefPath, ...(run.cli === \"opencode\"", "refused: run commands are for crew seats, and an ACP CLI cannot be one"],
   ["server/runner.ts", "case \"claude\":", "refused: buildCommand has a default branch that throws for any other kind"],
   ["server/runner.ts", "case \"codex\":", "refused: crew seats only, as above"],
@@ -157,8 +162,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["server/runner.ts", "const env = leaderChildEnv({ ...commandEnv(run, briefPath), ...(run.cli === \"opencode\"", "refused: crew seats only"],
   ["server/runner.ts", "const claudeState: AgentUsageState | null = run.cli === \"claude\"", "refused: crew seats only"],
   ["server/runner.ts", "const codexState: AgentUsageState | null = run.cli === \"codex\"", "refused: crew seats only"],
-  ["server/runner-crew.ts", "case \"codex\": case \"opencode\": return", "refused: crew seats only, as above"],
-  ["server/runner-crew.ts", "case \"claude\": return Boolean(run.crewTools)", "refused: crew seats only, as above"],
   ["server/leader-common.ts", "export const KNOWN_CLI_NAMES = [\"claude\", \"codex\", \"opencode\", \"gemini\"] as const;", "works: the program names started by name; an ACP program goes through resolveCliOrThrow in spawnAcpChild"],
   ["server/leader-common.ts", "export function leaderKindOf(cli: unknown)", "works: the one dispatch from a leader kind to its adapter; an unknown kind throws"],
   ["server/leader-common.ts", "if (cli === \"claude\" || cli === \"codex\" || cli === \"opencode\") return cli;", "works: leaderKindOf, the one dispatch; ACP is the next line"],
@@ -183,9 +186,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["public/app.js", "[\"plan\", \"Plan only\", (_name, cli) => cli === \"codex\"", "works: same as the line above"],
   ["public/app.js", ": cli === \"opencode\" ? \"Edits are denied.", "works: same as the line above"],
   ["public/app.js", "$(\"first\").innerHTML = `<div class=\"fcard\">", "works: the first-run text names ACP CLIs too; the tool list there is the four known CLIs"],
-  ["public/model-picker.js","if (seat.cli === \"codex\") hints.push(","works: the next hint line is the ACP one"],
-  ["public/model-picker.js","if (seat.cli === \"opencode\") hints.push(","works: same as the line above"],
-  ["public/model-picker.js","hints.push(seat.cli === \"claude\" ?","works: an ACP leader gets the generic line (applies from the next turn)"],
   ["public/app.js", "const toolRows = [\"claude\", \"codex\", \"opencode\", \"gemini\"].map(", "n/a: Settings AI tools rows; ACP CLIs have their own section"],
   ["public/app.js", "const counts = cli === \"gemini\"", "n/a: Settings tools only"],
   ["public/app.js", "const canRemoveMcp = cli === \"claude\" || cli === \"codex\";", "n/a: Settings tools only"],
@@ -202,8 +202,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["server/config.ts", "for (const kind of Object.keys(SAVED_MODELS) as SeatKind[])", "works: same, the three known kinds"],
   ["server/index.ts", "return lead && isAcpKind(lead.cli) ?", "works: acpLeaderOf finds the saved CLI of a tab's ACP leader"],
   ["server/index.ts", "return Boolean(lead && isAcpKind(lead.cli));", "works: hasAcpLeader is true only for the leader slot holding an ACP kind"],
-  ["server/index.ts", "if (isAcpKind(kind)) {", "works: the seat-CLI change for an ACP kind: leader slot only, Full access confirmation, safe program"],
-  ["server/index.ts", "const installed = settingsService.state.tools[kind].installed;", "works: reached only for the three known kinds (the ACP branch above it returns)"],
   ["server/leader-acp.ts", "export const acpToolStep", "n/a: the adapter's own map from a tool's reported kind to a step label (names a tool kind, not a CLI)"],
   ["server/settings.ts", "const authArgs = AUTH_ARGS[cli];", "n/a: Settings tools only (the four known CLIs)"],
   ["server/settings.ts", "Object.assign(this.state.tools[cli]", "n/a: Settings tools only"],
@@ -226,7 +224,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["public/app.js", "if (isAcpCli(cli)) return false;", "works: modelSupportsEffort is false for an ACP CLI"],
   ["public/app.js", "const status = (cli) => { const tool = tools[cli];", "n/a: first-run status of the four known tools"],
   ["public/model-picker.js","return `<div class=\"grp\" data-grp=","works: the picker group for an ACP CLI shows CLI default plus the model shown for THIS tab (own CLI) or the last used one (other CLIs)"],
-  ["public/model-picker.js","if (page.isAcpCli(seat.cli)) hints.push(","works: the picker hint for an ACP leader"],
   ["public/model-picker.js","if (fields.cli && page.isAcpCli(fields.cli)) {","works: picking an ACP CLI asks for the Full access confirmation first"],
   ["public/app.js", "const command = tool?.installed === false ? `npm install -g", "n/a: Settings tools only"],
   ["public/app.js", "return `<div class=\"crow tool-row\"", "n/a: Settings tools only"],
@@ -234,6 +231,9 @@ const VERDICTS: Array<[string, string, string]> = [
   ["public/app.js", "if (action === \"install-cli\")", "n/a: Settings tools only"],
   ["public/app.js", "if (action === \"mcp-remove\")", "n/a: Settings tools only"],
   ["public/app.js", "confirmAction({ title: `Add ${name} to ${CLI_LABEL[cli]}?`", "n/a: Settings tools only"],
+  ["public/fixed-crew/task-archive-view.js", "const runs = (task.executions ?? []).filter((run) => SHIPPING[run.kind]);", "n/a: shipping action labels, independent of worker CLI"],
+  ["public/fixed-crew/task-archive-view.js", "const el = item(SHIPPING[run.kind]", "n/a: recorded shipping result labels, independent of worker CLI"],
+  ["server/fixed-crew/bulk-assignment.ts", "if (!models.includes(selected.model)", "works: registered ACP assignments use their default model without a discovered-model list"],
 ];
 test("E1: every place in the source that decides per CLI kind is listed with what an ACP leader does there", () => {
   const found: string[] = [], listed = new Set<number>();

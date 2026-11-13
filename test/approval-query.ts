@@ -65,7 +65,10 @@ export function query({ prompt, options }: any) {
       const text = textOf(message);
       turnOpen = true; noFold = false; replay(message);
       // Save asks the leader to Write the handover; an allowed Write really writes it, a denied one does not.
-      const handover = text.startsWith("Save a concise handover") ? text.match(/ to (.+RESUME\.md)\./)?.[1] : undefined;
+      // A fixed-crew leader's prompt is wrapped; the user's text follows the last "Current message:" line (a plain message has no marker).
+      const mark = "Current message:\n", markAt = text.lastIndexOf(mark);
+      const userText = markAt < 0 ? text : text.slice(markAt + mark.length);
+      const handover = userText.startsWith("Save a concise handover") ? userText.match(/ to (.+RESUME\.md)\./)?.[1] : undefined;
       // The requests are the part after "Current message:" (the chat handed back before it may hold anything); a plain message has none.
       const requests = handover
         ? [{ tool: "Write", input: { file_path: handover, content: "handover" }, handover }]

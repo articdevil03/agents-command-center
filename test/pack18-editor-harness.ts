@@ -1,9 +1,10 @@
+export { taskFixture, TASK_SEATS, type TaskStage } from "./pack18-editor-task-fixture.ts";
 import { waitForFirstRender } from "./page-first-render.ts";
 import { SERVER_START_MS } from "./server-start.ts";
-// Pack 18 crew editor test harness: the real page in a real headless Chrome, its state taken from a real server. The server starts on a
-// temp data root and adds, through its own addTab, a Marketing tab and a "Start blank" tab next to its first (Our process) tab. The page
-// talks to a fake socket, as in the other page tests, so every message the editor sends is recorded and the server's answers are delivered
-// by hand. Fake CLI runner, temp data root, free port, never 4317. Used by test/pack18-editor*.test.ts.
+// Fixed-crew page test harness: the real page in a real headless Chrome, its state taken from a real server that started on a temp data
+// root seeded with fixed crew tabs. The page talks to a fake socket (every message it sends is recorded and the server's answers are
+// delivered by hand) or, with realSocket, straight to the server. Fake CLI runner, temp data root, free port, never 4317.
+// Fixture "fixed" is a fresh install's one fixed crew tab; "fixed2" seeds a second, separate fixed tab next to it.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -16,6 +17,7 @@ import { WebSocket } from "ws";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { newAppKey, keyedWsUrl } from "./temp-root.ts";
 import { attachCrashCatcher } from "./crash-catcher.ts";
+import { freshFixedCrew } from "../server/fixed-crew/preferences.ts";
 
 const HOST = "127.0.0.1";
 const APP_KEY = newAppKey();
@@ -23,33 +25,8 @@ const CHROME = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
 const REPO = resolve(".");
 export const delay = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 export const J = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
-export const ED = "[data-setup-editor]";
 // A test's own budget plus the harness's Chrome stop, derived from the helper.
 export const editorTestMs = (withoutChromeStopMs: number) => withoutChromeStopMs + chromeStopBoundMs(CHROME_CLOSE_GRACE_MS);
-
-// The real server's state once its own addTab has added a Marketing tab and a Design tab that starts blank next to the first tab.
-const EXTRA_TABS = [
-  { setupName: "Marketing", message: { name: "Launch posts", kind: "mkt", template: "marketing" } },
-  { setupName: "Start blank", message: { name: "Scratch", kind: "design", template: "blank" } },
-];
-function serverState(port: number): Promise<any> {
-  return new Promise((ok, bad) => {
-    const ws = new WebSocket(keyedWsUrl(`ws://${HOST}:${port}`, APP_KEY), { origin: `http://${HOST}:${port}` });
-    const timer = setTimeout(() => { ws.terminate(); bad(new Error("server state request timed out")); }, 10_000);
-    const asked = new Set<string>();
-    ws.once("open", () => ws.send(JSON.stringify({ type: "hello" })));
-    ws.on("message", (data) => {
-      const message = JSON.parse(data.toString());
-      if (message.type === "error" && message.action === "addTab") { clearTimeout(timer); ws.close(); bad(new Error(message.message)); return; }
-      if (message.type !== "state") return;
-      const project = message.projects[0];
-      const missing = EXTRA_TABS.find((extra) => !project.tabs.some((tab: any) => tab.setupName === extra.setupName));
-      if (!missing) { clearTimeout(timer); ws.close(); ok(message); return; }
-      if (!asked.has(missing.setupName)) { asked.add(missing.setupName); ws.send(JSON.stringify({ type: "addTab", projectId: project.id, ...missing.message })); }
-    });
-    ws.once("error", (error) => { clearTimeout(timer); bad(error); });
-  });
-}
 
 function bootstrap(seed: any) {
   return `
@@ -80,17 +57,61 @@ export type Page = {
   ev: (expression: string) => Promise<any>;
   waitFor: (expression: string, label: string, timeoutMs?: number) => Promise<void>;
   page: (method: string, params?: Record<string, unknown>) => Promise<any>;
-  seed: any; ours: any; mkt: any; blank: any;
+  // the server's own state before and after its first CLI check (which fills the automatic positions); fixed is the first fixed tab,
+  // secondFixed the second one (fixture "fixed2" only)
+  seed: any; fixed: any; secondFixed?: any; discovered?: any; dataDir: string; work: string; reload: () => Promise<void>;
 };
+// tasks (Pack 26 Block 3c): saved task files, by tab id, written into the temp data root before the server starts and reads them.
+export type PageOptions = { scrollbars?: boolean; fixture?: "fixed" | "fixed2"; realSocket?: boolean; tasks?: (work: string) => Record<string, unknown> };
+const SECOND_FIXED_ID = "second-fixed";
+const FIXED_READY = `typeof window.CC_FIXED_CREW?.init==="function"&&Boolean(document.querySelector("#fixedView:not([hidden]) #fcWorkSettings"))`;
+// The fixed fixtures' server state: as it starts (nothing checked yet, so no model anywhere), then after Settings' own refreshSettings.
+function fixedStates(port: number, discover: boolean, tabCount: number): Promise<{ fresh: any; discovered: any }> {
+  return new Promise((ok, bad) => {
+    const ws = new WebSocket(keyedWsUrl(`ws://${HOST}:${port}`, APP_KEY), { origin: `http://${HOST}:${port}` });
+    const timer = setTimeout(() => { ws.terminate(); bad(new Error("fixed crew state request timed out")); }, 15_000);
+    let fresh: any = null, answered = false;
+    const done = (value: any) => { clearTimeout(timer); ws.close(); ok(value); };
+    ws.once("open", () => ws.send(JSON.stringify({ type: "hello" })));
+    ws.on("message", (data) => {
+      const message = JSON.parse(data.toString());
+      if (message.type === "error") { clearTimeout(timer); ws.close(); bad(new Error(message.message)); return; }
+      if (message.type === "actionResult" && message.requestId === "fcui-discover") answered = true;
+      if (message.type !== "state") return;
+      const tabs = message.projects[0].tabs;
+      if (tabs.length !== tabCount) { clearTimeout(timer); ws.close(); bad(new Error(`expected ${tabCount} fixed tab(s), the server gave ${tabs.length}`)); return; }
+      if (!fresh) { fresh = message; if (!discover) { done({ fresh, discovered: null }); return; } ws.send(JSON.stringify({ type: "refreshSettings", requestId: "fcui-discover" })); return; }
+      if (answered && tabs.every((tab: any) => tab.fixedCrew?.preferences?.coder?.assignment)) done({ fresh, discovered: message });
+    });
+    ws.once("error", (error) => { clearTimeout(timer); bad(error); });
+  });
+}
+// A real-socket page gets the app key and a folder picker the way the Electron bridge would hand them over, and records what it sends.
+function realBootstrap(folder: string) {
+  return `window.__ccErrors=[];window.__sent=[];
+window.cc={appKey:async()=>${JSON.stringify(APP_KEY)},pickFolder:async()=>${J(folder)},openObsidian:async()=>({ok:true})};
+window.addEventListener("error",(e)=>window.__ccErrors.push(String(e.message||"browser error")));
+window.addEventListener("unhandledrejection",(e)=>window.__ccErrors.push(String(e.reason?.message||e.reason||"unhandled rejection")));
+const __ccSend=WebSocket.prototype.send;WebSocket.prototype.send=function(raw){try{window.__sent.push(JSON.parse(raw))}catch{}return __ccSend.call(this,raw)};`;
+}
 
 // scrollbars: draw the page's scroll bars (the screenshots show there is no sideways one); the checks run without them, as the other page tests do.
-export async function withPage(body: (page: Page) => Promise<void>, options: { scrollbars?: boolean } = {}) {
+export async function withPage(body: (page: Page) => Promise<void>, options: PageOptions = {}) {
+  const fixture = options.fixture ?? "fixed";
   assert.ok(existsSync(CHROME), `Headless Chrome is required at ${CHROME}; set CC_SKIP_BROWSER=1 only when intentionally running without it`);
   const temp = mkdtempSync(join(tmpdir(), "cc-p18editor-"));
   const dataDir = join(temp, "data"); mkdirSync(join(dataDir, "config"), { recursive: true });
+  const folder = join(temp, "work"); mkdirSync(folder);
+  // Each fixed tab gets its own freshFixedCrew(); the server projects its runtime identity (seat keys, process state) itself.
+  const fixedTab = (id: string, name: string) => ({ id, name, folder, kind: "dev", setupName: "Fixed crew", crew: [], steps: [], lookPause: false, fixedCrew: freshFixedCrew() });
+  const tabs = fixture === "fixed2" ? [fixedTab("example-development", "Development"), fixedTab(SECOND_FIXED_ID, "Second")] : [fixedTab("example-development", "Development")];
+  writeFileSync(join(dataDir, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "example", name: "Example project", folder, tabs }] }));
+  if (options.tasks) { mkdirSync(join(dataDir, "tasks")); for (const [tabId, task] of Object.entries(options.tasks(folder))) writeFileSync(join(dataDir, "tasks", `${tabId}.json`), JSON.stringify(task, null, 2)); }
   const home = join(temp, "home"); mkdirSync(home, { recursive: true });
   const script = join(temp, "fake-cli-script.json");
-  writeFileSync(script, JSON.stringify({ responses: {} }));
+  // The fixed fixtures answer a version check for Claude and Codex, so Settings' Check again finds them installed (OpenCode stays missing).
+  const versions = Object.fromEntries(["claude", "codex"].map((cli) => [JSON.stringify([cli, "--version"]), { code: 0, stdout: `${cli} 1.0.0`, stderr: "" }]));
+  writeFileSync(script, JSON.stringify({ responses: versions }));
   let serverPort = 0; // read from the server's ready line below
   const env = { ...process.env, HOME: home, USERPROFILE: home, CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_CLI_RECORD: join(temp, "argv.jsonl"), CC_DATA_DIR: dataDir, CC_TEST_FORCE_PACKAGED: "1", CC_PORT: "0", CC_APP_KEY: APP_KEY, CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1" };
   assert.equal(env.CC_PORT, "0"); // the OS picks the port at the server's own listen, so no other test can take it first
@@ -108,11 +129,14 @@ export async function withPage(body: (page: Page) => Promise<void>, options: { s
       server.once("exit", (code) => bad(new Error(`server exited early (${code}); output=${output}`)));
     });
     assert.notEqual(serverPort, 4317, "the test server must never use the real app's port");
-    const seed = await serverState(serverPort);
-    const tabs = seed.projects[0].tabs;
-    const ours = tabs.find((tab: any) => tab.setupName === "Our process"), mkt = tabs.find((tab: any) => tab.setupName === "Marketing"), blank = tabs.find((tab: any) => tab.setupName === "Start blank");
-    assert.ok(ours && mkt && blank, `control: the server gave an Our process tab, a Marketing tab and a blank tab (got ${tabs.map((tab: any) => tab.setupName).join(", ")})`);
-    seed.selectedTabId = ours.id;
+    const states = await fixedStates(serverPort, !options.realSocket, tabs.length);
+    const seed = states.fresh;
+    const seeded = seed.projects[0].tabs;
+    for (const state of [states.fresh, states.discovered]) if (state) assert.deepEqual(state.projects[0].tabs.map((tab: any) => tab.id), tabs.map((tab) => tab.id), "control: the server kept every seeded fixed tab, in order");
+    const fixed = seeded.find((tab: any) => tab.id === "example-development"), secondFixed = fixture === "fixed2" ? seeded.find((tab: any) => tab.id === SECOND_FIXED_ID) : undefined;
+    assert.ok(fixed?.fixedCrew && (fixture === "fixed" || secondFixed?.fixedCrew), `control: the server gave ${fixture === "fixed2" ? "two valid fixed crew tabs" : "a fixed crew tab"} (got ${seeded.map((tab: any) => tab.setupName).join(", ")})`);
+    if (secondFixed) { const owners = [fixed, secondFixed].map((tab: any) => [tab.id, tab.processState?.tabId]); assert.ok(owners.every(([id, owner]) => id === owner) && owners[0][0] !== owners[1][0], `control: each fixed tab has its own runtime identity (${JSON.stringify(owners)})`); }
+    seed.selectedTabId = fixed.id;
     const html = readFileSync(join(REPO, "public", "index.html"), "utf8").replace(/<link\b[^>]*https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>\s*/gi, "")
       .replace("script-src 'self'", "script-src 'self' 'unsafe-inline'") // the page's policy stays, except for the inline bootstrap injected here
       .replace("</head>", `<script>${bootstrap(seed)}</script>\n</head>`);
@@ -180,9 +204,13 @@ export async function withPage(body: (page: Page) => Promise<void>, options: { s
     };
     await page("Page.enable"); await page("Runtime.enable");
     await page("Emulation.setDeviceMetricsOverride", { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
-    await page("Page.navigate", { url: `http://${HOST}:${proxyPort}/__stream` });
-    await waitForFirstRender(waitFor, `document.querySelectorAll("#crew .seat").length>0&&typeof window.CC_SETUP_EDITOR?.render==="function"`, "app render with the editor loaded");
-    await body({ ev, waitFor, page, seed, ours, mkt, blank });
+    if (options.realSocket) await page("Page.addScriptToEvaluateOnNewDocument", { source: realBootstrap(folder) });
+    await page("Page.navigate", { url: options.realSocket ? `http://${HOST}:${serverPort}/` : `http://${HOST}:${proxyPort}/__stream` });
+    const ready = FIXED_READY;
+    await waitForFirstRender(waitFor, ready, "app render with the fixed crew loaded");
+    const firstRender = waitForFirstRender.bind(null, waitFor, ready);
+    const reload = async () => { await page("Page.reload", { ignoreCache: true }); await firstRender("app render after a reload"); };
+    await body({ ev, waitFor, page, seed, fixed, secondFixed, discovered: states.discovered, dataDir, work: folder, reload });
     assert.deepEqual(await ev("window.__ccErrors"), [], "no page errors");
     assert.equal(readRepoWorkspaces(), repoWorkspacesBefore, "the repo's workspaces file is untouched");
   } finally {
@@ -202,48 +230,11 @@ export async function withPage(body: (page: Page) => Promise<void>, options: { s
 export const skipped = (t: { skip: (message: string) => void }) => { if (process.env.CC_SKIP_BROWSER === "1") { t.skip("CC_SKIP_BROWSER=1 was explicitly set"); return true; } return false; };
 
 // ---- helpers ----
-// The setup exactly as the server's validateSetup takes it, written here on its own (not the editor's code) to compare what was sent.
-const SEAT_FIELDS = ["slot", "name", "role", "cli", "model", "effort", "canWrite", "isLeader", "advisor", "orchestrates", "pic"];
-export const bareSeat = (seat: any) => Object.fromEntries(SEAT_FIELDS.filter((key) => seat[key] !== undefined && !(key === "orchestrates" && seat[key] !== true)).map((key) => [key, seat[key]]));
 export const sentOf = (ev: Page["ev"], type: string): Promise<any[]> => ev(`window.__sent.filter((m)=>m.type===${J(type)})`);
 // Clicks the first element the selector finds; FAILS when it finds none, so a renamed control can never pass silently.
 export async function click(ev: Page["ev"], selector: string, focusFirst = false): Promise<void> {
   const found = await ev(`(()=>{const el=document.querySelector(${J(selector)});if(!el)return false;${focusFirst ? "el.focus();" : ""}el.click();return true})()`);
   assert.equal(found, true, `the control ${selector} was found`);
-}
-// Opens Settings on the selected tab and waits for the crew editor's seat rows.
-export async function openEditor(ev: Page["ev"], waitFor: Page["waitFor"]): Promise<void> {
-  await click(ev, "#setBtn");
-  await waitFor(`document.querySelectorAll(${J(`${ED} [data-se-row]`)}).length>0`, "the crew editor is drawn in Settings");
-}
-// Selects a tab through the page's own tab strip (Settings closed first) and opens the editor on it.
-export async function openTab(ev: Page["ev"], waitFor: Page["waitFor"], tabId: string): Promise<void> {
-  await ev(`(()=>{const close=document.querySelector("#setModal:not([hidden]) [data-close]");close?.click();return true})()`);
-  await click(ev, `#tabs [role=tab][data-tab-id="${tabId}"]`);
-  await waitFor(`document.querySelector('#tabs [role=tab][aria-selected="true"]')?.dataset.tabId===${J(tabId)}`, `the tab ${tabId} is shown`);
-  await openEditor(ev, waitFor);
-}
-// The slots of the crew list, top to bottom.
-export const rowSlots = (ev: Page["ev"]): Promise<string[]> => ev(`[...document.querySelectorAll(${J(`${ED} [data-se-row]`)})].map((el)=>el.dataset.seRow)`);
-// Opens a seat's card (its row is a toggle, so an open card is left open).
-export async function openSeat(ev: Page["ev"], slot: string): Promise<void> {
-  if (await ev(`Boolean(document.querySelector(${J(`${ED} [data-se-card="${slot}"]`)}))`)) return;
-  await click(ev, `${ED} [data-se-row="${slot}"]`);
-  assert.equal(await ev(`Boolean(document.querySelector(${J(`${ED} [data-se-card="${slot}"]`)}))`), true, `the card of ${slot} opened`);
-}
-// Picks a role from a seat's role list (null = Custom...), the way a click does.
-export async function pickRole(ev: Page["ev"], slot: string, role: string | null): Promise<void> {
-  await openSeat(ev, slot);
-  await click(ev, `${ED} [data-se-role="${slot}"]`);
-  await click(ev, role === null ? `${ED} [data-se-rolemenu="${slot}"] [data-se-custom-role]` : `${ED} [data-se-rolemenu="${slot}"] [data-se-pick-role="${role}"]`);
-}
-// Adds a seat with "Add a seat" and returns its slot (the card opens on it).
-export async function addSeat(ev: Page["ev"]): Promise<string> {
-  const before = await rowSlots(ev);
-  await click(ev, `${ED} [data-se-add]`);
-  const slot = (await rowSlots(ev)).find((item) => !before.includes(item));
-  assert.ok(slot, "a new row was added");
-  return slot!;
 }
 export const bodyTop = (ev: Page["ev"]): Promise<number> => ev(`document.querySelector("#setBody").scrollTop`);
 // The server's state for one tab, changed by `change` (page code on `tab`), delivered like a broadcast.
@@ -251,4 +242,17 @@ export const deliverTab = (ev: Page["ev"], tabId: string, change: string): Promi
 export async function setValue(ev: Page["ev"], selector: string, value: string): Promise<void> {
   const found = await ev(`(()=>{const el=document.querySelector(${J(selector)});if(!el)return false;el.focus();el.value=${J(value)};el.dispatchEvent(new Event("input",{bubbles:true}));el.dispatchEvent(new Event("change",{bubbles:true}));return true})()`);
   assert.equal(found, true, `the field ${selector} was found`);
+}
+
+// ---- Pack 26 (fixed crew) helpers ----
+// One message delivered to the page as the server would send it (a fake-socket page only).
+export const deliver = (ev: Page["ev"], message: unknown): Promise<boolean> => ev(`(()=>{__ccDeliver(${J(message)});return true})()`);
+// A state built from the server's own one, changed by `change` (page code on `state`), delivered and kept as the seed for reconnects.
+export const deliverState = (ev: Page["ev"], state: unknown, change = ""): Promise<boolean> => ev(`(()=>{const state=${J(state)};state.selectedTabId=window.__ccSeed.selectedTabId;${change};window.__ccSeed=state;__ccDeliver({...structuredClone(state),type:"state"});return true})()`);
+const KEYS: Record<string, [string, number, string?]> = { Tab: ["Tab", 9], Enter: ["Enter", 13, "\r"], " ": ["Space", 32, " "], Escape: ["Escape", 27] };
+// A real key press through DevTools (keyDown with its text, then keyUp), Shift held when asked.
+export async function press(page: Page["page"], key: keyof typeof KEYS, shift = false): Promise<void> {
+  const [code, vk, text] = KEYS[key], base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: shift ? 8 : 0 };
+  await page("Input.dispatchKeyEvent", { ...base, type: text ? "keyDown" : "rawKeyDown", ...(text ? { text } : {}) });
+  await page("Input.dispatchKeyEvent", { ...base, type: "keyUp" });
 }

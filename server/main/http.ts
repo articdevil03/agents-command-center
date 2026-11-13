@@ -8,9 +8,8 @@ import { logsDir } from "../runner.ts";
 import { isAllowedOrigin, isAllowedHost, isWithinDir, hasValidAppKey } from "../security.ts";
 import { listSeatRuns, readTail, parseOutcome, HISTORY_FULL_MAX_BYTES, type HistoryEntry, type Outcome } from "../history.ts";
 import { isSafeRequestId } from "../chat-store.ts";
-import { pruneAvatars } from "../settings.ts";
 import {
-  FILE_EXTENSIONS, FILE_MAX_BYTES, IMAGE_MAX_BYTES, avatarDir, dataRoot, describeError, leaderBridge, publicDir, scratchDir, settingsService, workspaces,
+  FILE_EXTENSIONS, FILE_MAX_BYTES, IMAGE_MAX_BYTES, avatarDir, dataRoot, describeError, leaderBridge, publicDir, scratchDir, settingsService,
 } from "./state.ts";
 import { inAvatars, inScratch } from "./uploads.ts";
 
@@ -75,7 +74,7 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
   const headerRequestId = req.headers["x-request-id"];
   const uploadRequestId = typeof headerRequestId === "string" && isSafeRequestId(headerRequestId) ? headerRequestId : null;
   const uploadPath = (req.url ?? "/").split("?", 1)[0];
-  const isUploadRoute = req.method === "POST" && ["/api/paste-image", "/api/avatar", "/api/paste-file"].includes(uploadPath);
+  const isUploadRoute = req.method === "POST" && ["/api/paste-image", "/api/paste-file"].includes(uploadPath);
   const refuseUpload = (status: number, message: string): void => {
     // A refused host or origin is not a real upload: it must not write status into state.
     if (isUploadRoute && uploadRequestId) {
@@ -123,26 +122,6 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
       const path = join(imageScratchDir, `paste-${randomUUID()}.${extension}`);
       await writeFile(path, body, { flag: "wx" });
       endUpload(200, "Image uploaded", { path });
-    } catch (err) { const message = describeError(err); endUpload(message === "request body too large" ? 413 : 400, message); }
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/api/avatar") {
-    if (!beginUpload()) return;
-    const mime = req.headers["content-type"]?.split(";")[0].trim() ?? "";
-    const extension = IMAGE_MIME_TO_EXT[mime as keyof typeof IMAGE_MIME_TO_EXT];
-    if (!extension) { endUpload(415, "unsupported image type"); return; }
-    try {
-      const body = await readBody(req, IMAGE_MAX_BYTES);
-      if (!body.length) { endUpload(400, "image body is empty"); return; }
-      const filename = `avatar-${randomUUID()}.${extension}`;
-      const avatarDataRoot = realpathSync(dataRoot);
-      const realAvatarDir = realpathSync(avatarDir);
-      if (!isWithinDir(realAvatarDir, avatarDataRoot)) throw new Error("avatar directory escaped data root");
-      const diskPath = join(realAvatarDir, filename);
-      await writeFile(diskPath, body, { flag: "wx" });
-      // Seat pictures are the only references (settings keep none); pictures no seat uses any more are deleted, exact files only.
-      pruneAvatars(realAvatarDir, workspaces.projects.flatMap((project) => project.tabs.flatMap((tab) => tab.crew.flatMap((seat) => seat.pic ? [seat.pic] : []))), filename);
-      endUpload(200, "Avatar uploaded", { path: `/api/avatar/${filename}` });
     } catch (err) { const message = describeError(err); endUpload(message === "request body too large" ? 413 : 400, message); }
     return;
   }

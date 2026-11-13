@@ -3,7 +3,7 @@
 .pop.on{opacity:1;transform:none;pointer-events:auto}
 .pop.right{transform:translateX(-4px) scale(.98);transform-origin:left top}
 .pop.right.on{transform:none}
-#projPop,#ctxPop{width:280px} #setupPop{width:380px} #permPop{width:320px} #inboxPop{width:420px}
+#projPop,#ctxPop{width:280px} #permPop{width:320px} #inboxPop{width:420px}
 /* the completion sound popover: on/off, a volume slider, and Test at the slider's level */
 #soundPop{width:296px;padding:6px 6px 10px}
 .sndrow{display:flex;align-items:center;gap:12px;padding:10px 10px 12px}
@@ -39,9 +39,6 @@
 .opt .nm small{font-size:12px;color:var(--text-3);overflow-wrap:anywhere}
 .opt .danger{color:var(--danger-text)}
 .opt .tick{opacity:0;color:var(--text);flex:none} .opt[aria-pressed="true"] .tick{opacity:1}
-.opt .faces{display:flex;flex:none}
-.opt .faces img{width:18px;height:18px;border-radius:5px;margin-left:-4px;box-shadow:0 0 0 2px var(--sf)}
-.opt .faces img:first-child{margin-left:0}
 .hint{padding:6px 10px 8px;font-size:12px;color:var(--text-3);overflow-wrap:anywhere}
 .hr{height:1px;background:var(--line);margin:4px 6px}
 .sc{padding:10px 10px 6px;display:grid;gap:12px;min-width:0}
@@ -50,8 +47,6 @@
 .sc .top b{font-size:17px;font-weight:600;display:flex;align-items:center;gap:6px;min-width:0}
 .sc .top b span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sc .top small{color:var(--text-2);font-size:13px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pen{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;color:var(--text-3);flex:none}
-.pen:hover{background:var(--sf2);color:var(--text)}
 .sc .now{display:flex;align-items:center;gap:8px;padding:9px 12px;border-radius:11px;background:var(--tb);font-size:13.5px;font-weight:500;min-width:0}
 .sc .now span{overflow-wrap:anywhere;min-width:0}
 .sc .now.working{background:var(--t-green);color:var(--working-text)} .sc .now.waiting,.sc .now.stalled{background:var(--t-orange);color:var(--warn-text)} .sc .now.stopped,.sc .now.failed{background:var(--t-red);color:var(--danger-text)}
@@ -78,9 +73,9 @@
 button.rowb:hover:not(:disabled){background:var(--sf2)}
 .sc .acts{display:flex;gap:8px;flex-wrap:wrap}
 .sc .acts .btn{flex:1}
-.effort,.kseg{display:flex;gap:2px;padding:3px;margin:4px 6px 6px;background:var(--tb);border-radius:10px}
-.effort button,.kseg button{flex:1;padding:6px 0;border-radius:7px;font-size:12.5px;color:var(--text-2);min-width:0}
-.effort button[aria-checked="true"],.kseg button[aria-checked="true"]{background:var(--sf);color:var(--text);box-shadow:var(--card)}
+.effort{display:flex;gap:2px;padding:3px;margin:4px 6px 6px;background:var(--tb);border-radius:10px}
+.effort button{flex:1;padding:6px 0;border-radius:7px;font-size:12.5px;color:var(--text-2);min-width:0}
+.effort button[aria-checked="true"]{background:var(--sf);color:var(--text);box-shadow:var(--card)}
 .msearch{padding:6px 6px 2px}
 .mscroll{max-height:280px;overflow:auto}
 .nores{padding:10px;font-size:12.5px;color:var(--text-3)}
@@ -91,7 +86,7 @@ button.rowb:hover:not(:disabled){background:var(--sf2)}
 .ncard p{margin:0;color:var(--text-2);font-size:13px;overflow-wrap:anywhere}
 .ncard code{font-family:var(--mono);font-size:12px;color:var(--text);overflow-wrap:anywhere;white-space:pre-wrap;max-height:30vh;overflow:auto;display:block}
 .ncard .acts{display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;align-items:center;min-width:0}
-.ncard.look,.ncard.apx{background:var(--t-orange)}
+.ncard.apx{background:var(--t-orange)}
 .ncard.bad{background:var(--t-red)}
 .ncard.sent,.ncard.resolved{background:none;box-shadow:inset 0 0 0 1px var(--line)}
 .ncard .st,.action-status{font-size:12px;color:var(--text-2);min-width:0;overflow-wrap:anywhere}
@@ -249,7 +244,6 @@ textarea.inp,.field textarea{resize:vertical;min-height:84px;line-height:1.5}
 @media (max-width:1279px){
   #main.side{grid-template-columns:minmax(0,1fr)}
   #side{position:absolute;top:0;right:16px;bottom:16px;width:var(--sidew,320px);max-width:calc(100% - 32px);z-index:20;background:var(--cv);border-radius:20px;padding:0 8px 8px;box-shadow:var(--lift)}
-  #statusBtn .stepn .sl{display:none}
   .savest .sw2{display:none}
 }
 @media (max-width:1180px){

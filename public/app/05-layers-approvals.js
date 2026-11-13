@@ -57,7 +57,7 @@
   }
 
   // ---------- layers: a modal (Settings, a dialog) may carry one popover or one confirm dialog on top; closing hands focus back ----------
-  const FOCUS_ATTRS = ["data-seat-id", "data-seat-pic", "data-seat-open", "data-tab-id", "data-project-id", "data-project-menu", "data-seat-more", "data-run-view", "data-run-tab", "data-history-timestamp", "data-session-action", "data-settings-model", "data-settings-advisor", "data-setting-action", "data-focus-key", "data-l", "data-theme-toggle", "data-wait-approval", "data-wait-tab", "data-request-action", "data-process-action", "data-avatar", "data-model", "data-effort", "data-kind", "data-template", "data-use-template", "data-use-saved", "data-fixer", "data-permission-mode", "data-back-history", "data-chat-live", "data-run-seat", "data-stop-seat", "data-stop-run", "data-seat-model", "data-seat-advisor", "data-seat-watch", "data-seat-chat", "data-seat-history", "data-seat-rename", "data-seat-picture", "data-seat-unblock", "data-open-screenshots", "data-confirm-unblock", "data-confirm-release", "data-unblock", "data-release", "data-retry-kill", "data-ack-notice", "data-dismiss-run", "data-open-seat"];
+  const FOCUS_ATTRS = ["data-seat-id", "data-seat-pic", "data-seat-open", "data-tab-id", "data-project-id", "data-project-menu", "data-seat-more", "data-run-view", "data-run-tab", "data-history-timestamp", "data-session-action", "data-setting-action", "data-focus-key", "data-l", "data-theme-toggle", "data-wait-approval", "data-request-action", "data-avatar", "data-model", "data-effort", "data-permission-mode", "data-back-history", "data-chat-live", "data-run-seat", "data-stop-seat", "data-stop-run", "data-seat-watch", "data-seat-chat", "data-seat-history", "data-seat-unblock", "data-open-screenshots", "data-confirm-unblock", "data-confirm-release", "data-unblock", "data-release", "data-retry-kill", "data-ack-notice", "data-dismiss-run", "data-open-seat"];
   function focusKeyOf(el) {
     if (!el || el === document.body || !el.getAttribute) return null;
     if (el.id) return `#${CSS.escape(el.id)}`;
@@ -111,7 +111,6 @@
         }
       }
       if (!layerStack.some((item) => item.modal)) { const scrim = $("scrim"); scrim.classList.remove("on"); scrim.hidden = true; scrim.setAttribute("aria-hidden", "true"); }
-      if (layer.id === "avModal") avatarTarget = null;
       if (layer.id === "setModal") settingsSubmits.clear();
       if (layer.id === "confirmModal") { const cancelled = confirmCancelled; confirmCallback = null; confirmCancelled = null; cancelled?.(); }
       if (layer.id === "renameModal") renameCallback = null;
@@ -120,7 +119,6 @@
         const top = layerStack.at(-1)?.el;
         if (top) top.focus({ preventScroll: true });
       }
-      markCrewSwitcher();
     }
   }
   function closeLayer(restore = true) {
@@ -154,7 +152,6 @@
     // Opened from a control in Settings: closeScrolledMenus closes it once Settings scrolls away from here.
     pop._settingsTop = anchor?.closest?.("#setBody") ? $("setBody").scrollTop : null;
     placePopover(pop);
-    markCrewSwitcher();
   }
   // A menu hangs from its control: when Settings scrolls (by hand or to another section) it closes instead of staying behind, cut off from
   // the seat it was for. A redraw that puts the scroll back where it was moves nothing, so it keeps the menu.
@@ -184,7 +181,7 @@
     pop.style.top = `${below >= above ? rect.bottom + 8 : 12}px`;
   }
   function closePopovers() {
-    for (const id of ["pop", "projPop", "ctxPop", "setupPop", "inboxPop", "seatPop", "permPop", "soundPop"]) {
+    for (const id of ["pop", "projPop", "ctxPop", "inboxPop", "seatPop", "permPop", "soundPop"]) {
       const pop = $(id); if (!pop.hidden) setLayer(pop, false);
     }
   }
@@ -269,7 +266,7 @@
     const who = cap(asker?.name ?? leaderName(tab));
     if (["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(tool)) return `${who} wants to edit a file`;
     if (["Bash", "PowerShell"].includes(tool)) return `${who} wants to run a command`;
-    if (tool.startsWith("launch:")) return `${who} wants to launch ${tool.slice(7)}`;
+    if (tool === "fixed-action") return `${who} wants to start fixed work`;
     return `${who} wants to use ${tool}`;
   }
   function renderToolApproval() {

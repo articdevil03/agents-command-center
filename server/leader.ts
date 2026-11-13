@@ -29,13 +29,11 @@ export type LeaderOptions = {
   canUseTool: Options["canUseTool"];
 };
 
-// The leader's own in-process tools (see server/leader-tools.ts) -- omitted
-// entirely for the startup health check, which never calls createLeader with
-// a third argument, so that throwaway "reply OK" probe never even sees them.
+// The leader's own in-process tools (see server/leader-tools.ts).
 export type LeaderTools = { mcpServers: Record<string, McpServerConfig>; allowedTools: string[] };
 
-// Both the streaming leader and startup health check use these SDK options.
-// Neither child may inherit the app's private data root.
+// The streaming leader uses these SDK options.
+// Its child may not inherit the app's private data root.
 // advisor: the Claude model passed as --advisor; it is read when the session starts and only with the native CLI.
 export type LeaderSettings = { model: string; effort: string; advisor?: string };
 // holdsPlan: the tab is meant to be in Plan. An approved ExitPlanMode puts the live session back in its earlier mode (edits allowed), which must not read as "the user allowed edits".
@@ -301,8 +299,8 @@ export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: s
   // "Only available in streaming input mode", which this leader always is).
   // A stopped/dead handle is a no-op: a fresh leader picks up seat.model on
   // its own next createLeader() call, so there is nothing live left to change.
-  // Resolves true/false rather than swallowing the outcome: the caller (the
-  // "updateSeat" WS handler) must know whether the switch actually applied
+  // Resolves true/false rather than swallowing the outcome: the caller
+  // that applies a model change must know whether the switch actually applied
   // before it ever persists or broadcasts the new model -- a picker that
   // claims a change that didn't happen is worse than no control at all.
   function setModel(model: string): Promise<boolean> {
@@ -312,7 +310,7 @@ export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: s
         modelId = model;
         return true;
       },
-      // The caller (updateSeat) reports a failed change. A turn may be running: reporting it as the turn's error would end that answer early and attach its late text to the next message.
+      // The caller reports a failed change. A turn may be running: reporting it as the turn's error would end that answer early and attach its late text to the next message.
       () => false
     );
   }

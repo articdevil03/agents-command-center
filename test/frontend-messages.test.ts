@@ -17,22 +17,19 @@ test("a late 'saved' clears the earlier Save failed card, notice and pending fla
 test("approvals already waiting when the page loads never ring; a new one rings once, named after the leader's current name", () => {
   const h = pageHarness();
   const approval = (id: string) => ({ approvalId: id, tool: "Bash", summary: `echo ${id}`, createdAt: 1 });
-  h.api.onMessage(h.state({ pendingApprovals: [approval("a")], processState: { approval: { state: "pending" } } }));
-  assert.deepEqual(h.notifications, [], "the first state after a load is not news: an approval and a look already waiting do not ring");
-  h.api.onMessage(h.state({ pendingApprovals: [approval("a"), approval("b")], processState: { approval: { state: "pending" } } }));
+  h.api.onMessage(h.state({ pendingApprovals: [approval("a")] }));
+  assert.deepEqual(h.notifications, [], "the first state after a load is not news: an approval already waiting does not ring");
+  h.api.onMessage(h.state({ pendingApprovals: [approval("a"), approval("b")] }));
   assert.deepEqual(h.notifications.map((item) => item.title), ["Atlas needs your answer"], "a new approval rings once");
-  h.api.onMessage(h.state({ pendingApprovals: [approval("a"), approval("b")], processState: { approval: { state: "pending" } } }));
+  h.api.onMessage(h.state({ pendingApprovals: [approval("a"), approval("b")] }));
   assert.equal(h.notifications.length, 1, "the same state again rings nothing");
-  const renamed: any = h.state({ pendingApprovals: [approval("a"), approval("b"), approval("c")], processState: { approval: { state: "pending" } } });
+  const renamed: any = h.state({ pendingApprovals: [approval("a"), approval("b"), approval("c")] });
   renamed.projects[0].tabs[0].crew[0].name = "Rowan";
   h.api.onMessage(renamed);
   assert.deepEqual(h.notifications.map((item) => item.title), ["Atlas needs your answer", "Rowan needs your answer"], "a renamed leader is called by its new name");
-  h.api.onMessage(h.state({ processState: { approval: { state: "none" } } }));
-  h.api.onMessage(h.state({ processState: { approval: { state: "pending" } } }));
-  assert.equal(h.notifications.at(-1)?.title, "Your look is needed", "a look that becomes pending after the page loaded still rings");
   const named: any = h.tab(); named.crew[0].name = "Rowan";
   assert.equal(h.api.approvalTitle("Edit", named), "Rowan wants to edit a file", "the approval title uses the leader's current name");
-  assert.equal(h.api.approvalTitle("launch:Sonny", named), "Rowan wants to launch Sonny");
+  assert.equal(h.api.approvalTitle("fixed-action", named), "Rowan wants to start fixed work", "the fixed-action approval title is exactly this text");
 });
 
 test("closing the app also warns about work that belongs to no tab (a Settings action, an upload), and alone it holds the close", () => {
@@ -56,6 +53,13 @@ test("closing the app also warns about work that belongs to no tab (a Settings a
 test("a tab whose saved chat cannot be read says why its chat is empty, in the existing failed-status look", () => {
   const h = pageHarness();
   const withProblem: any = h.state({ chatProblem: "Unexpected token < in <b>JSON" });
+  const panel = h.node("fixedView");
+  h.node("view").append(panel);
+  const descriptor = Object.getOwnPropertyDescriptor(panel, "parentNode")!;
+  let parent = panel.parentNode, disconnections = 0;
+  Object.defineProperty(panel, "parentNode", { configurable: true, get: () => parent,
+    set: value => { if (parent && value === null) disconnections++; parent = value; } });
+  try {
   h.api.onMessage(withProblem);
   h.api.renderChat(withProblem.projects[0].tabs[0]);
   const html = h.node("view").innerHTML as string;
@@ -65,6 +69,9 @@ test("a tab whose saved chat cannot be read says why its chat is empty, in the e
   h.api.onMessage(fine);
   h.api.renderChat(fine.projects[0].tabs[0]);
   assert.doesNotMatch(h.node("view").innerHTML as string, /data-chat-problem/, "a readable chat shows no such line");
+  assert.equal(h.node("view").children[0], panel, "the exact fixed panel survives both chat repaints");
+  assert.equal(disconnections, 0, "the panel never disconnects during either repaint");
+  } finally { Object.defineProperty(panel, "parentNode", { ...descriptor, value: parent }); }
 });
 
 test("a worker launch never rings or sends a notice; a finish or failure says which run and how it ended", () => {
@@ -163,46 +170,6 @@ test("a Stop, a held removal and a Stop all that were sent but never answered ar
   assert.equal(again.api.snap().pendingActions.size, 0);
 });
 
-test("a step button stays Sending until the step moves, so a state already on its way cannot turn it back on and skip a step", async () => {
-  const h = pageHarness();
-  const steps = (current: number) => ({ derived: { stepBar: [{ stepId: "brief", state: current === 0 ? "current" : "done" }, { stepId: "build", state: current === 1 ? "current" : "todo" }, { stepId: "ship", state: "todo" }], busy: false } });
-  h.api.onMessage(h.state(steps(0)));
-  const socket = await h.open();
-  const tab = h.state(steps(0)).projects[0].tabs[0];
-  h.api.runProcessAction(tab, "advanceStep");
-  h.api.onMessage(h.state(steps(0))); // a state that was already on its way
-  h.api.runProcessAction(tab, "advanceStep");
-  assert.equal(socket.sent.filter((message: any) => message.type === "advanceStep").length, 1, "the second click is ignored: the server has not acted yet");
-  h.api.onMessage(h.state(steps(1)));
-  assert.equal(h.api.snap().processPending.has("t1"), false, "the step moved: the button is free again");
-  await new Promise((resolve) => setTimeout(resolve, 650)); // the next step's button ignores clicks for 600 ms after the step changes
-  h.api.runProcessAction(h.state(steps(1)).projects[0].tabs[0], "advanceStep");
-  assert.equal(h.api.snap().processPending.has("t1"), true);
-  h.api.onMessage({ type: "error", action: "advanceStep", tabId: "t1", message: "no" });
-  assert.equal(h.api.snap().processPending.has("t1"), false, "a refusal frees it too");
-});
-
-test("round 1 fix 17: a step button waits at most 5 s for a state; with no further state it is freed and redrawn", async () => {
-  const h = pageHarness();
-  h.api.onMessage(h.state({ derived: { stepBar: [{ stepId: "brief", state: "current" }, { stepId: "build", state: "todo" }], busy: false } }));
-  const socket = await h.open();
-  const tab = h.state({ derived: { stepBar: [{ stepId: "brief", state: "current" }, { stepId: "build", state: "todo" }], busy: false } }).projects[0].tabs[0];
-  h.api.runProcessAction(tab, "advanceStep");
-  assert.equal(socket.sent.filter((message: any) => message.type === "advanceStep").length, 1);
-  assert.equal(h.api.snap().processPending.has("t1"), true, "Sending while the server has not answered");
-  const timer = h.timers.filter((entry) => entry.ms === 5_000 && !entry.cleared).at(-1);
-  assert.ok(timer, "a 5 s timer was armed when the action was sent");
-  timer.fn(); // five seconds pass with no state message at all
-  assert.equal(h.api.snap().processPending.has("t1"), false, "the button is usable again");
-  // a timer left over from an earlier click never frees a newer one
-  h.api.runProcessAction(tab, "advanceStep");
-  await new Promise((resolve) => setTimeout(resolve, 650));
-  h.api.onMessage({ type: "error", action: "advanceStep", tabId: "t1", message: "no" }); // the answer came first
-  h.api.runProcessAction(tab, "advanceStep");
-  timer.fn();
-  assert.equal(h.api.snap().processPending.has("t1"), true, "the old timer does not free the newer click");
-});
-
 test("round 1 fix 16: after pictures X, Y, X again, a message drawn earlier never shows the revoked picture URL", () => {
   const h = pageHarness();
   const png = (n: number) => `data:image/png;base64,${Buffer.from(`not really a picture ${n}`).toString("base64")}`;
@@ -233,22 +200,14 @@ test("round 1 fix 18: Clear on a tab whose chat cannot be read says it cannot be
   assert.match(menus.at(-1)![0].hint, /You can undo for 10 seconds/, "an ordinary tab still gets the Undo hint");
 });
 
-test("choosing who fixes a round stays Sending until the server's choice shows, and a Stop all nobody answered is forgotten by a drop", async () => {
+test("a Stop all nobody answered is forgotten by a drop (Stop all stays tracked until accepted or the connection closes)", async () => {
   const h = pageHarness();
-  const maker = (slot: string) => ({ processState: { approval: { state: "none" }, selectedFixer: slot } });
-  h.api.onMessage(h.state(maker("socialMedia")));
-  const socket = await h.open();
-  const tab = h.state(maker("socialMedia")).projects[0].tabs[0];
-  h.api.runProcessAction(tab, "selectFixer", { slot: "image" });
-  h.api.onMessage(h.state(maker("socialMedia"))); // a state already on its way: the choice has not been applied yet
-  h.api.runProcessAction(tab, "selectFixer", { slot: "videoAndMotion" });
-  assert.equal(socket.sent.filter((message: any) => message.type === "selectFixer").length, 1, "the second pick waits for the first to show");
-  h.api.onMessage(h.state(maker("image")));
-  assert.equal(h.api.snap().processPending.has("t1"), false, "the server's choice showed: free again");
-  // Stop all: sent, never answered, then the connection drops
   h.api.onMessage(h.state({ runs: [h.run("r1")] }));
+  const socket = await h.open();
   h.api.stopAll();
+  assert.deepEqual(socket.sent.filter((message: any) => message.type === "stopAll"), [{ type: "stopAll" }], "Stop all sends its own stopAll message");
   assert.ok(h.api.snap().stopAllTrack, "Stop all is being tracked");
+  assert.equal(h.api.snap().stopStates.get("r1"), "requested", "the run shows Stop requested, not exited");
   socket.close();
   assert.equal(h.api.snap().stopAllTrack, null, "a Stop all that was never accepted is forgotten when the connection drops");
 });

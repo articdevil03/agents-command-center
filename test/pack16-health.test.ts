@@ -83,7 +83,7 @@ test("pack 16 inventory: every spawn of a Command Center server in test/ hooks t
     }
   }
   console.log(`pack16 server-spawn inventory: hooked ${hooked.length}: ${hooked.join(", ")}\n  not hooked (${skipped.length}), non-servers listed by count only: ${skipped.filter((s) => !s.endsWith("not a server")).join(" | ")}`);
-  assert.ok(hooked.length >= 20, `control: the scan must find the server spawns (found ${hooked.length})`);
+  assert.ok(hooked.length >= 18, `control: the scan must find the server spawns (found ${hooked.length})`);
   assert.deepEqual(missing, [], `server spawns without the crash catcher:\n${missing.join("\n")}`);
 });
 

@@ -2,28 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { stripTypeScriptTypes } from "node:module";
-import { runInNewContext } from "node:vm";
-import { resolveDataRoot } from "../server/data-root.ts";
-import * as processEngine from "../server/process.ts";
-const { getProcessDefinition } = processEngine;
 import { tempRoot } from "./temp-root.ts";
+import { fixedWorkspaces, fixedProject, launchConfig as launch } from "./fixed-server-fixture.ts";
 
-function launch(copy: string, data: string, overrides = {}) {
-  // config.ts publishes through safe-file.ts; both are evaluated in one context so a boundary override reaches the write.
-  const source = ["safe-file", "config-files", "config-migrate", "config-acp", "config-prefs", "config-setups", "config"].map((name) => stripTypeScriptTypes(fs.readFileSync(`server/${name}.ts`, "utf8"))
-    .replace(/^(?:import .*|export (?:\{[^}]*\}|\*) from .*);\r?$/gm, "").replaceAll("import.meta.url", '"unused"').replaceAll("export ", "")).join("\n");
-  return runInNewContext(`${source}; ({ workspacesPath, projectsPath, writeClientPrefs, readClientPrefs })`, {
-    ...fs, ...path, ...overrides, resolveDataRoot, ...processEngine, console: { error() {}, log() {} },
-    fileURLToPath: () => path.join(copy, "server/config.ts"),
-    process: { env: { CC_DATA_DIR: data } },
-  });
-}
-
-// A small valid workspaces file of the test's own: the copies of config/ never carry the live one, so a test that needs the file there writes it.
+// A small valid fixed workspaces file of the test's own: the copies of config/ never carry the live one, so a test that needs the file there writes it.
 function writeWorkspaceFixture(file: string, folder: string): void {
-  const crew = getProcessDefinition("dev", "main").seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort }));
-  fs.writeFileSync(file, JSON.stringify({ projects: [{ id: "fixture", name: "Fixture", folder, tabs: [{ id: "fixture-development", name: "Development", kind: "dev", process: "main", folder, crew }] }] }));
+  fs.writeFileSync(file, JSON.stringify(fixedWorkspaces([fixedProject("fixture", folder)])));
 }
 
 test("preference writer stages complete data; partial write and failed publication preserve the previous file", () => {
@@ -126,38 +110,9 @@ test("config startup: publication errors and directory collisions propagate and 
   }
   const collided = tempRoot(["server", "config"]), collidedData = tempRoot();
   fs.mkdirSync(path.join(collidedData, "config/workspaces.json"), { recursive: true });
-  assert.throws(() => launch(collided, collidedData), /not a file/);
+  // Recovery reads the destination first: a folder where the file belongs blocks the workspace (nothing is published over it) instead of failing the launch.
+  const blocked = launch(collided, collidedData);
+  assert.equal(blocked.workspaceRecovery().blocked, true);
+  assert.equal(fs.statSync(path.join(collidedData, "config/workspaces.json")).isDirectory(), true, "the colliding folder is left untouched");
+  assert.deepEqual(fs.readdirSync(path.join(collidedData, "config/workspaces.json")), []);
 });
-
-for (const shape of ["one project", "multiple projects"]) {
-  test(`workspaces migration: ${shape} creates one Our process Development tab per project from projects.json only`, () => {
-    const copy = tempRoot(["server", "config"]), data = tempRoot(["config"]);
-    const projects = shape === "one project"
-      ? [{ id: "alpha", name: "Alpha", dir: "C:/work/alpha" }]
-      : [{ id: "alpha", name: "Alpha", dir: "C:/work/alpha" }, { id: "beta", name: "Beta", dir: "C:/work/beta" }];
-    const projectsFile = path.join(data, "config/projects.json");
-    const seatsFile = path.join(data, "config/seats.json");
-    const undergroundFile = path.join(data, "config/underground.json");
-    fs.writeFileSync(projectsFile, JSON.stringify(projects));
-    fs.rmSync(path.join(data, "config/workspaces.json"), { force: true });
-    fs.writeFileSync(seatsFile, '{"custom":"seat picks stay byte exact"}\n');
-    fs.writeFileSync(undergroundFile, '[{"custom":"old underground stays byte exact"}]\n');
-    const seatBytes = fs.readFileSync(seatsFile);
-    const undergroundBytes = fs.readFileSync(undergroundFile);
-    const loaded = launch(copy, data);
-    const migrated = JSON.parse(fs.readFileSync(loaded.workspacesPath, "utf8"));
-    assert.equal(migrated.projects.length, projects.length);
-    for (const [index, project] of migrated.projects.entries()) {
-      assert.equal(project.folder, projects[index].dir);
-      assert.equal(project.tabs.length, 1);
-      assert.equal(project.tabs[0].kind, "dev");
-      assert.equal(project.tabs[0].setupName, "Our process");
-      assert.equal("process" in project.tabs[0], false);
-      assert.equal(project.tabs[0].steps.length, 7);
-      assert.equal(project.tabs[0].folder, projects[index].dir);
-      assert.equal(project.tabs[0].id, `${projects[index].id}-development`);
-    }
-    assert.deepEqual(fs.readFileSync(seatsFile), seatBytes);
-    assert.deepEqual(fs.readFileSync(undergroundFile), undergroundBytes);
-  });
-}

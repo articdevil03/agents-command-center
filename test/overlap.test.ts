@@ -9,10 +9,9 @@ import http from "node:http";
 import { WebSocket } from "ws";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { keyedWsUrl } from "./temp-root.ts";
-import { getProcessDefinition } from "../server/process.ts";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 import { SERVER_START_MS } from "./server-start.ts";
-import { APP_KEY, CHROME, HOST, REPO, WIDTHS, bootstrap, buildSeed, chatMessages, delay, spaced, unbroken } from "./overlap-helpers.ts";
+import { APP_KEY, CHROME, HOST, PROJECT_TAB_COUNTS, REPO, WIDTHS, bootstrap, buildSeed, chatMessages, delay, fixedProjects, spaced, unbroken } from "./overlap-helpers.ts";
 import { chromeAudit, type Finding } from "./overlap-chrome.ts";
 
 function backendState(port: number): Promise<any> {
@@ -25,16 +24,16 @@ function backendState(port: number): Promise<any> {
   });
 }
 
-test("overlap audit: no visible text or control overlaps or is clipped, at 1600, 1280 and 1024, on every screen with long data", async (t) => {
+// One owned run for the full audit and the three focused proofs: the same fixture, server, Chrome and teardown. groups null = every state at every width.
+async function overlapRun(t: { skip: (message: string) => void }, groups: string[] | null, widths: number[]) {
   if (process.env.CC_SKIP_BROWSER === "1") { t.skip("CC_SKIP_BROWSER=1 was explicitly set"); return; }
   assert.ok(existsSync(CHROME), `Headless Chrome is required at ${CHROME}; set CC_SKIP_BROWSER=1 only when intentionally running without it`);
   const temp = mkdtempSync(join(tmpdir(), "cc-overlap-"));
   console.log(`OVERLAP_TEMP_ROOT: ${temp}`);
   const dataDir = join(temp, "data"); mkdirSync(join(dataDir, "config"), { recursive: true });
-  // Two projects of its own (the audit needs a second one); the server runs on this temp data root, never the repo's.
-  const crew = getProcessDefinition("dev", "main").seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort }));
-  const project = (id: string) => ({ id, name: id, folder: temp, tabs: [{ id: `${id}-dev`, name: "Development", kind: "dev", process: "main", folder: temp, crew }] });
-  writeFileSync(join(dataDir, "config", "workspaces.json"), JSON.stringify({ projects: [project("alpha"), project("beta")] }));
+  // Two fixed projects of its own (the audit needs a second one); the server runs on this temp data root, never the repo's.
+  const projects = fixedProjects(temp);
+  writeFileSync(join(dataDir, "config", "workspaces.json"), JSON.stringify({ projects }));
   const home = join(temp, "home"); mkdirSync(home, { recursive: true });
   const script = join(temp, "fake-cli-script.json");
   writeFileSync(script, JSON.stringify({ responses: {} }));
@@ -59,7 +58,11 @@ test("overlap audit: no visible text or control overlaps or is clipped, at 1600,
       server.once("exit", (code) => bad(new Error(`server exited early (${code}); output=${output}`)));
     });
     assert.notEqual(serverPort, 4317, "the test server must never use the real app's port");
-    const seed = buildSeed(await backendState(serverPort));
+    const base = await backendState(serverPort);
+    assert.deepEqual(base.projects.map((item: any) => [item.id, item.tabs.map((tab: any) => tab.id)]), projects.map((item) => [item.id, item.tabs.map((tab) => tab.id)]), "control: the server kept every seeded project and fixed tab id");
+    assert.deepEqual(base.projects.map((item: any) => item.tabs.length), Object.values(PROJECT_TAB_COUNTS), "control: twelve fixed tabs and one");
+    assert.ok(base.projects.every((item: any) => item.tabs.every((tab: any) => tab.fixedCrew && tab.processState?.tabId === tab.id)), "control: every tab is fixed and its own process owner");
+    const seed = buildSeed(base);
     const html = readFileSync(join(REPO, "public", "index.html"), "utf8").replace(/<link\b[^>]*https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>\s*/gi, "")
       .replace("script-src 'self'", "script-src 'self' 'unsafe-inline'") // the page's policy stays, except for the inline bootstrap injected here
       .replace("</head>", `<script>${bootstrap(seed, chatMessages())}</script>\n</head>`);
@@ -74,14 +77,14 @@ test("overlap audit: no visible text or control overlaps or is clipped, at 1600,
     await new Promise<void>((ok, bad) => { proxy!.once("error", bad); proxy!.listen(0, HOST, ok); });
     const proxyPort = (proxy.address() as { port: number }).port;
     const all: Finding[] = []; const inventory: string[] = [];
-    for (const width of WIDTHS) {
+    for (const width of widths) {
       const perWidth: string[] = [];
-      const { findings, errors } = await chromeAudit(proxyPort, join(temp, `chrome-${width}`), width, extraFiles, perWidth);
+      const { findings, errors } = await chromeAudit(proxyPort, join(temp, `chrome-${width}`), width, extraFiles, perWidth, groups);
       assert.deepEqual(errors, [], `page errors at ${width}px: ${JSON.stringify(errors)}`);
       console.log(`Overlap audit ${width}px checked ${perWidth.length} screens/states:\n  ${perWidth.join("\n  ")}`);
       inventory.push(...perWidth); all.push(...findings);
     }
-    assert.ok(inventory.length >= WIDTHS.length * 40, `audit checked ${inventory.length} screens/states`);
+    if (!groups) assert.ok(inventory.length >= WIDTHS.length * 40, `audit checked ${inventory.length} screens/states`);
     const unique = new Map<string, Finding & { widths: number[] }>();
     for (const item of all) {
       const key = `${item.state}|${item.type}|${item.a}|${item.b}`;
@@ -92,7 +95,7 @@ test("overlap audit: no visible text or control overlaps or is clipped, at 1600,
     const report = [...unique.values()].map((item) => `[${item.widths.join("/")}px] ${item.state}: ${item.type}: ${item.a} <-> ${item.b} (${item.detail})`);
     console.log(`Overlap audit findings: ${report.length}${report.length ? `\n  ${report.join("\n  ")}` : ""}`);
     assert.equal(report.length, 0, `overlaps or clipped text found:\n${report.join("\n")}`);
-    assert.ok(readdirSync(join(dataDir, "scratch")).length >= extraFiles.length, `the ${extraFiles.length} uploads landed in the temp data root: ${JSON.stringify(readdirSync(join(dataDir, "scratch")))}`);
+    if (!groups) assert.ok(readdirSync(join(dataDir, "scratch")).length >= extraFiles.length, `the ${extraFiles.length} uploads landed in the temp data root: ${JSON.stringify(readdirSync(join(dataDir, "scratch")))}`);
     assert.ok(existsSync(join(dataDir, "config", "workspaces.json")), "the server seeded its workspaces into the temp data root");
     assert.equal(repoScratchCount(), repoScratchBefore, "the repo's own scratch/ gained no files");
     assert.equal(readRepoWorkspaces(), repoWorkspacesBefore, "the repo's workspaces file is untouched");
@@ -104,4 +107,8 @@ test("overlap audit: no visible text or control overlaps or is clipped, at 1600,
       assert.ok(server.exitCode !== null || server.signalCode !== null, `server PID ${server.pid} exited after the overlap audit`);
     } finally { await removeWithRetry(temp); }
   }
-});
+}
+
+test("overlap audit: no visible text or control overlaps or is clipped, at 1600, 1280 and 1024, on every screen with long data", (t) => overlapRun(t, null, WIDTHS));
+// The focused proofs run only the states a guard owns, at 1024px (Settings owns the creation dialogs too: their position list sits in a .field box).
+for (const [name, groups] of [["Settings", ["settings", "creation"]], ["rail", ["rail"]], ["requests", ["requests"]]] as const) test(`overlap fixed ${name} proof`, (t) => overlapRun(t, [...groups], [1024]));

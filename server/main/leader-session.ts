@@ -5,23 +5,30 @@ import { leaderKindOf, type LeaderCallbacks, type LeaderHandle } from "../leader
 import { createAcpLeader } from "../leader-acp.ts";
 import { createCodexLeader } from "../leader-codex.ts";
 import { createOpencodeLeader } from "../leader-opencode.ts";
-import { buildLeaderToolSpecs, createLeaderTools, LEADER_ALLOWED_TOOLS, type LeaderToolDeps } from "../leader-tools.ts";
+import { buildLeaderToolSpecs, createLeaderTools, type LeaderToolDeps } from "../leader-tools.ts";
 import { addUsage, zeroUsage, bankUsage } from "../usage.ts";
 import { endTurnWindow, openUnpromptedReply, setLeaderActivity } from "./activity.ts";
 import { askLeaderApproval, denyLeaderApprovals } from "./approvals.ts";
 import { broadcast, broadcastUsageState, stateMessage } from "./broadcast.ts";
-import { baseToolDeps, openBridge, orchestratorOf } from "./crew-tools.ts";
-import { endWaitingLeaderJobs, gatedLeaderLaunch } from "./launch-gates.ts";
+import { openBridge } from "./crew-tools.ts";
 import { finishLeaderTurn, handleMissedSteer, noteUnansweredSteer, settleLeaderTurnWaiters } from "./leader-turn.ts";
 import {
   HOST, acpClis, acpSpawn, activeLeaderTurns, boundPort, chatStore, claudeCliPath, describeError, folderActivity, handoverReadTurns, lateSteers,
   leaderInstances, leaderJobs, leaderModels, leaderQuery, leaderSeats, leaderSpawn, leaderStartTimeoutMs, leaderTurnResolvers, leaderTurnTimeoutMs, leaderTurnText, leaderUsage,
-  leaders, pendingHandoverReads, queuedLeaderChanges, setAcpClis, steeredTurns,
+  leaders, pendingHandoverReads, setAcpClis, steeredTurns,
 } from "./state.ts";
 import { effectiveMode, leaderSeatOf, tabLocation } from "./tabs.ts";
+import { fixedCrewOf, isFixedTab } from "../fixed-crew/runtime.ts";
+import { DEFAULTS_VERSION } from "../fixed-crew/role-prompts.ts";
+import { fixedLeaderSettings } from "./state.ts";
+import { requireFixedAssignment } from "./fixed-task-launch.ts";
+import { fixedLeaderSpecs } from "./fixed-task-tools.ts";
+import { assertWorkspaceRecoveryReady } from "../fixed-crew/recovery.ts";
+import { fixedGitOperations } from "./fixed-task-actions.ts";
 
 // A leader that fails to start leaves nothing registered: no instance, no live seat settings, no bridge token.
 export function createTabLeader(tabId: string): LeaderHandle {
+  assertWorkspaceRecoveryReady("leader-launch");
   const revoke: { run: () => void } = { run: () => {} };
   try { return startTabLeader(tabId, revoke); }
   catch (err) {
@@ -78,14 +85,11 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
   leaderInstances.set(tabId, instance);
   const location = tabLocation(tabId);
   if (!location) throw new Error(`unknown tab: ${tabId}`);
+  if (isFixedTab(location.tab)) requireFixedAssignment(tabId, "leader");
   const lead = leaderSeatOf(location.tab);
   if (!lead) throw new Error(`tab "${tabId}" has no leader slot`);
-  const toolDeps: LeaderToolDeps = {
-    ...baseToolDeps(tabId, location.tab.name),
-    // Where another seat runs the process the leader only talks: it may launch that seat and nothing else.
-    onlyLaunchable: () => { const now = tabLocation(tabId); return now ? orchestratorOf(now.tab)?.slot : undefined; },
-    launch: (slot, brief) => gatedLeaderLaunch(tabId, instance, slot, brief),
-  };
+  // Every tab is a fixed crew; a tab without one has no tools to offer.
+  const toolDeps: LeaderToolDeps = { fixedSpecs: () => isFixedTab(location.tab) ? fixedLeaderSpecs(tabId, instance) : [], tabName: location.tab.name };
   // OpenCode reaches the crew tools through the bridge; its token lives exactly as long as this leader.
   let revokeBridge = () => {};
   revokeOnFailure.run = () => revokeBridge();
@@ -97,6 +101,7 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
   const opensOwnReplies = lead.cli === "claude";
   const callbacks: LeaderCallbacks = {
     onStop: () => {
+      fixedGitOperations.cancelTab(tabId, instance);
       denyLeaderApprovals(tabId, instance); revokeBridge();
       // Background jobs end with their leader. The Claude adapter calls onStop once more when its stream ends, which can be after a newer leader started: only the tab's own leader clears.
       if (current()) leaderJobs.delete(tabId);
@@ -165,16 +170,20 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
     leader = createOpencodeLeader(seat, location.tab.folder, callbacks, { bridge: { url: `http://${HOST}:${boundPort}/api/leader-mcp/${encodeURIComponent(tabId)}`, token: bridge.token }, mode, ask, savedAsks, spawnFn: leaderSpawn, startTimeoutMs: leaderStartTimeoutMs });
   } else {
     // The advisor is read when the Claude session starts: a change applies from the next session.
-    leader = createLeader({ ...seat, ...(lead.advisor ? { advisor: lead.advisor } : {}) }, location.tab.folder, claudeCliPath, callbacks, { mcpServers: { "tab-crew": createLeaderTools(toolDeps) }, allowedTools: LEADER_ALLOWED_TOOLS }, mode, ask, leaderQuery, savedAsks);
+    leader = createLeader({ ...seat, ...(lead.advisor ? { advisor: lead.advisor } : {}) }, location.tab.folder, claudeCliPath, callbacks, { mcpServers: { "tab-crew": createLeaderTools(toolDeps) }, allowedTools: buildLeaderToolSpecs(toolDeps).map((s) => `mcp__tab-crew__${s.name}`) }, mode, ask, leaderQuery, savedAsks);
   }
   leaders.set(tabId, leader);
+  if (isFixedTab(location.tab)) fixedLeaderSettings.set(tabId, fixedLeaderSignature(tabId));
   return leader;
+}
+export function fixedLeaderSignature(tabId: string): string {
+  const fixed = fixedCrewOf(tabLocation(tabId)!.tab);
+  return JSON.stringify({ assignment: fixed.preferences.leader.assignment, extras: fixed.roleExtras.leader ?? "", defaults: DEFAULTS_VERSION });
 }
 // A turn waiting for a retired leader to exit has a resolver but no leader yet: Stop all and shutdown must end it too.
 export function leadersAndWaitingTurns(): string[] { return [...new Set([...leaders.keys(), ...leaderTurnResolvers.keys()])]; }
 export function stopLeaderSession(tabId: string, clearUsage = false, interruptedTurnError?: string): void {
-  endWaitingLeaderJobs((job) => job.tabId === tabId, () => "the leader was stopped before it took the job");
-  queuedLeaderChanges.delete(tabId);
+  fixedGitOperations.cancelTab(tabId);
   // Handed-back steers still waiting behind the reply being stopped are dropped with it (the notice below says so); a failed finish below reads them first.
   const waitingBehind = (lateSteers.get(tabId)?.length ?? 0) > 0;
   denyLeaderApprovals(tabId);
@@ -219,17 +228,4 @@ export function stopLeaderSession(tabId: string, clearUsage = false, interrupted
     leaderModels.delete(tabId);
   }
   if (clearUsage) leaderUsage.delete(tabId);
-}
-// Runs when an answer ends: a model/effort change asked for while it was being written now reaches the live leader.
-export function applyQueuedLeaderChange(tabId: string): void {
-  const queued = queuedLeaderChanges.get(tabId);
-  if (!queued) return;
-  queuedLeaderChanges.delete(tabId);
-  // A leader that was replaced or died in the meantime has nothing to change: its successor reads the saved seat.
-  if (leaders.get(tabId) !== queued.liveLeader || queued.liveLeader.isDead()) return;
-  if (queued.effort !== undefined) { const liveSeat = leaderSeats.get(tabId); if (liveSeat) liveSeat.effort = queued.effort; }
-  if (queued.model === undefined) return;
-  void queued.liveLeader.setModel(queued.model)
-    .then((ok) => { if (!ok) broadcast({ type: "error", message: "leader model change failed: it applies from the next session" }); })
-    .catch((err) => broadcast({ type: "error", message: `leader model change failed: ${describeError(err)}` }));
 }

@@ -13,7 +13,6 @@ export const projectsPath = join(configDir, "projects.json");
 export const clientPrefsPath = join(configDir, "client-prefs.json");
 export const launchSafetyPath = join(configDir, "launch-safety.json");
 export const acpClisPath = join(configDir, "acp-clis.json");
-export const setupsPath = join(configDir, "setups.json");
 
 // Atomic publication means a racing server never observes a partial seed. A
 // hard link publishes without replacing a winner; ordinary preference writes

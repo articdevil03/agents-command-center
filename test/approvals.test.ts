@@ -52,11 +52,13 @@ test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS
   const temp = mkdtempSync(join(tmpdir(), "cc-approvals-"));
   const home = join(temp, "home"), data = join(temp, "data");
   mkdirSync(home); mkdirSync(join(data, "config"), { recursive: true });
-  // Use the production definition's entire roster, not a reduced fake state.
-  const { getProcessDefinition } = await import("../server/process.ts");
-  const tabs = ["approval-dev", "approval-other"].map((id) => ({ id, name: id, kind: "dev", process: "main", folder: temp, crew: getProcessDefinition("dev", "main").seats.map((s) => ({ slot: s.slotId, name: s.defaultName, cli: s.cli, model: s.model, effort: s.effort })) }));
-  const spare = { id: "approval-spare", name: "approval-spare", kind: "dev", process: "main", folder: temp, crew: getProcessDefinition("dev", "main").seats.map((s) => ({ slot: s.slotId, name: s.defaultName, cli: s.cli, model: s.model, effort: s.effort })) };
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "approval", name: "Approval", folder: temp, tabs }, { id: "approval-two", name: "Approval Two", folder: temp, tabs: [spare] }] }));
+  // The fixture loads config-files, which reads its data root once: it is imported here, after the temp root is in force above.
+  const { fixedProject, fixedTab, fixedWorkspaces } = await import("./fixed-server-fixture.ts");
+  // Saved fixed-crew tabs: the leader is the one seat the fake leader needs; the other seats stay unchosen.
+  const leader = { cli: "claude" as const, model: "claude-sonnet-5-5[1m]", effort: "high" };
+  const tabs = ["approval-dev", "approval-other"].map((id) => fixedTab(id, temp, { leader }, id));
+  const spare = fixedTab("approval-spare", temp, { leader }, "approval-spare");
+  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([fixedProject("approval", temp, tabs), { ...fixedProject("approval-two", temp, [spare]), name: "Approval Two" }])));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: {} }));
   const key = newAppKey();
   const child = spawn(process.execPath, [join(resolve("."), "server", "index.ts")], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: { ...process.env, HOME: home, USERPROFILE: home, CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_APP_KEY: key, CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1", CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_CHAT_TIMEOUT_MS: "600", CC_TEST_SAVE_WRITE_DELAY_MS: "200" } });
@@ -167,7 +169,7 @@ test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS
     await wait(() => pending().length === 4, "Edit, MultiEdit, NotebookEdit and PowerShell all ask");
     assert.deepEqual(pending().map((p: any) => `${p.tool}:${p.summary}`).sort(), ["Edit:C:/w/edit.ts", "MultiEdit:C:/w/multi.ts", "NotebookEdit:C:/w/book.ipynb", "PowerShell:Get-Date"]);
     start = messages.length; chat([write]);
-    await wait(() => messages.slice(start).some((m) => m.type === "error" && m.message === "Atlas is waiting for your answer on a change"), "chat refused with the approval message while one is pending");
+    await wait(() => messages.slice(start).some((m) => m.type === "error" && m.message === "Leader is waiting for your answer on a change"), "chat refused with the approval message while one is pending");
     const four = structuredClone(pending());
     const yes = await action({ type: "answerApproval", tabId, approvalId: four[0].approvalId, allow: "yes" as any }); assert.equal(yes.type, "error"); assert.match(yes.message, /boolean/); assert.deepEqual(pending(), four, "a non-boolean allow settles nothing");
     for (const item of four) await action({ type: "answerApproval", tabId, approvalId: item.approvalId, allow: false });

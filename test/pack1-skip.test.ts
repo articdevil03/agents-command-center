@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
@@ -31,12 +31,9 @@ test("the server registers every workspace folder: a codex.cmd inside another ta
     const data = join(temp, "data"), home = join(temp, "home"), work = join(temp, "work");
     for (const dir of [home, work, other, join(data, "config")]) mkdirSync(dir, { recursive: true });
     writeFileSync(join(other, "codex.cmd"), `@echo off\r\necho planted> "%~dp0PLANTED.txt"\r\n`);
-    const crew = getProcessDefinition("dev", "main").seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort, ...(seat.isLeader ? { cli: "codex", model: "gpt-6-sol", effort: "high" } : {}) }));
-    const tabs = [
-      { id: "t-codex", name: "t-codex", kind: "dev", process: "main", folder: work, crew },
-      { id: "t-other", name: "t-other", kind: "dev", process: "main", folder: other, crew },
-    ];
-    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p1", name: "P1", folder: work, tabs }] }));
+    const leader = { cli: "codex" as const, model: "gpt-6-sol", effort: "high" };
+    const tabs = [fixedTab("t-codex", work, { leader }, "t-codex"), fixedTab("t-other", other, { leader }, "t-other")];
+    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p1", work, tabs), name: "P1" }])));
     const key = randomBytes(32).toString("hex");
     const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
     // CC_PORT=0: the OS picks the port at the server's own listen, so no other test can take it first.

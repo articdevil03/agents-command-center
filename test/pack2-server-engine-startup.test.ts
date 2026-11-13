@@ -8,49 +8,15 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { ChatStore } from "../server/chat-store.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
-import {
-  advanceStep, approveLook, createTabState, finishRun, getProcessDefinition, legacySetup, getStepBar, isBusy, startRun, stopAll, stopRun, MAX_FINISHED_RUNS,
-  type ProcessState,
-} from "../server/process.ts";
+import { finishRun, startRun, MAX_FINISHED_RUNS } from "../server/process.ts";
+import { fixedProcess } from "./process-helpers.ts";
 import { SWEEP_CAP_MS } from "../server/leader-common/types.ts";
 import { sleep, type Server, boot, connect, makeData } from "./pack2-server-helpers.ts";
 
 // ---- The engine (server/process.ts) ---------------------------------------------------------------------------------------------
 
-test("getProcessDefinition names an unknown kind or process plainly, for inherited names too", () => {
-  for (const [kind, process] of [["dev", "nope"], ["nope", "main"], ["constructor", "main"], ["dev", "__proto__"], ["dev", "toString"], ["dev", undefined]] as const) {
-    assert.throws(() => getProcessDefinition(kind as any, process as any), new RegExp(`^Error: unknown kind/process: ${kind}/${process}$`), `${kind}/${process}`);
-  }
-  assert.equal(getProcessDefinition("dev", "main").seats.length, 6);
-});
-
-function waitingReview(): ProcessState {
-  let state = createTabState(legacySetup("dev", "main"), { tabId: "tab", folderPath: "C:/work" });
-  state = advanceStep(state); state = advanceStep(state); state = advanceStep(state); // brief -> build -> gate -> look
-  state = startRun(state, { id: "build-1", seatSlotId: "coder", label: "Build", startedAt: 1 });
-  state = approveLook(state);
-  assert.equal(state.approval.reviewWaits, true, "the review waits for the build");
-  return state;
-}
-const seatOf = (state: ProcessState, slot: string) => state.seats.find((seat) => seat.slotId === slot)!;
-
-test("Stop all pauses a review that was waiting for workers: it never opens, not now and not when the stopped worker's run closes", () => {
-  let state = stopAll(waitingReview(), 9, new Set(["build-1"])); // the worker's process is still closing
-  assert.equal(state.approval.reviewWaits, false, "the wait ends with the stop");
-  assert.deepEqual([seatOf(state, "reviewer1").status, seatOf(state, "leader").status, seatOf(state, "coder").status], ["stopped", "stopped", "stopped"]);
-  assert.equal(state.runs[0].status, "working", "the closing run settles only when its close is confirmed");
-  state = stopRun(state, "build-1", 12);
-  assert.deepEqual([seatOf(state, "reviewer1").status, seatOf(state, "leader").status], ["stopped", "stopped"], "the confirmed close does not start the review");
-  assert.equal(isBusy(state), false, "a stopped tab is not busy");
-  assert.equal(state.approval.reviewWaits, false);
-  assert.match(getStepBar(state).find((step) => step.state === "current")!.label, /Vera stopped/);
-  // With nothing closing the result is the same, in one step.
-  const direct = stopAll(waitingReview(), 9);
-  assert.deepEqual([seatOf(direct, "reviewer1").status, seatOf(direct, "leader").status, isBusy(direct)], ["stopped", "stopped", false]);
-});
-
 test("a finished run is pruned by when it ended, never the run that just settled, even when that run is the oldest to have ended", () => {
-  let state = createTabState(legacySetup("dev", "main"), { tabId: "tab", folderPath: "C:/work" });
+  let state = fixedProcess({ tabId: "tab", folderPath: "C:/work" });
   state = startRun(state, { id: "long-run", seatSlotId: "coder", label: "Long", startedAt: 1 });
   state = startRun(state, { id: "slow", seatSlotId: "coder", label: "Slow", startedAt: 2 });
   for (let i = 0; i < MAX_FINISHED_RUNS - 1; i++) {
@@ -69,19 +35,11 @@ test("a finished run is pruned by when it ended, never the run that just settled
 });
 
 test("a run settled without an end time ends now, not at its own start", () => {
-  let state = createTabState(legacySetup("dev", "main"), { tabId: "tab", folderPath: "C:/work" });
+  let state = fixedProcess({ tabId: "tab", folderPath: "C:/work" });
   state = startRun(state, { id: "r1", seatSlotId: "coder", label: "x", startedAt: 5 });
   const before = Date.now();
   state = finishRun(state, "r1");
   assert.ok(state.runs[0].endedAt! >= before && state.runs[0].endedAt! <= Date.now(), `endedAt ${state.runs[0].endedAt}`);
-});
-
-test("the Review step counts '1 round' and '2 rounds'", () => {
-  let rounds = waitingReview(); rounds = finishRun(rounds, "build-1", 5);
-  rounds = { ...rounds, roundHistory: [{ round: 1, reviewerSlotId: "reviewer1", reviewerName: "Vera", outcome: "findings", fixerSlotId: "coder", fixerName: "Sonny" }], currentStepIndex: 5 };
-  assert.match(getStepBar(rounds).find((step) => step.stepId === "review")!.label, / · 1 round$/);
-  rounds = { ...rounds, roundHistory: [...rounds.roundHistory, { ...rounds.roundHistory[0], round: 2 }] };
-  assert.match(getStepBar(rounds).find((step) => step.stepId === "review")!.label, / · 2 rounds$/);
 });
 
 // ---- C6: which folders a tab may have --------------------------------------------------------------------------------------------
@@ -102,7 +60,7 @@ test("the folder rule: ( ) & ^ % in a name and a drive root are accepted for a t
     const tabsOf = () => client.state().projects.flatMap((project: any) => project.tabs);
     const addTab = async (folder: string, requestId: string) => {
       const before = tabsOf().length;
-      client.send({ type: "addTab", projectId, name: requestId, folder, requestId });
+      client.send({ type: "addTab", projectId, name: requestId, folder, requestId, fixedCrewVersion: 1, crewChoices: {}, autoAssign: false });
       return await client.wait(() => client.messages.find((m) => m.type === "error" && m.requestId === requestId) ?? (tabsOf().length > before ? "added" : undefined), `addTab ${requestId}`);
     };
     assert.equal(await addTab(odd, "f_odd"), "added", "( ) & ^ % in the name");
@@ -225,7 +183,7 @@ test("a tab whose chat file is damaged opens with an empty history, refuses a ch
     first = await boot(data);
     const setup = await connect(first);
     const projectId = setup.state().projects[0].id;
-    setup.send({ type: "addTab", projectId, name: "Second", folder: work, requestId: "dm_add" });
+    setup.send({ type: "addTab", projectId, name: "Second", folder: work, requestId: "dm_add", fixedCrewVersion: 1, crewChoices: {}, autoAssign: false });
     await setup.wait(() => setup.state().projects.flatMap((p: any) => p.tabs).length > 1, "second tab added");
     const [bad, good] = setup.state().projects.flatMap((p: any) => p.tabs).map((tab: any) => tab.id) as string[];
     setup.close(); await first.stop(); first = undefined;

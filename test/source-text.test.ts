@@ -88,6 +88,16 @@ test("a source file inside a folder that no rule claims throws, naming the file 
   assert.throws(() => sourceFiles(root), /server\/orphan\/x\.ts/);
 });
 
+test("fixed-crew feature modules are individual server and public entries without claiming unknown subfolders", () => {
+  const root = scratchDir();
+  plant(root, { "server/fixed-crew/assignment.ts": "assignment\r\n", "public/fixed-crew/state.js": "state\n" });
+  assert.deepEqual(sourceFiles(root), ["public/fixed-crew/state.js", "server/fixed-crew/assignment.ts"]);
+  assert.equal(sourceText("server/fixed-crew/assignment.ts", root), "assignment\n");
+  assert.equal(sourceText("public/fixed-crew/state.js", root), "state\n");
+  plant(root, { "server/fixed-crew/orphan/hidden.ts": "unknown\n" });
+  assert.throws(() => sourceFiles(root), /fixed-crew\/orphan\/hidden/);
+});
+
 test("real repo: an independent walk of server/ and public/ finds every file's text inside its logical entry, and every entry is listed", () => {
   const walk = (dir: string): string[] => readdirSync(fileURLToPath(new URL(`../${dir}`, import.meta.url)), { withFileTypes: true })
     .flatMap((entry) => (entry.isDirectory() ? walk(`${dir}/${entry.name}`) : /\.(ts|js|mjs)$/.test(entry.name) ? [`${dir}/${entry.name}`] : []));
@@ -96,7 +106,7 @@ test("real repo: an independent walk of server/ and public/ finds every file's t
   const entries = new Set<string>();
   for (const file of physical) {
     const parts = file.split("/");
-    const entry = parts.length === 2 ? file : parts[1] === "app" ? "public/app.js" : parts[1] === "main" ? "server/index.ts" : `server/${parts[1]}.ts`;
+    const entry = parts.length === 2 || (parts[1] === "fixed-crew" && parts.length === 3) ? file : parts[1] === "app" ? "public/app.js" : parts[1] === "main" ? "server/index.ts" : `server/${parts[1]}.ts`;
     entries.add(entry);
     let text = repoFile(file);
     if (entry === "public/app.js" && parts.length > 2) text = text.slice(text.indexOf("\n", text.indexOf('"use strict";')) + 1);
@@ -104,6 +114,9 @@ test("real repo: an independent walk of server/ and public/ finds every file's t
     assert.ok(listed.includes(entry), `${entry} is not listed by sourceFiles`);
   }
   console.log(`source scan: ${physical.length} physical files, ${entries.size} logical entries`);
+  // The page's fixed crew folder is walked too: each of its scripts is its own listed entry (Pack 26 Blocks 2b and 3c).
+  assert.deepEqual(physical.filter((file) => file.startsWith("public/fixed-crew/")).sort(), ["public/fixed-crew/events.js", "public/fixed-crew/project-dialog.js", "public/fixed-crew/state.js",
+    "public/fixed-crew/task-archive-view.js", "public/fixed-crew/task-events.js", "public/fixed-crew/task-state.js", "public/fixed-crew/task-view.js", "public/fixed-crew/view.js"]);
   assert.ok(physical.length >= 40, `control: the walk found only ${physical.length} files`);
 });
 
@@ -111,4 +124,29 @@ test("real repo, before any split: the top-level names are exactly what the thre
   const names = (dir: string, pattern: RegExp): string[] => readdirSync(fileURLToPath(new URL(`../${dir}`, import.meta.url))).filter((name) => pattern.test(name)).sort().map((name) => `${dir}/${name}`);
   const top = sourceFiles().filter((file) => file.split("/").length === 2 && file !== "public/app.js"); // public/app.js is the logical entry of public/app/*.js
   assert.deepEqual(top, [...names("public", /\.(ts|js|mjs)$/), ...names("server", /\.(ts|js|mjs)$/)].sort());
+});
+
+ test("tab status split is loaded once after the crew rail and before its callers", () => {
+  const scripts = pageScripts();
+  assert.equal(scripts.filter((p) => p === "public/app/06a-tab-status.js").length, 1);
+  assert.ok(scripts.indexOf("public/app/06-crew-rail.js") < scripts.indexOf("public/app/06a-tab-status.js"));
+  assert.ok(scripts.indexOf("public/app/06a-tab-status.js") < scripts.indexOf("public/app/08-seat-view-details.js"));
+  assert.ok(appSource().includes("function statusOf(tab)"));
+});
+
+test("the Finished tasks view (S-F3) loads once, after the task state and before the task panel and its events that call it", () => {
+  const scripts = pageScripts(), part = "public/fixed-crew/task-archive-view.js";
+  const at = (file: string) => { const index = scripts.indexOf(file); assert.ok(index >= 0, `${file} was FOUND in index.html`); return index; };
+  assert.equal(scripts.filter((file) => file === part).length, 1);
+  assert.ok(at("public/fixed-crew/task-state.js") < at(part));
+  assert.ok(at(part) < at("public/fixed-crew/task-view.js"));
+  assert.ok(at(part) < at("public/fixed-crew/task-events.js"));
+});
+
+test("sidebar details split loads once between the seat view and needs-you scripts", () => {
+  const scripts = pageScripts(), part = "public/app/08a-sidebar-details.js";
+  assert.equal(scripts.filter((file) => file === part).length, 1);
+  assert.ok(scripts.indexOf("public/app/08-seat-view-details.js") < scripts.indexOf(part));
+  assert.ok(scripts.indexOf(part) < scripts.indexOf("public/app/09-needs-you-stopping.js"));
+  assert.equal((appSource().match(/function renderSide\(\)/g) ?? []).length, 1);
 });

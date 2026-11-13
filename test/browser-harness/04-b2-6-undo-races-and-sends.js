@@ -7,10 +7,10 @@
     const permutationEvidence = [];
     const actionFor = (kind) => {
       if (kind === "tab") { clickMenuItem(openTabMenu("alpha-dev"), "Remove tab"); return { selector: "removeTab", tabId: "alpha-dev" }; }
-      if (kind === "project") { clickMenuItem(openProjectMenu("alpha"), "Remove from Command Center"); return { selector: "removeProject", projectId: "alpha" }; }
-      $("setupsBtn").click(); requireElement('#setupPop [data-use-template="blank"]').click(); return { selector: "useSetup", tabId: "alpha-dev" };
+      if (kind !== "project") throw new Error(`unknown held action kind: ${kind}`);
+      clickMenuItem(openProjectMenu("alpha"), "Remove from Command Center"); return { selector: "removeProject", projectId: "alpha" };
     };
-    for (const kind of ["tab", "project", "process"]) for (const order of ["read-before-undo", "read-after-undo"]) {
+    for (const kind of ["tab", "project"]) for (const order of ["read-before-undo", "read-after-undo"]) {
       await clickTab("Development");
       const filename = `race-${kind}-${order}.png`;
       const controlled = await makeControlledImage(filename);

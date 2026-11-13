@@ -5,9 +5,18 @@ import { J, type Page, withPage, skipped, FENCE, history, summary } from "./pack
 
 // A seed with a failed run, a pending request, a sent request and an unconfirmed launch: every one carries model text with **.
 const MARK = (word: string) => `**${word}** and \`code\``;
+// The fixed crew's worker is its "coder" seat. SYNC makes the runtime views agree with tab.runs the way the server's state message does: run id and seat key on every run,
+// the seat's live run ids, the derived views (live, history, earlier crews) and the process runs, all rebuilt from the one list.
+const FIND_WORKER = `tab.crew.find((x)=>x.slot==="coder")`;
+const SYNC = `tab.runs=tab.runs.map((r)=>({...r,id:r.runId,seatKey:tab.id+"."+r.seatSlotId,stalled:Boolean(r.stalled)}));
+  const gen=tab.processState.crewGenerationId,live=tab.runs.filter((r)=>r.crewGenerationId===gen&&r.status==="working");
+  for(const m of tab.crew)m.runs=live.filter((r)=>r.seatSlotId===m.slot).map((r)=>r.runId);
+  tab.derived={...(tab.derived||{}),runViews:{liveBySeat:Object.fromEntries(tab.crew.filter((m)=>m.runs.length).map((m)=>[m.slot,tab.runs.filter((r)=>r.crewGenerationId===gen&&r.seatSlotId===m.slot)])),
+    history:tab.runs.filter((r)=>r.crewGenerationId===gen&&r.status!=="working"),retiredHistory:tab.runs.filter((r)=>r.crewGenerationId!==gen)}};
+  if(Array.isArray(tab.processState.runs))tab.processState.runs=tab.runs.map((r)=>({...r}));`;
 async function seedModelText(ev: (e: string) => Promise<any>, tabA: string, tabB: string) {
-  await ev(`(()=>{const s=window.__ccSeed,tab=s.projects[0].tabs.find((x)=>x.id===${J(tabA)}),worker=tab.crew.find((x)=>!x.isLeader);
-    tab.runs=[{runId:"run-md",seatSlotId:worker.slot,seatName:worker.name,seatIsLeader:false,status:"failed",label:${J(MARK("RunLabel"))},outcome:"failed",cli:"claude",model:"m",startedAt:Date.now()-5000,endedAt:Date.now(),crewGenerationId:tab.processState.crewGenerationId,folderPath:"C:/x"}];
+  await ev(`(()=>{const s=window.__ccSeed,tab=s.projects[0].tabs.find((x)=>x.id===${J(tabA)}),worker=${FIND_WORKER};if(!worker||worker.isLeader)throw new Error("the fixed tab has no coder seat");
+    tab.runs=[{runId:"run-md",seatSlotId:worker.slot,seatName:worker.name,seatIsLeader:false,status:"failed",label:${J(MARK("RunLabel"))},outcome:"failed",cli:"claude",model:"m",startedAt:Date.now()-5000,endedAt:Date.now(),crewGenerationId:tab.processState.crewGenerationId,folderPath:"C:/x"}];${SYNC}
     tab.notes={content:${J("# **Pack 10** is done\n- fixed `x` thing\n- **bold** note\n## **Next** up\n```\n")},path:tab.folder+"/.command-center/"+tab.id+"/RESUME.md",truncated:false};
     s.requests=[{id:"rq-in",fromTabId:${J(tabB)},toTabId:${J(tabA)},title:${J(MARK("ReqTitle"))},body:${J("**ReqBody** first\n- point **one**\n- point two")},status:"pending",createdAt:Date.now()},
       {id:"rq-out",fromTabId:${J(tabA)},toTabId:${J(tabB)},title:${J(MARK("SentTitle"))},body:${J(MARK("SentBody"))},status:"accepted",createdAt:Date.now()}];
@@ -100,7 +109,7 @@ const SCENES: Scene[] = [
   { id: "last result of a seat", covers: { "plainMd(last.label": 2 }, words: ["LastWord"],
     setup: `worker.status="idle";tab.runs=[run("l1","done",${J(MARK("LastWord"))})]`, act: OPEN_SEAT, ready: `document.querySelector("#view .last")`, read: ALL("#view .last") },
   { id: "runs from earlier crews (the leader's Past sessions)", covers: { "mdPlain(run.label": 1, "plainMd(run.label": 1 }, words: ["RetiredWord"],
-    setup: `worker.status="idle";tab.runs=[];tab.derived.runViews.retiredHistory=[run("old1","done",${J(MARK("RetiredWord"))})]`, act: `document.querySelector('[data-seat-pic="leader"]').click();document.querySelector("#seatPop [data-seat-history]").click()`,
+    setup: `worker.status="idle";tab.runs=[run("old1","done",${J(MARK("RetiredWord"))},{crewGenerationId:"earlier-crew"})]`, act: `document.querySelector('[data-seat-pic="leader"]').click();document.querySelector("#seatPop [data-seat-history]").click()`,
     ready: `[...document.querySelectorAll("#view h3")].some((h)=>h.textContent.includes("earlier crews"))`, read: ALL("#view") },
   { id: "seat card: live run rows", covers: { "plainMd(run.label": 3 }, words: ["RowWord"],
     setup: `worker.status="working";tab.runs=[${LIVE_RUN("c1", "RowWord")}]`, act: `document.querySelector('[data-seat-pic="'+W+'"]').click()`, ready: `document.querySelector("#seatPop .sr")`, read: ALL("#seatPop .sr") },
@@ -128,9 +137,9 @@ const SCENES: Scene[] = [
 // Each scene starts from the same base state, with the page back on the chat and no card open.
 async function walkScene(page: Page, scene: Scene) {
   const { ev, waitFor, tabA } = page;
-  const pre = `const s=window.__ccSeed,tab=s.projects[0].tabs.find((x)=>x.id===${J(tabA)}),worker=tab.crew.find((x)=>!x.isLeader),W=worker.slot,now=Date.now(),
+  const pre = `const s=window.__ccSeed,tab=s.projects[0].tabs.find((x)=>x.id===${J(tabA)}),worker=${FIND_WORKER},W=worker.slot,now=Date.now(),
     run=(id,status,label,extra={})=>({runId:id,seatSlotId:W,seatName:worker.name,seatIsLeader:false,status,label,outcome:status==="working"?undefined:status,cli:"claude",model:"m",startedAt:now-5000,...(status==="working"?{}:{endedAt:now}),crewGenerationId:tab.processState.crewGenerationId,folderPath:"C:/x",...extra});`;
-  await ev(`(()=>{document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));document.querySelector("[data-back-chat],[data-chat-live]")?.click();window.__ccSeed=structuredClone(window.__ccBase);${pre}${scene.setup};__ccDeliver({...structuredClone(s),type:"state"});return true})()`);
+  await ev(`(()=>{document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));document.querySelector("[data-back-chat],[data-chat-live]")?.click();window.__ccSeed=structuredClone(window.__ccBase);${pre}${scene.setup};${SYNC}__ccDeliver({...structuredClone(s),type:"state"});return true})()`);
   if (scene.act) await ev(`(async()=>{${pre}${scene.act};return true})()`);
   try { await waitFor(`(()=>{${pre}return Boolean(${scene.ready})})()`, `${scene.id}: the place shows`); }
   catch (error) { assert.fail(`${(error as Error).message}; the page had: ${JSON.stringify(await ev(`({errors:window.__ccErrors,seats:[...document.querySelectorAll("#crew [data-seat-id]")].map((e)=>e.dataset.seatId),crew:document.querySelector("#crew")?.innerHTML.slice(0,200),view:document.querySelector("#view")?.innerHTML.slice(0,300)})`))}`); }

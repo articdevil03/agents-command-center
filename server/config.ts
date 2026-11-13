@@ -1,17 +1,16 @@
 import { readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { keepBadCopy } from "./safe-file.ts";
 import { discoverClaudeEffort, discoverOpencodeModels, discoverClaudeModels, type Discovered, type ClaudeModelInfo, type DiscoveredClaudeModels } from "./cli-discovery.ts";
-import { CLI_CAPS, KINDS, TEMPLATES, findTemplate, validateSetup, isSafeSeatId, isAcpCli, cliCaps, type ProcessKind, type Seat, type Setup, type Step } from "./process.ts";
-import { dataRoot, configDir, LEGACY_LEADER, workspacesPath, projectsPath, publishConfigFile, sweepSeedTemps, readJson, isSafeShape, isObject, validSlug, validText, liveFilesProtected, liveWritePath } from "./config-files.ts";
-import { migrateOldTabs, keepConfigBackups } from "./config-migrate.ts";
-import type { SavedSetup } from "./config-setups.ts";
+import { CLI_CAPS, KINDS, isSafeSeatId, isAcpCli, cliCaps, type ProcessKind, type Seat } from "./process.ts";
+import { dataRoot, configDir, workspacesPath, projectsPath, publishConfigFile, sweepSeedTemps, readJson, isSafeShape, isObject, validSlug, validText, liveFilesProtected, liveWritePath } from "./config-files.ts";
 import { acpKindOf, type AcpCli } from "./config-acp.ts";
+import { assignments, freshFixedCrew, preserveFutureCrews, validateFixedCrew, type FixedCrew } from "./fixed-crew/preferences.ts";
+import { assertWorkspaceRecoveryReady, initializeWorkspaceRecovery, unavailableWorkspace, workspaceRecovery } from "./fixed-crew/recovery.ts";
 
-export { workspacesPath, projectsPath, clientPrefsPath, launchSafetyPath, acpClisPath, setupsPath } from "./config-files.ts";
+export { workspacesPath, projectsPath, clientPrefsPath, launchSafetyPath, acpClisPath } from "./config-files.ts";
 export * from "./config-acp.ts";
 export * from "./config-prefs.ts";
-export * from "./config-setups.ts";
 
 
 export type SeatKind = "claude" | "codex" | "opencode";
@@ -28,7 +27,8 @@ export type WorkspaceTab = {
   setupName: string;
   crew: CrewMember[];
   lookPause: boolean;
-  steps: Step[];
+  steps: never[]; // compatibility: always empty on a fixed tab
+  fixedCrew?: FixedCrew;
 };
 export type WorkspaceProject = { id: string; name: string; folder: string; tabs: WorkspaceTab[] };
 export type Workspaces = { projects: WorkspaceProject[] };
@@ -56,7 +56,7 @@ export const MODEL_OPTIONS: Record<SeatKind, string[] | null> = {
 const FALLBACK_CLAUDE_EFFORT = ["low", "medium", "high", "xhigh", "max"];
 export const EFFORT_OPTIONS: Record<SeatKind, string[]> = {
   claude: [...FALLBACK_CLAUDE_EFFORT],
-  codex: ["low", "medium", "high", "max"],
+  codex: ["low", "medium", "high", "xhigh", "max"],
   // Only the fake-CLI test runner may widen it, to prove the leader reads the saved effort on every turn.
   opencode: process.env.CC_TEST_FAKE_CLI === "1" && process.env.CC_TEST_OPENCODE_EFFORTS ? process.env.CC_TEST_OPENCODE_EFFORTS.split(",") : ["max"],
 };
@@ -90,49 +90,14 @@ export function isValidEffort(kind: SeatKind | AcpKind, effort: string): boolean
 export function defaultEffort(kind: SeatKind | AcpKind): string { if (isAcpKind(kind)) return ACP_DEFAULT; return EFFORT_OPTIONS[kind].includes("medium") ? "medium" : EFFORT_OPTIONS[kind][0]; }
 
 
-export type CliCap = { id: string; label: string; advisor: boolean; readOnlyEnforced: boolean; crewTools: boolean; customModel: string | null; installed: boolean | null; models: string[] | null; efforts: string[] };
-export type SetupTemplate = { id: string; name: string; kind: ProcessKind; desc: string; crew: CrewMember[]; lookPause: boolean; steps: Step[] };
+export type CliCap = { id: string; label: string; advisor: boolean; readOnlyEnforced: boolean; customModel: string | null; installed: boolean | null; models: string[] | null; efforts: string[] };
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
-
-// A mutable copy of a template (a visible one, or the hidden old Main Crew), ready to put on a tab.
-export function templateCopy(id: string): SetupTemplate {
-  const template = findTemplate(id);
-  if (!template) throw new Error(`unknown template: ${String(id)}`);
-  return clone(template) as SetupTemplate;
-}
-export function visibleTemplates(): SetupTemplate[] { return TEMPLATES.map((template) => templateCopy(template.id)); }
-export const DEFAULT_SETUP_ID = "our-process";
 
 // What the page shows for each CLI: the capability table (process.ts) plus whether it is installed and what it offers.
 export function buildClis(installed: (cli: SeatKind) => boolean | null, acp: AcpCli[]): CliCap[] {
   const builtIn = (Object.keys(CLI_CAPS) as SeatKind[]).map((id): CliCap => ({ ...CLI_CAPS[id], installed: installed(id), models: MODEL_OPTIONS[id] ? [...MODEL_OPTIONS[id]!] : null, efforts: [...EFFORT_OPTIONS[id]] }));
   const added = acp.map((cli): CliCap => ({ ...cliCaps(acpKindOf(cli))!, label: cli.name, installed: true, models: [ACP_DEFAULT], efforts: [ACP_DEFAULT] }));
   return [...builtIn, ...added];
-}
-
-// The values a seat carries must be ones the CLI accepts. strict = a write: they must be in the live lists. A read only checks shape (see isSafeShape).
-export function validateSetupValues(setup: Setup, strict = true): void {
-  for (const seat of setup.crew) {
-    if (!(strict ? isValidModel(seat.cli, seat.model) && isValidEffort(seat.cli, seat.effort) : isSafeShape(seat.model) && isSafeShape(seat.effort))) throw new Error(`invalid model or effort for ${seat.slot}`);
-    if (seat.advisor !== undefined && !(strict ? isValidModel("claude", seat.advisor) : isSafeShape(seat.advisor))) throw new Error(`invalid advisor model for ${seat.slot}`);
-  }
-}
-
-
-// The values and pictures of every seat, with the messages a damaged file has always got.
-export function checkSeatValues(tabKey: string, crew: CrewMember[], strict: boolean, path: string): void {
-  for (const member of crew) {
-    if (!(strict ? isValidModel(member.cli, member.model) && isValidEffort(member.cli, member.effort) : isSafeShape(member.model) && isSafeShape(member.effort))) {
-      throw new Error(`config file malformed, invalid slot/model/effort for "${tabKey}.${member.slot}": ${path}`);
-    }
-    if (!isSafeSeatId(`${tabKey}.${member.slot}`)) throw new Error(`config file malformed, unsafe seat key "${tabKey}.${member.slot}": ${path}`);
-    if (member.pic !== undefined && (typeof member.pic !== "string" || member.pic.length > 512 || /[\u0000-\u001f\u007f]/.test(member.pic))) {
-      throw new Error(`config file malformed, invalid pic for "${tabKey}.${member.slot}": ${path}`);
-    }
-    if (member.advisor !== undefined && !(strict ? isValidModel("claude", member.advisor) : isSafeShape(member.advisor))) {
-      throw new Error(`config file malformed, invalid advisor for "${tabKey}.${member.slot}": ${path}`);
-    }
-  }
 }
 
 // strict = a write: values must be in the live lists. A read only checks shape (see isSafeShape).
@@ -148,60 +113,39 @@ function validateWorkspaces(data: unknown, path: string, strict = false): Worksp
     projectIds.add(project.id.toLowerCase());
     if (project.tabs.length === 0) throw new Error(`config file malformed, project "${project.id}" must have at least one tab: ${path}`);
     for (const [tabIndex, tab] of project.tabs.entries()) {
-      if (!isObject(tab) || !validSlug(tab.id) || !validText(tab.name) || typeof tab.folder !== "string" || !tab.folder.trim() || !Array.isArray(tab.crew)) {
+      if (!isObject(tab) || !validSlug(tab.id) || !validText(tab.name) || typeof tab.folder !== "string" || !tab.folder.trim() || !Object.hasOwn(tab, "fixedCrew")) {
         throw new Error(`config file malformed, bad tab ${tabIndex} in project "${project.id}": ${path}`);
       }
       if (tabIds.has(tab.id.toLowerCase())) throw new Error(`config file malformed, duplicate tab id "${tab.id}": ${path}`);
       tabIds.add(tab.id.toLowerCase());
       if (typeof tab.kind !== "string" || !Object.hasOwn(KINDS, tab.kind)) throw new Error(`config file malformed, unknown kind "${String(tab.kind)}" in tab "${tab.id}": ${path}`);
       if (typeof tab.setupName !== "string" || tab.setupName.length > 80) throw new Error(`config file malformed, invalid setup name in tab "${tab.id}": ${path}`);
-      let setup: Setup;
-      try { setup = validateSetup({ crew: tab.crew, lookPause: tab.lookPause }); }
-      catch (err) { throw new Error(`config file malformed, invalid crew or steps in tab "${tab.id}" (${(err as Error).message}): ${path}`, { cause: err }); }
-      // The steps and the look switch are the crew's: whatever the file or the caller held is replaced by what the roles derive.
-      tab.steps = setup.steps; tab.lookPause = setup.lookPause;
-      checkSeatValues(tab.id, setup.crew, strict, path);
+      const future = isObject(tab.fixedCrew) && typeof tab.fixedCrew.version === "number" && tab.fixedCrew.version > 1;
+      if (strict && future) {
+        const saved = readJson(path) as Workspaces;
+        const original = saved.projects.flatMap((project) => project.tabs).find((item) => item.id === tab.id);
+        if (JSON.stringify(original?.fixedCrew) !== JSON.stringify(tab.fixedCrew)) throw new Error("Unsupported fixed crew version");
+      } else {
+        try { tab.fixedCrew = validateFixedCrew(tab.fixedCrew); }
+        catch (error) {
+          if (strict) throw error;
+          if (!future) {
+            fixedCrewRecoveries.set(`${path}|${tab.id}`, (error as Error).message);
+            tab.fixedCrew = freshFixedCrew();
+          }
+        }
+      }
+      if (strict && (!Array.isArray(tab.crew) || tab.crew.length || !Array.isArray(tab.steps) || tab.steps.length || tab.lookPause !== false)) throw new Error("Fixed tabs have no legacy crew or steps");
+      tab.crew = []; tab.steps = []; tab.lookPause = false;
     }
   }
   return data as unknown as Workspaces;
 }
 
-// A new Development tab starts on Our process.
-function defaultTab(id: string, folder: string): WorkspaceTab {
-  const template = templateCopy(DEFAULT_SETUP_ID);
-  return { id, name: "Development", kind: template.kind, folder, setupName: template.name, crew: template.crew, lookPause: template.lookPause, steps: template.steps };
-}
-
-// A missing workspaces file is an upcast from projects.json only. Legacy
-// seats and Underground picks are intentionally ignored and left untouched.
-export function migrateWorkspaces(projectsFile: string, destination: string): boolean {
-  if (existsSync(destination)) {
-    if (!statSync(destination).isFile()) throw new Error(`config destination is not a file: ${destination}`);
-    return false;
-  }
-  const old = readJson(projectsFile);
-  if (!Array.isArray(old)) throw new Error(`config file malformed, expected an array: ${projectsFile}`);
-  const workspaces: Workspaces = {
-    projects: old.map((entry, index) => {
-      if (!isObject(entry) || !validSlug(entry.id) || !validText(entry.name) || typeof entry.dir !== "string") {
-        throw new Error(`config file malformed, bad legacy project entry ${index}: ${projectsFile}`);
-      }
-      return {
-        id: entry.id,
-        name: entry.name,
-        folder: entry.dir,
-        tabs: [defaultTab(`${entry.id}-development`, entry.dir)],
-      };
-    }),
-  };
-  validateWorkspaces(workspaces, destination, true);
-  return publishConfigFile(JSON.stringify(workspaces, null, 2) + "\n", destination);
-}
-
 // A fresh install starts with one empty example project and tab, never the repo owner's own projects. Its folder is a
 // new empty one in the data root, so no seat starts with write access to a real project or the home folder.
 export function defaultWorkspaces(folder: string = join(dataRoot, "example-project")): Workspaces {
-  return { projects: [{ id: "example", name: "Example project", folder, tabs: [defaultTab("example-development", folder)] }] };
+  return { projects: [{ id: "example", name: "Example project", folder, tabs: [{ id: "example-development", name: "Development", kind: "dev", folder, setupName: "Fixed crew", crew: [], lookPause: false, steps: [], fixedCrew: freshFixedCrew() }] }] };
 }
 
 
@@ -212,7 +156,9 @@ function publishDefaultWorkspaces(replace: boolean): void {
   publishConfigFile(JSON.stringify(defaults, null, 2) + "\n", workspacesPath, replace);
 }
 
-function seedAndMigrate(): void {
+function seedConfig(): void {
+  initializeWorkspaceRecovery(defaultWorkspaces);
+  if (workspaceRecovery().blocked || workspaceRecovery().recovered) return;
   sweepSeedTemps(configDir);
   if (existsSync(workspacesPath)) {
     if (!statSync(workspacesPath).isFile()) throw new Error(`config destination is not a file: ${workspacesPath}`);
@@ -223,34 +169,29 @@ function seedAndMigrate(): void {
     return;
   }
   if (liveFilesProtected()) return;
-  // Only the user's own earlier projects.json (never a bundled one) is upgraded; otherwise the example workspace.
-  if (existsSync(projectsPath)) migrateWorkspaces(projectsPath, workspacesPath);
-  else publishDefaultWorkspaces(false);
+  // Legacy projects are archived by recovery above, never converted here.
+  publishDefaultWorkspaces(false);
 }
-seedAndMigrate();
+seedConfig();
 
 
-// Old photo presets "avatars/<name>.jpg|png": the five that have a flat SVG move to it, every other one is
-// dropped so the seat falls back to its default picture. The leader's earlier preset (photo or flat) is now "atlas".
-// Persisted with the next workspaces write.
-const FLAT_AVATAR_NAMES = new Set(["atlas", "sonny", "vera", "sol", "terra"]);
-function migrateOldPresetPics(workspaces: Workspaces): Workspaces {
-  for (const project of workspaces.projects) for (const tab of project.tabs) for (const seat of tab.crew) {
-    if (seat.pic === `avatars/${LEGACY_LEADER}.svg` || seat.pic === `/avatars/${LEGACY_LEADER}.svg`) { seat.pic = "avatars/atlas.svg"; continue; }
-    const old = typeof seat.pic === "string" ? seat.pic.match(/^\/?avatars\/([A-Za-z0-9-]{1,40})\.(?:png|jpg)$/) : null;
-    if (!old) continue;
-    const name = old[1] === LEGACY_LEADER ? "atlas" : old[1];
-    if (FLAT_AVATAR_NAMES.has(name)) seat.pic = `avatars/${name}.svg`;
-    else delete seat.pic;
-  }
-  return workspaces;
+export function readWorkspaces(path: string = workspacesPath): Workspaces {
+  if (path === workspacesPath && workspaceRecovery().blocked) return unavailableWorkspace(defaultWorkspaces);
+  return validateWorkspaces(readJson(path), path);
 }
-export function readWorkspaces(path: string = workspacesPath): Workspaces { return migrateOldPresetPics(validateWorkspaces(migrateOldTabs(readJson(path), path), path)); }
+const fixedCrewRecoveries = new Map<string, string>();
+export function fixedCrewRecovery(tabId: string, path = workspacesPath): string | undefined { return fixedCrewRecoveries.get(`${path}|${tabId}`); }
 export function writeWorkspaces(workspaces: Workspaces, path?: string): void {
+  assertWorkspaceRecoveryReady("workspace");
   const target = liveWritePath(path, workspacesPath);
-  const validated = validateWorkspaces(workspaces, target, true);
-  keepConfigBackups(target);
+  let saved: unknown;
+  try { saved = readJson(target); } catch { /* Existing unreadable legacy files keep their earlier write behavior. */ }
+  preserveFutureCrews(saved, workspaces);
+  const validated = validateWorkspaces(clone(workspaces), target, true);
+  const recovered = [...fixedCrewRecoveries.keys()].filter((key) => key.startsWith(`${target}|`));
+  if (recovered.length) keepBadCopy(target);
   publishConfigFile(JSON.stringify(validated, null, 2) + "\n", target, true);
+  for (const key of recovered) fixedCrewRecoveries.delete(key);
   if (target === workspacesPath) adoptSavedValues(validated);
 }
 
@@ -263,31 +204,20 @@ const BASE: { claudeModels: ClaudeModelInfo[]; codexModels: string[]; opencodeMo
   opencodeModels: [...OPENCODE_MODEL_SUGGESTIONS_FALLBACK],
   efforts: { claude: [...EFFORT_OPTIONS.claude], codex: [...EFFORT_OPTIONS.codex], opencode: [...EFFORT_OPTIONS.opencode] },
 };
-// Every template's own models and efforts stay valid whatever a live list says: a new tab on a template must always be writable.
-function templateValues(): { models: Record<SeatKind, Set<string>>; efforts: Record<SeatKind, Set<string>> } {
-  const found = { models: { claude: new Set<string>(), codex: new Set<string>(), opencode: new Set<string>() }, efforts: { claude: new Set<string>(), codex: new Set<string>(), opencode: new Set<string>() } };
-  for (const template of TEMPLATES) for (const seat of template.crew) {
-    if (!isAcpKind(seat.cli)) { found.models[seat.cli].add(seat.model); found.efforts[seat.cli].add(seat.effort); }
-    if (seat.advisor) found.models.claude.add(seat.advisor);
-  }
-  return found;
-}
 function rebuildCatalogues(): void {
-  const fromTemplates = templateValues();
-  const models = (kind: SeatKind) => [...SAVED_MODELS[kind], ...fromTemplates.models[kind]];
-  for (const kind of Object.keys(SAVED_EFFORTS) as SeatKind[]) EFFORT_OPTIONS[kind] = [...BASE.efforts[kind], ...[...SAVED_EFFORTS[kind], ...fromTemplates.efforts[kind]].filter((effort, at, all) => !BASE.efforts[kind].includes(effort) && all.indexOf(effort) === at)];
-  MODEL_OPTIONS.codex = [...BASE.codexModels, ...models("codex").filter((model, at, all) => !BASE.codexModels.includes(model) && all.indexOf(model) === at)];
+  for (const kind of Object.keys(SAVED_EFFORTS) as SeatKind[]) EFFORT_OPTIONS[kind] = [...BASE.efforts[kind], ...[...SAVED_EFFORTS[kind]].filter((effort, at, all) => !BASE.efforts[kind].includes(effort) && all.indexOf(effort) === at)];
+  MODEL_OPTIONS.codex = [...BASE.codexModels, ...[...SAVED_MODELS.codex].filter((model) => !BASE.codexModels.includes(model))];
   OPENCODE_MODEL_SUGGESTIONS = [...BASE.opencodeModels, ...[...SAVED_MODELS.opencode].filter((model) => !BASE.opencodeModels.includes(model))];
-  CLAUDE_MODEL_INFO = mergeClaudeModelInfo(BASE.claudeModels, models("claude"));
+  CLAUDE_MODEL_INFO = mergeClaudeModelInfo(BASE.claudeModels, [...SAVED_MODELS.claude]);
   MODEL_OPTIONS.claude = CLAUDE_MODEL_INFO.map((item) => item.value);
 }
-// The saved setups (config/setups.json) as last read or written: their models stay valid like a tab's.
-let adoptedSetups: SavedSetup[] = [];
-export function adoptSavedValues(workspaces: Workspaces, setups: SavedSetup[] = adoptedSetups): void {
-  adoptedSetups = setups;
+export function adoptSavedValues(workspaces: Workspaces): void {
   for (const kind of Object.keys(SAVED_MODELS) as SeatKind[]) { SAVED_MODELS[kind].clear(); SAVED_EFFORTS[kind].clear(); }
-  const crews = [...workspaces.projects.flatMap((project) => project.tabs.map((tab) => tab.crew)), ...setups.map((setup) => setup.crew)];
-  for (const seat of crews.flat()) {
+  const fixed = workspaces.projects.flatMap((project) => project.tabs).flatMap((tab) => {
+    if (!tab.fixedCrew || tab.fixedCrew.version !== 1) return [];
+    return assignments(tab.fixedCrew);
+  });
+  for (const seat of fixed) {
     if (!isAcpKind(seat.cli)) { SAVED_MODELS[seat.cli].add(seat.model); SAVED_EFFORTS[seat.cli].add(seat.effort); }
     if (seat.advisor) SAVED_MODELS.claude.add(seat.advisor);
   }

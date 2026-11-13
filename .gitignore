@@ -32,3 +32,13 @@ design/simple/_mut.html
 
 # The owner's private word list for the public export, never committed or exported
 .leak-patterns.local
+
+# Private fixed-crew recovery and task state
+/backups/
+/tasks/
+/executions/
+/execution-logs/
+config/setups.json
+config/fixed-crew-recovery.json
+# The owner's added CLI start commands, never committed or exported
+config/acp-clis.json

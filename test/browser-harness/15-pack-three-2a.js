@@ -1,5 +1,5 @@
 (() => {
-  const { fail, check, text, $, requireElement, installTenSecondClock, latestTab, openSeatCard, openInbox, sleep, tabId, deliverSeed, sentSince, STOP_CONFIRM, coderName } = window.__ccHarness;
+  const { check, text, $, requireElement, installTenSecondClock, latestTab, openInbox, sleep, tabId, deliverSeed, sentSince, STOP_CONFIRM, coderName } = window.__ccHarness;
   const runPackThreeA = async (part) => {
     // The fake clock the Undo tests use hands out ids: they must never be ids a real timer has, or clearing a real timer would drop a fake one.
     await part("fake clock", async () => {
@@ -67,37 +67,22 @@
         shown.label === "Retry save" && shown.reason === "Save failed in the pack 3 test" && save.length === 1 && save[0].tabId === tabId && closed && gone, { shown, save, closed, gone });
     });
 
-    // A stalled run's card can stop that run.
+    // A stalled run's card can stop that run: the coder holds one live run and one retained unconfirmed record, both stalled, and a targeted Stop leaves the other record as it was.
     await part("stalled Stop", async () => {
+      window.__ccHarness.fixed.seedLiveAndRetainedRecords(tabId, "coder");
       const stalled = structuredClone(window.__ccSeed);
       for (const run of latestTab(tabId, stalled).runs.filter((item) => item.status === "working")) run.stalled = true;
       window.__ccDeliver({ ...stalled, type: "state" });
       openInbox();
+      const cardOf = (runId) => requireElement(`#inboxList [data-stop-run="${runId}"]`).closest(".ncard");
       const cards = [...document.querySelectorAll("#inboxList .ncard.bad")].filter((card) => card.textContent.includes("run stalled"));
+      const otherBefore = cardOf("audit-parallel-2").textContent;
       const from = window.__sent.length;
       requireElement('#inboxList [data-stop-run="audit-parallel-1"]').click();
       const kills = sentSince(from, "killRun");
       const otherStillLive = !requireElement('#inboxList [data-stop-run="audit-parallel-2"]').disabled;
-      check("a stalled run's card has a Stop this run button that sends killRun for that run only", cards.length === 2 && kills.length === 1 && kills[0].runId === "audit-parallel-1" && otherStillLive, { cards: cards.length, kills, otherStillLive });
-    });
-
-    // The Advisor row of the leader's card.
-    await part("Advisor picker", async () => {
-      openSeatCard("leader");
-      requireElement("[data-seat-advisor]", $("seatPop")).click();
-      const options = [...document.querySelectorAll("#pop [data-advisor]")].map((button) => button.dataset.advisor);
-      const model = options.find(Boolean);
-      if (!model) fail(`the advisor picker lists no model; matched ${JSON.stringify(options)}`);
-      let from = window.__sent.length;
-      requireElement(`#pop [data-advisor="${CSS.escape(model)}"]`).click();
-      const chosen = sentSince(from, "updateSeat");
-      const closed = $("pop").hidden;
-      openSeatCard("leader");
-      requireElement("[data-seat-advisor]", $("seatPop")).click();
-      from = window.__sent.length;
-      requireElement('#pop [data-advisor=""]').click();
-      const off = sentSince(from, "updateSeat");
-      check("the Advisor picker sends updateSeat with the seat and the chosen advisor, and null for Off", options[0] === "" && chosen.length === 1 && chosen[0].tabId === tabId && chosen[0].slot === "leader" && chosen[0].advisor === model && closed && off.length === 1 && off[0].tabId === tabId && off[0].slot === "leader" && off[0].advisor === null, { options, chosen, off, closed });
+      const otherSame = cardOf("audit-parallel-2").textContent === otherBefore;
+      check("a stalled run's card has a Stop this run button that sends killRun for that run only", cards.length === 2 && kills.length === 1 && kills[0].runId === "audit-parallel-1" && otherStillLive && otherSame, { cards: cards.length, kills, otherStillLive, otherSame });
     });
   };
   Object.assign(window.__ccHarness, { runPackThreeA });

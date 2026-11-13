@@ -1,12 +1,12 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import realFs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, join } from "node:path";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
-import { parseMcpCommand, permissionModeForSdk, pruneAvatars, SettingsService, type PermissionMode } from "../server/settings.ts";
+import { parseMcpCommand, permissionModeForSdk, SettingsService, type PermissionMode } from "../server/settings.ts";
 import { NO_PATH, harness, persistedPermissionMode } from "./settings-helpers.ts";
 
 test("MCP add/remove and Claude plugin install/uninstall use exact argv and reject unsafe values", async () => {
@@ -344,23 +344,4 @@ test("SettingsService: a save is flushed to disk (fsync) before the atomic renam
   const rename = events.findIndex((e) => e === "rename settings.json");
   assert.ok(rename > 0, `the save renamed settings.json into place: ${JSON.stringify(events)}`);
   assert.ok(events.slice(0, rename).includes("fsync"), `an fsync ran before the rename: ${JSON.stringify(events)}`);
-});
-
-// ---- avatars no longer referenced are deleted when a new one is saved ----
-
-test("pruneAvatars: deletes unreferenced uploaded pictures, keeps the new one and every picture a seat still uses, nothing else", () => {
-  const dir = mkdtempSync(join(tmpdir(), "cc-avatars-"));
-  try {
-    const id = (n: number) => `avatar-${String(n).repeat(8)}-1111-2222-3333-${String(n).repeat(12)}.png`;
-    const [oldOne, used, fresh] = [id(1), id(2), id(3)];
-    for (const name of [oldOne, used, fresh, "notes.txt", "avatar-not-a-uuid.png"]) writeFileSync(join(dir, name), "x");
-    const young = id(4);
-    writeFileSync(join(dir, young), "x");
-    const longAgo = new Date(Date.now() - 11 * 60_000);
-    utimesSync(join(dir, oldOne), longAgo, longAgo);
-    const removed = pruneAvatars(dir, [`/api/avatar/${used}`, "avatars/ash.svg", undefined as any], fresh);
-    assert.deepEqual(removed, [oldOne], "only the unreferenced file older than 10 minutes goes");
-    assert.deepEqual(readdirSync(dir).sort(), [fresh, used, young, "avatar-not-a-uuid.png", "notes.txt"].sort(), "an unreferenced file younger than 10 minutes stays");
-    assert.deepEqual(pruneAvatars(join(dir, "missing"), [], fresh), [], "a missing folder is not an error");
-  } finally { removeWithRetry(dir); }
 });

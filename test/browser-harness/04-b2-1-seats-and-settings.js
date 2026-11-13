@@ -2,28 +2,32 @@
   const { collectFailures, collectWaitTimeout, check, waitFor, text, $, requireElement, waitToastVisible, clickTab, clickMenuItem, showChat, openSeatView, openSeatCard, openProjectMenu, pressEscape } = window.__ccHarness;
   // Seats, labels, XSS shell text, rename, attach, safety, tab keys, worker views, history, run XSS, approval, Settings, Run dialog.
   const b2SeatsAndSettings = async (ctx) => {
-    const selectors = ["#setBtn", "#setModal", "#setNav", "#setBody", "#tabs", "#sline", "#statusBtn", "#pipe", "#view", "#composer", "#ci", "#attachBtn", "#attachInput", "#atts", "#sendBtn", "#avModal", "#avgrid", "#avUp", "#undo", "#toast", "#inboxBtn", "#inboxList"];
+    const selectors = ["#setBtn", "#setModal", "#setNav", "#setBody", "#tabs", "#sline", "#statusBtn", "#view", "#composer", "#ci", "#attachBtn", "#attachInput", "#atts", "#sendBtn", "#avModal", "#avgrid", "#avUp", "#undo", "#toast", "#inboxBtn", "#inboxList", "#fixedView", "#fcWorkSettings", "#crew"];
     const missing = selectors.filter((selector) => !document.querySelector(selector));
     check("Pack B2 target selector list finds every required control", missing.length === 0, { found: selectors.filter((selector) => document.querySelector(selector)), missing });
     const tabOf = (tabId, state = window.__latestState) => state.projects.flatMap((project) => project.tabs).find((tab) => tab.id === tabId);
     const entry = tabOf("alpha-dev");
     const fits = (element) => element.clientWidth > 0 && element.scrollWidth <= element.clientWidth;
     const leadCard = openSeatCard("leader");
-    const leadModel = text("[data-seat-model] .model-label", leadCard);
-    const leadEffort = text("[data-seat-model] .eff", leadCard);
-    const leadChipFits = fits(requireElement("[data-seat-model] .model-label", leadCard)) && fits(requireElement("[data-seat-model] .eff", leadCard));
+    // The card's Model row shows the saved fact read-only (the editable chips are retired; the fixed Settings pickers are checked in the real render case).
+    const leadModel = text(".rowb .model-label", leadCard);
+    const leadEffort = text(".rowb .eff", leadCard);
+    const leadChipFits = fits(requireElement(".rowb .model-label", leadCard)) && fits(requireElement(".rowb .eff", leadCard));
     pressEscape();
     const coderCard = openSeatCard("coder");
-    const crewModel = text("[data-seat-model] .model-label", coderCard);
-    const crewEffort = text("[data-seat-model] .eff", coderCard);
-    const coderChipFits = fits(requireElement("[data-seat-model] .model-label", coderCard)) && fits(requireElement("[data-seat-model] .eff", coderCard));
+    const crewModel = text(".rowb .model-label", coderCard);
+    const crewEffort = text(".rowb .eff", coderCard);
+    const coderChipFits = fits(requireElement(".rowb .model-label", coderCard)) && fits(requireElement(".rowb .eff", coderCard));
     pressEscape();
     const roleOf = (slot) => entry.crew.find((seat) => seat.slot === slot)?.role;
     const leadRole = text('#crew [data-seat-id="leader"] .role');
     const subtitle = text("#stagehead .vwho small");
-    const novaPortrait = requireElement('#crew [data-seat-id="fixer"] .av img').getAttribute("src");
+    // The fixed Fixer position is fixer1 (never "fixer"); its portrait is a default the fixed contract does not save, so only its presence and role are checked.
+    const fixerSeat = requireElement('#crew [data-seat-id="fixer1"]');
+    const fixerRole = text(".role", fixerSeat);
     const chipLabelsFit = leadChipFits && coderChipFits;
-    check("B1 labels, effort, role, CLI, and Nova portrait match the mockup", leadModel === "Opus 5.5" && leadEffort.includes("medium") && crewModel === "Luna 6" && crewEffort.includes("max") && leadRole === roleOf("leader") && leadRole === "Leader" && subtitle === `${roleOf("coder")} · Codex` && novaPortrait.endsWith("/avatars/nova.svg") && !document.querySelector("#stagehead .does") && chipLabelsFit, { leadModel, leadEffort, crewModel, crewEffort, leadRole, subtitle, novaPortrait, effortVisible: chipLabelsFit, stageHeadChips: document.querySelectorAll("#stagehead .does").length });
+    const savedOf = (slot) => entry.fixedCrew.preferences[slot].assignment;
+    check("B1 labels, effort, role and CLI match the fixed crew facts", leadModel === "Sonnet 5.5" && leadEffort.includes("high") && crewModel === "Sol 6.1" && crewEffort.includes("medium") && savedOf("leader").model === "claude-sonnet-5-5[1m]" && savedOf("coder").model === "gpt-6.1-sol" && leadRole === roleOf("leader") && leadRole === "Leader" && subtitle === `${roleOf("coder")} · Codex` && roleOf("coder") === "Coder" && fixerRole === roleOf("fixer1") && fixerRole === "Fixer" && !document.querySelector("#crew [data-seat-id=\"fixer\"]") && !document.querySelector("#stagehead .does") && chipLabelsFit, { leadModel, leadEffort, crewModel, crewEffort, leadRole, subtitle, fixerRole, effortVisible: chipLabelsFit, stageHeadChips: document.querySelectorAll("#stagehead .does").length });
     // The leader badge repeats nothing: hidden on a picture that already wears a crown (Atlas's), shown on any other.
     const crownWith = (pic) => {
       const state = structuredClone(window.__ccSeed); const lead = tabOf("alpha-dev", state).crew.find((seat) => seat.isLeader);
@@ -37,16 +41,18 @@
     check("the leader crown badge shows only when the leader's picture has no crown of its own", !crowns.slotDefault.badge && crowns.slotDefault.picture === "/avatars/atlas.svg" && !crowns.atlas.badge && crowns.ash.badge && crowns.ash.picture === "/avatars/ash.svg" && crowns.uploaded.badge && workerCrowns === 0, { ...crowns, workerCrowns });
     // The open seat card re-renders from every state broadcast, so it shows each probed label.
     const probeCard = openSeatCard("coder");
+    // Each probe changes the saved preference and every runtime fact derived from it together (the fixed helper), then the card re-renders from that state.
+    const savedCoder = structuredClone(window.__ccSeed.projects.flatMap((project) => project.tabs).find((tab) => tab.id === "alpha-dev").fixedCrew.preferences.coder.assignment);
     const probeLabel = (cli, model) => {
-      const state = structuredClone(window.__latestState); const seat = tabOf("alpha-dev", state).crew.find((item) => item.slot === "coder");
-      seat.cli = cli; seat.model = model;
-      window.__ccDeliver({ ...state, type: "state" });
-      return text("[data-seat-model] .model-label", probeCard);
+      window.__ccHarness.fixed.changeAssignment("alpha-dev", "coder", { cli, model, effort: savedCoder.effort });
+      window.__ccDeliver({ ...structuredClone(window.__ccSeed), type: "state" });
+      return text(".rowb .model-label", probeCard);
     };
     const astraLabel = probeLabel("codex", "gpt-6-astra");
     const sonnetLabel = probeLabel("claude", "claude-sonnet-5");
     const deepseekLabel = probeLabel("opencode", "deepseek/deepseek-flash");
     const unknownLabel = probeLabel("opencode", "unknown/model-123");
+    window.__ccHarness.fixed.changeAssignment("alpha-dev", "coder", savedCoder);
     window.__ccDeliver({ ...structuredClone(window.__ccSeed), type: "state" });
     pressEscape(); showChat();
     check("Codex and OpenCode model labels use the mockup names and unknown ids are shown cleaned up, never raw", astraLabel === "Astra 6" && sonnetLabel === "Sonnet 5" && deepseekLabel === "DeepSeek Flash" && unknownLabel === "Model 123", { astraLabel, sonnetLabel, deepseekLabel, unknownLabel });
@@ -122,6 +128,8 @@
     await clickTab("Development");
     await waitFor(() => window.__latestState?.selectedTabId === "alpha-dev", "B2 return to Development tab");
 
+    // The worker's live run and retained record are the existing fixed scenario (ids audit-parallel-1 and -2, output "real runner output N"), seeded on the coder where the work view needs them.
+    window.__ccHarness.fixed.seedLiveAndRetainedRecords("alpha-dev", "coder");
     openSeatView("coder");
     let live = requireElement('#stagehead [data-run-view="live"]'); live.focus(); live.click();
     const liveFocus = document.activeElement?.dataset.runView === "live";
@@ -174,20 +182,25 @@
     window.__ccDeliver({ ...structuredClone(window.__ccSeed), type: "state" });
 
     showChat();
-    const approvalState = structuredClone(window.__latestState); const approvalTab = tabOf("alpha-dev", approvalState);
-    approvalTab.processState.approval = { state: "pending" };
-    approvalTab.processState.currentStepIndex = 0;
-    approvalTab.derived.stepBar = [{ stepId: "look", type: "look", state: "current", owners: ["user"], label: "Your look" }];
-    approvalTab.crew.find((seat) => seat.isLeader).status = "waiting";
-    window.__ccDeliver({ ...approvalState, type: "state" });
-    const status = text("#statusBtn .pill");
-    const approvalCard = text("#view .ask .h");
-    const screenshotAction = document.querySelector('#view [data-open-screenshots]');
-    requireElement("#view [data-ask-changes]").click();
+    // The rough approval of a real inspected fixed task: the host hands the page the server's own task record, the page reads it with getFixedTask and the card asks for the owner's look.
+    const roughTask = window.__ccFixedTasks["alpha-dev"];
+    if (roughTask?.stage !== "inspected" || !roughTask.roughRevision) window.__ccHarness.fail(`the host supplied no inspected task for alpha-dev: ${JSON.stringify(roughTask ?? null)?.slice(0, 200)}`);
+    window.__ccHarness.fixed.setFixedTask("alpha-dev", roughTask);
+    await waitFor(() => Boolean(document.querySelector('#fixedView [data-fct-approve="rough"]:not([disabled])')), "the rough card can be approved");
+    const readRequest = window.__sent.filter((message) => message.type === "getFixedTask").at(-1);
+    const approvalCard = text('#fixedView [data-fct-card="rough"]');
+    const sentBeforeAsk = window.__sent.length;
+    requireElement("#fixedView [data-fct-ask]").click();
     const changesFocused = document.activeElement === $("ci") && $("ci").value.startsWith("Please make these changes:");
-    requireElement('#view [data-process-action="approveLook"]').click();
-    const approveRequest = window.__sent.filter((message) => message.type === "approveLook").at(-1);
-    check("approval card exposes the real approve action and prefilled changes", status === "Waiting on you: approve the look" && approvalCard.includes("approve the look") && !screenshotAction && changesFocused && approveRequest?.tabId === "alpha-dev", { status, approvalCard, screenshotsAvailable: Boolean(screenshotAction), changesFocused, approveRequest });
+    const askSent = window.__sent.slice(sentBeforeAsk);
+    requireElement('#fixedView [data-fct-approve="rough"]').click();
+    const approveRequest = window.__sent.filter((message) => message.type === "approveFixedRough").at(-1);
+    const exactFields = JSON.stringify(Object.keys(approveRequest ?? {}).sort()) === JSON.stringify(["planVersion", "recordRevision", "requestId", "roughRevision", "taskId", "tabId", "type"].sort());
+    const stillInspected = window.__latestState.projects.flatMap((project) => project.tabs).find((tab) => tab.id === "alpha-dev").fixedTask.stage === "inspected" && !document.querySelector('#fixedView [data-fct-card="rough-approved"]');
+    check("rough approval card exposes the real approve action, the identity it sends and prefilled changes", /rough/i.test(approvalCard) && readRequest?.tabId === "alpha-dev" && changesFocused && askSent.length === 0 && approveRequest?.tabId === "alpha-dev" && approveRequest?.taskId === roughTask.id && approveRequest?.planVersion === roughTask.planVersion && approveRequest?.recordRevision === roughTask.recordRevision && approveRequest?.roughRevision === roughTask.roughRevision && typeof approveRequest?.requestId === "string" && exactFields && !window.__sent.some((message) => message.type === "approveLook") && stillInspected, { approvalCard, readRequest, changesFocused, askSent, approveRequest, exactFields, stillInspected, task: { id: roughTask.id, planVersion: roughTask.planVersion, recordRevision: roughTask.recordRevision, roughRevision: roughTask.roughRevision } });
+    // The task was this check's own: the seed returns to its idle tab so later checks see no task card.
+    window.__ccSeed.projects.flatMap((project) => project.tabs).find((tab) => tab.id === "alpha-dev").fixedTask = null;
+    window.__ccDeliver({ ...structuredClone(window.__ccSeed), type: "state" });
 
     $("setBtn").click(); requireElement('#setModal[aria-hidden="false"]');
     const navItems = [...document.querySelectorAll("#setNav [data-settings-section]")].map((button) => button.textContent.trim());

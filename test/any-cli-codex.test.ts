@@ -5,7 +5,7 @@ import { LEADER_START_TIMEOUT_MS } from "../server/leader-common.ts";
 import * as path from "node:path";
 import { SERVER_START_MS } from "./server-start.ts";
 import { LIST_TIMEOUT_MS } from "../server/leader-common/types.ts";
-import { codexPolicy, SEATS, LEADER, WORKER, TAB, CODEX_LEADER, sleep, NO_FAKE_CLI_ALIVE_MS, withServer, script } from "./any-cli-helpers.ts";
+import { codexPolicy, LEADER, TAB, CODEX_LEADER, sleep, NO_FAKE_CLI_ALIVE_MS, withServer, script } from "./any-cli-helpers.ts";
 
 // ---- Codex leader ----
 
@@ -35,8 +35,8 @@ test("Codex leader: deltas reach chatDelta, reasoning does not, the turn ends on
     assert.deepEqual([usage.modelId, usage.contextTokens, usage.contextWindow, usage.costUsd], ["gpt-6-sol", 1000, 258000, null]);
     const entries = h.cliEntries();
     const thread = entries.find((e) => e.method === "thread/start").params;
-    assert.deepEqual(thread.dynamicTools.map((t: any) => t.name).sort(), ["get_crew_status", "launch_seat", "list_requests", "send_request"]);
-    assert.equal(thread.dynamicTools.find((t: any) => t.name === "launch_seat").inputSchema.properties.slot.type, "string");
+    assert.deepEqual(thread.dynamicTools.map((t: any) => t.name).sort(), ["accept_planner_report", "begin_planning", "finish_fixed_task", "get_fixed_task", "get_task_archive", "list_task_archives", "reconcile_task_execution", "request_task_action", "verify_task_evidence"]);
+    assert.equal(thread.dynamicTools.find((t: any) => t.name === "begin_planning").inputSchema.properties.brief.type, "string");
     assert.equal(thread.cwd, h.work);
     const turn = entries.find((e) => e.method === "turn/start").params;
     assert.deepEqual([turn.model, turn.effort, turn.approvalPolicy], ["gpt-6-sol", "high", "on-request"]);
@@ -58,30 +58,38 @@ test("Codex leader: permission modes map to approval policy and sandbox on the n
   });
 });
 
-test("Codex leader: crew tools go through the same gate, and a tool failure is a failed result", { timeout: 60000 }, async () => {
-  await withServer({ leader: CODEX_LEADER }, async (h) => {
-    let start = h.chat(script({ tool: "get_crew_status" }));
+test("Codex leader: the fixed task tools go through the same gate, and a tool failure is a failed result", { timeout: 60000 }, async () => {
+  await withServer({ leader: CODEX_LEADER, installed: ["codex"] }, async (h) => {
+    let start = h.chat(script({ tool: "get_fixed_task" }));
     await h.wait(() => h.turnEnded(start).length === 1, "status turn"); await h.idle();
-    const crew = JSON.parse(h.deltas(start).replace(/^\[tool ok: /, "").replace(/\]$/, ""));
-    assert.equal(crew.tab, TAB); assert.equal(crew.crew.length, SEATS.length);
-    // Plan mode: launch_seat on a seat that can write is refused by the existing gate.
+    const saved = JSON.parse(h.deltas(start).replace(/^\[tool ok: /, "").replace(/\]$/, ""));
+    assert.deepEqual(saved, { task: null, executions: [] }, "a new tab has no task and no execution");
+    // Plan mode: starting fixed work is refused by the existing gate.
     await h.action({ type: "setPermissionMode", tabId: TAB, mode: "plan", confirm: true });
-    start = h.chat(script({ tool: "launch_seat", args: { slot: WORKER.slotId, brief: "write a file" } }));
+    start = h.chat(script({ tool: "begin_planning", args: { expected: null, brief: "plan a file" } }));
     await h.wait(() => h.turnEnded(start).length === 1, "plan launch turn"); await h.idle();
-    assert.match(h.deltas(start), /\[tool failed: launch failed: this tab is in Plan mode/);
-    // Ask mode: the launch asks the browser first; denying it launches nothing.
+    assert.match(h.deltas(start), /\[tool failed: begin_planning failed: Switch out of Plan mode before starting fixed work\./);
+    // Missing Planner is refused separately, with no approval or spawn.
+    await h.action({ type: "setPermissionMode", tabId: TAB, mode: "accept", confirm: true });
+    start = h.chat(script({ tool: "begin_planning", args: { expected: null, brief: "unassigned planner" } }));
+    await h.wait(() => h.turnEnded(start).length === 1, "unassigned Planner refusal"); await h.idle();
+    assert.match(h.deltas(start), /Planner has no model/);
+    assert.equal(h.pending().length, 0); assert.equal(h.tab().runs.length, 0);
+    await h.refresh();
+    assert.equal((await h.assign("planner", CODEX_LEADER)).type, "actionResult");
+    // Ask mode: the action asks the browser first; denying it launches nothing.
     await h.action({ type: "setPermissionMode", tabId: TAB, mode: "ask", confirm: true });
-    start = h.chat(script({ tool: "launch_seat", args: { slot: WORKER.slotId, brief: "write a file" } }));
+    start = h.chat(script({ tool: "begin_planning", args: { expected: null, brief: "plan a file" } }));
     await h.wait(() => h.pending().length === 1, "launch asks");
-    assert.match(h.pending()[0].tool, /^launch:/);
+    assert.equal(h.pending()[0].tool, "fixed-action");
     await h.action({ type: "answerApproval", tabId: TAB, approvalId: h.pending()[0].approvalId, allow: false });
     await h.wait(() => h.turnEnded(start).length === 1, "denied launch turn"); await h.idle();
-    assert.match(h.deltas(start), /\[tool failed: launch failed: The user denied this\./);
+    assert.match(h.deltas(start), /\[tool failed: begin_planning failed: The owner denied this action\./);
     assert.equal(h.tab().runs.length, 0, "nothing was launched");
     // Invalid arguments fail the call instead of throwing.
-    start = h.chat(script({ tool: "launch_seat", args: { slot: 5 } }));
+    start = h.chat(script({ tool: "begin_planning", args: { expected: null, brief: 5 } }));
     await h.wait(() => h.turnEnded(start).length === 1, "invalid args turn");
-    assert.match(h.deltas(start), /\[tool failed: invalid arguments for launch_seat/);
+    assert.match(h.deltas(start), /\[tool failed: invalid arguments for begin_planning/);
   });
 });
 

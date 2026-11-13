@@ -18,8 +18,6 @@ const { modules: { runner, history } } = await importWithTempDataRoot(async () =
 }));
 
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
-const TOKEN = "tok-p18w-0123456789abcdef0123456789abcdef";
-const CREW = { url: "http://127.0.0.1:1/api/leader-mcp/p18-tab.run", token: TOKEN };
 let counter = 0;
 // Every start() makes one folder for the fake agent's log in the OS temp dir; each is removed when the file ends (its log file, then the empty folder, never a recursive delete).
 const madeLogDirs: string[] = [];
@@ -130,34 +128,13 @@ test("W4: a CLI that cannot be found refuses the start and leaves no file; an AC
   assert.throws(() => runner.runSeat({ runId: "p18w-badcli", seatKey: "p18-tab.bad", slotId: "x", name: "N", cli: "gemini" as any, model: "default", effort: "default", folder, canWrite: true, startedAt: 1 }, "x", { onOutput: () => {}, onStatus: () => {} }), /refusing invalid model/, "any other unknown CLI still throws, as before");
 });
 
-test("W5: the crew tools go to the CLI over HTTP; without HTTP the run fails before any prompt; a seat without crew tools gets none", async () => {
-  const withTools = start("basic", { crewTools: CREW });
-  assert.equal(await withTools.final(), "done");
-  const session = withTools.fake().find((row) => row.received === "session/new");
-  assert.equal(session.params.mcpServers[0].type, "http");
-  assert.equal(session.params.mcpServers[0].name, "tab-crew");
-  assert.equal(session.params.mcpServers[0].url, CREW.url);
-  assert.equal(session.params.mcpServers[0].headers[0].value, `Bearer ${TOKEN}`);
+test("W5: an ACP worker seat gets no crew tool server and no notice about one, and runs on a CLI without HTTP", async () => {
   const noTools = start("basic");
   assert.equal(await noTools.final(), "done");
-  assert.deepEqual(noTools.fake().find((row) => row.received === "session/new").params.mcpServers, [], "a seat that does not run the process gets no tool server");
+  assert.deepEqual(noTools.fake().find((row) => row.received === "session/new").params.mcpServers, [], "a worker seat gets no tool server");
   assert.doesNotMatch(noTools.outputs.join(""), /crew tools/i, "and no notice about them");
-  const noHttp = start("nohttp", { crewTools: CREW });
-  assert.equal(await noHttp.final(), "failed");
-  assert.match(noHttp.outputs.join(""), /does not take tool servers over HTTP/);
-  assert.equal(noHttp.fake().some((row) => row.received === "session/prompt"), false, "session/prompt was never sent");
-  assert.equal(noHttp.fake().some((row) => row.prompt), false, "the agent never saw a prompt");
   const plainNoHttp = start("nohttp");
-  assert.equal(await plainNoHttp.final(), "done", "a seat that does not need the tools runs on a CLI without HTTP");
-});
-
-test("W6: the crew token never reaches the log or the output, whole or split across chunks", async () => {
-  const w = start("echotoken", { crewTools: CREW });
-  assert.equal(await w.final(), "done");
-  const shown = w.outputs.join(""), log = readFileSync(w.logPath, "utf8");
-  assert.ok(!shown.includes(TOKEN) && !log.includes(TOKEN), "the token is not shown or saved");
-  assert.ok(shown.includes("[hidden]") && log.includes("[hidden]"), "it is replaced where it was");
-  for (const chunk of w.outputs) assert.ok(!chunk.includes(TOKEN.slice(0, 20)), "no output chunk even starts it");
+  assert.equal(await plainNoHttp.final(), "done", "a worker seat runs on a CLI without HTTP");
 });
 
 test("W4b: a failed ACP brief write spawns no child", () => {

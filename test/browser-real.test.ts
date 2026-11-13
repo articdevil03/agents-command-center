@@ -7,9 +7,11 @@ import { join } from "node:path";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 import { harnessSource } from "./source-text.ts";
 import { APP_KEY, CHROME, REPO, phase } from "./browser-constants.ts";
+import { fixedSmoke, fixedPartialCases } from "./browser-fixed-steps.ts";
 import { workspaces, waitServer, stopServer, getServerState, fakeParallelState, proxyServer, shutProxy } from "./browser-helpers.ts";
 import { realAudit, layoutAuditAtWidth, titleBarAudit, pack2Audit, pack3Audit } from "./browser-real-steps-layout.ts";
 import { b2Audit } from "./browser-real-steps-b2.ts";
+import { taskFixture } from "./pack18-editor-task-fixture.ts";
 import { packCWidthAudit, packCRealSettingsAudit, requestsRealAudit, looksWriteAudit, looksRefusalAudit, looksReadAudit, fakeRunnerRecordAudit } from "./browser-real-steps-packc.ts";
 
 test("browser harness exercises the real app, server actions, safety shell and responsive layout", async (t) => {
@@ -76,6 +78,8 @@ test("browser harness exercises the real app, server actions, safety shell and r
     writeFileSync(join(settingsFolder, "GEMINI.md"), "temporary Settings picker Gemini instructions\n", "utf8");
     const script = harnessSource();
     const seed = fakeParallelState(await getServerState(actualPort));
+    await fixedSmoke(actualPort, temp, folder, seed, script); // both entries prove the fixed seed first (phase "fixed-smoke")
+    await fixedPartialCases(actualPort, temp, folder, seed, script); // bounded partial runs, only when CC_BROWSER_PHASES names them
     if (process.env.CC_BROWSER_DEBUG_ONLY !== "1" && phase("real")) {
     proxy = proxyServer(actualPort, { folder, mode: "real" }, script);
     await realAudit(proxy, temp, folder);
@@ -111,10 +115,27 @@ test("browser harness exercises the real app, server actions, safety shell and r
     await pack3Audit(proxy, temp, folder);
     shutProxy(proxy); proxy = null;
     }
+    // B2 reads the server's own inspected task record for the rough approval check (taskFixture is the server's createTask output, fingerprinted in the picker folder).
+    const b2Tasks = { "alpha-dev": taskFixture(folder, "alpha-dev", "inspected") };
+    // The early B2 route runs only when CC_BROWSER_PHASES names it, never by default (the full b2 phase runs the same checks first), and announces itself as partial.
+    if (process.env.CC_BROWSER_PHASES?.split(",").includes("b2-early")) {
+    proxy = proxyServer(actualPort, { folder, mode: "fake", seed, fixedTasks: b2Tasks, storageBlocked: true }, script);
+    await b2Audit(proxy, temp, folder, true);
+    shutProxy(proxy); proxy = null;
+    }
     if (phase("b2")) {
-    proxy = proxyServer(actualPort, { folder, mode: "fake", seed, storageBlocked: true }, script);
+    proxy = proxyServer(actualPort, { folder, mode: "fake", seed, fixedTasks: b2Tasks, storageBlocked: true }, script);
     await b2Audit(proxy, temp, folder);
     shutProxy(proxy); proxy = null;
+    }
+
+    // The early C2 route runs only when CC_BROWSER_PHASES names it, never by default (the packc phase runs the same checks, plus R1), and announces itself as partial.
+    if (process.env.CC_BROWSER_PHASES?.split(",").includes("c2-early")) {
+    for (const width of [1600, 1280, 1024]) {
+      proxy = proxyServer(actualPort, { folder, mode: "fake", seed, storageBlocked: width === 1024 }, script);
+      await packCWidthAudit(proxy, temp, folder, width, true);
+      shutProxy(proxy); proxy = null;
+    }
     }
 
     if (phase("packc")) {
@@ -136,6 +157,11 @@ test("browser harness exercises the real app, server actions, safety shell and r
       shutProxy(proxy); proxy = null;
     }
 
+    }
+
+    // The requests case also runs alone (CC_BROWSER_PHASES=requests), announced as such; the default and the packc phase still run it after the Settings widths.
+    if (phase("packc") || phase("requests")) {
+    if (!phase("packc")) console.log("PARTIAL BROWSER RUN (announced, not a full run): the real requests checks only");
     proxy = proxyServer(actualPort, { folder, mode: "real" }, script);
     await requestsRealAudit(proxy, temp, folder);
     shutProxy(proxy); proxy = null;

@@ -1,10 +1,11 @@
-// Pack 9, the warning flow through real servers, part 1: chat and Run are held with a `folderBusy` message when an outside session works in the folder; Continue anyway sends them; our own sessions never count.
+// Pack 9, the warning flow through real servers, part 1 (fixed crew tabs): chat and Run are held with a `folderBusy` message when an outside session works in the folder; Continue anyway sends them; our own sessions never count.
+// A fixed tab's Run is a request to its leader (nothing starts a worker by itself); a worker starts only through the leader's task path, which launchHelper drives.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
-import { TAB_A, TAB_B, sleep, RUN_END_MS, runEndMs, testTimeoutMs, touch, type Server, boot, client, codexRecord, claudeRecord, opencodeRecord, fakeLeaderTurns, withServer } from "./pack9-server-helpers.ts";
+import { TAB_A, TAB_B, sleep, RUN_END_MS, runEndMs, testTimeoutMs, touch, type Server, boot, client, codexRecord, claudeRecord, opencodeRecord, fakeLeaderTurns, withServer, launchHelper } from "./pack9-server-helpers.ts";
 
 test("chat: an outside Codex session holds the message (nothing saved, no turn, no leader), Continue anyway sends it, the next message is not asked again, a NEW outside session asks again", { timeout: 120_000 }, async () => {
   await withServer({}, async (server, c) => {
@@ -43,62 +44,73 @@ test("chat: an outside Codex session holds the message (nothing saved, no turn, 
   });
 });
 
-test("user Run: held with the same warning, nothing launched; Continue anyway launches; the next Run is not asked; a Run on a seat that cannot be launched is not held", { timeout: testTimeoutMs(RUN_END_MS) }, async () => {
+test("user Run: held with the same warning, nothing requested; Continue anyway requests it; the next Run is not asked; a Run that fails validation is not held", { timeout: 120_000 }, async () => {
   await withServer({}, async (server, c) => {
     opencodeRecord(server, "ext-oc-1", Date.now() - 20_000);
     c.send({ type: "run", tabId: TAB_A, slot: "coder", prompt: "build it" });
-    const held = await c.wait(() => c.messages.find((m) => m.type === "folderBusy" && m.action === "run"), "the Run is held");
+    // Either answer ends the wait at once, so a Run that is not held fails on the assertion below, never on a timeout.
+    const answer = await c.wait(() => c.messages.find((m) => (m.type === "folderBusy" && m.action === "run") || m.type === "fixedRunRequested" || m.type === "error"), "an answer to the Run");
+    assert.equal(answer.type, "folderBusy", `the Run is held, got ${JSON.stringify(answer)}`);
+    const held = answer;
     assert.deepEqual([held.tabId, held.items.map((i: any) => i.tool)], [TAB_A, ["OpenCode"]]);
     await sleep(500);
-    assert.equal(c.messages.some((m) => m.type === "runAccepted" || m.type === "runStart"), false, "nothing was launched");
-    assert.equal(existsSync(join(server.work, "run-wrote.txt")), false, "the fake CLI never ran");
+    assert.equal(c.messages.some((m) => m.type === "fixedRunRequested" || m.type === "runAccepted" || m.type === "runStart"), false, "nothing was requested or launched");
+    assert.equal(fakeLeaderTurns(server), 0, "no turn reached the leader");
+    assert.equal(existsSync(join(server.data, "chats", `${TAB_A}.jsonl`)), false, "no transcript was written");
     assert.equal(c.tab(TAB_A).runs.length, 0);
 
     c.send({ type: "run", tabId: TAB_A, slot: "coder", prompt: "build it", confirmBusy: true });
-    await c.wait(() => c.messages.find((m) => m.type === "runAccepted" && m.tabId === TAB_A), "Continue anyway launches");
-    await c.wait(() => c.runEnds() >= 1, "the run ended", RUN_END_MS);
-    assert.ok(existsSync(join(server.work, "run-wrote.txt")), "the fake CLI ran in the tab's folder");
-    const accepted = c.messages.filter((m) => m.type === "runAccepted").length;
+    await c.wait(() => c.messages.find((m) => m.type === "fixedRunRequested" && m.tabId === TAB_A), "Continue anyway requests the Run");
+    await c.wait(() => fakeLeaderTurns(server) === 1 && c.turnDone(TAB_A) === 1, "the leader answered the request");
     c.send({ type: "run", tabId: TAB_A, slot: "coder", prompt: "build more" });
-    await c.wait(() => c.messages.filter((m) => m.type === "runAccepted").length > accepted, "the next Run goes straight through");
+    await c.wait(() => c.messages.filter((m) => m.type === "fixedRunRequested").length === 2, "the next Run goes straight through");
     assert.equal(c.messages.filter((m) => m.type === "folderBusy").length, 1, "asked once");
-    // A leader slot cannot be launched as a worker: that refusal is the normal one, not a warning.
+    await c.wait(() => c.turnDone(TAB_A) === 2, "the second request was answered");
+    // A request that fails validation is the normal refusal, never a warning: an unknown position, a position with no model chosen.
     codexRecord(server, "ext-codex-x", Date.now() - 5_000);
-    c.send({ type: "run", tabId: TAB_A, slot: "leader", prompt: "x" });
-    await c.wait(() => c.messages.find((m) => m.type === "error" && m.action === "run" && /leader/.test(m.message)), "the normal refusal");
-    assert.equal(c.messages.filter((m) => m.type === "folderBusy").length, 1);
+    c.send({ type: "run", tabId: TAB_A, slot: "missing", prompt: "x" });
+    await c.wait(() => c.messages.find((m) => m.type === "error" && /Unknown crew slot/.test(m.message)), "the normal refusal for an unknown position");
+    c.send({ type: "run", tabId: TAB_A, slot: "planner", prompt: "x" });
+    await c.wait(() => c.messages.find((m) => m.type === "error" && /Planner has no model/.test(m.message)), "the normal refusal for a position with no model");
+    assert.equal(c.messages.filter((m) => m.type === "folderBusy").length, 1, "a refused Run is not held");
+    c.send({ type: "run", tabId: TAB_A, slot: "coder", prompt: "valid" });
+    await c.wait(() => c.messages.filter((m) => m.type === "folderBusy").length === 2, "control: the same new outsider holds a valid Run");
   });
 });
 
-test("a leader-started crew run is never held: it launches, and says once per outside session per 10 minutes that one is active", { timeout: testTimeoutMs(RUN_END_MS) }, async () => {
-  await withServer({}, async (server, c) => {
+test("a leader-started worker is never held: it launches, and says once per outside session per 10 minutes that one is active", { timeout: testTimeoutMs(RUN_END_MS, RUN_END_MS, RUN_END_MS) }, async () => {
+  await withServer({ fixedControls: true }, async (server, c) => {
     await c.chatAndFinish(TAB_A, "start the leader"); // no outside session yet
-    const results = () => c.messages.filter((m) => m.type === "testGatedLaunchResult" && m.tabId === TAB_A);
+    const launched = async (brief: string) => {
+      const ends = c.runEnds();
+      const result = await launchHelper(server, TAB_A, brief);
+      await c.wait(() => c.runEnds() > ends, `the worker for "${brief}" ended`, RUN_END_MS);
+      return result;
+    };
     // The heads-up is a quiet chat line only: the page turns a chatNotice into a pop-up, so none may be sent for it.
     const notices = () => c.messages.filter((m) => m.type === "chatMessage" && m.role === "notice" && m.tabId === TAB_A && /Heads up/.test(m.text)).map((m) => ({ message: m.text }));
     const popups = () => c.messages.filter((m) => m.type === "chatNotice" && /Heads up/.test(m.message));
-    c.send({ type: "testGatedLaunch", tabId: TAB_A, slot: "coder", brief: "quiet launch" });
-    await c.wait(() => results()[0], "a launch with nothing outside");
-    assert.equal(results()[0].ok, true);
+    const quiet = await launched("quiet launch");
     assert.equal(notices().length, 0, "no outside session, no notice");
+    // The selection reason stays in the result and the journal; it is never the folder warning.
+    assert.equal(quiet.reason, "Selected the assigned position without a fallback.");
+    const journal = () => JSON.parse(readFileSync(join(server.data, "executions", `${TAB_A}.json`), "utf8")).executions as any[];
+    assert.deepEqual(journal().map((e) => e.selectionReason), ["Selected the assigned position without a fallback."], "the journal keeps the selection reason");
 
     codexRecord(server, "ext-codex-2", Date.now() - 5_000);
-    c.send({ type: "testGatedLaunch", tabId: TAB_A, slot: "coder", brief: "with an outsider" });
-    await c.wait(() => results()[1], "the launch with an outsider");
-    assert.equal(results()[1].ok, true, "never blocked");
+    await launched("with an outsider");
     assert.deepEqual(notices().map((m) => m.message), ["Heads up: a Codex session outside Command Center is active in this folder."]);
-    c.send({ type: "testGatedLaunch", tabId: TAB_A, slot: "coder", brief: "again" });
-    await c.wait(() => results()[2], "the second launch");
-    assert.equal(results()[2].ok, true);
+    await launched("again");
     assert.equal(notices().length, 1, "once per outside session");
     assert.equal(popups().length, 0, "no pop-up for it");
     assert.equal(c.messages.some((m) => m.type === "folderBusy"), false, "a leader launch never asks");
-    await c.wait(() => c.runEnds() >= 3, "the three runs ended", RUN_END_MS);
     // The heads-up is kept with that launch's notice (so it survives a reload and a new connection), once, and is not chat.
     const kept = (await client(server));
     try {
-      const withHeadsUp = kept.state().launchSafety.notices.filter((n: any) => n.headsUp);
+      const notes = kept.state().launchSafety.notices;
+      const withHeadsUp = notes.filter((n: any) => n.headsUp);
       assert.deepEqual(withHeadsUp.map((n: any) => [n.brief, n.headsUp]), [["with an outsider", "a Codex session outside Command Center is active in this folder"]], "only the launch that announced it carries it");
+      assert.equal(notes.some((n: any) => /Selected the assigned position/.test(n.headsUp ?? "")), false, "the selection reason is never carried as a heads-up");
       // The heads-up is also a quiet line inside the tab's chat: saved with it (once), shown to a new connection, and never told to the leader.
       const line = "Heads up: a Codex session outside Command Center is active in this folder.";
       const live = c.messages.filter((m) => m.type === "chatMessage" && m.tabId === TAB_A && m.role === "notice");
@@ -146,9 +158,10 @@ test("Command Center's own leader session never warns, also after a restart with
   }
 });
 
-test("a crew run's own session (window by time) never warns, also after the run ended; one written after its window does", { timeout: testTimeoutMs(RUN_END_MS) }, async () => {
-  await withServer({}, async (server, c) => {
-    c.send({ type: "run", tabId: TAB_A, slot: "coder", prompt: "work" });
+test("a worker run's own session (window by time) never warns, also after the run ended; one written after its window does", { timeout: testTimeoutMs(RUN_END_MS) }, async () => {
+  await withServer({ fixedControls: true }, async (server, c) => {
+    await c.chatAndFinish(TAB_A, "start the leader");
+    await launchHelper(server, TAB_A, "work");
     const started = await c.wait(() => c.messages.find((m) => m.type === "runStart" && m.tabId === TAB_A), "the run started");
     await c.wait(() => c.runEnds() >= 1, "the run ended", RUN_END_MS);
     assert.ok(existsSync(join(server.work, "run-wrote.txt")), "its CLI wrote a file into the folder");
@@ -164,51 +177,44 @@ test("a crew run's own session (window by time) never warns, also after the run 
 });
 
 const longRuns = { FAKE_RUN_SLEEP: "20" };
-test("an outside session that was already running when our crew run started still warns (chat and leader heads-up); one created inside the run's window is taken as ours", { timeout: testTimeoutMs(runEndMs(longRuns.FAKE_RUN_SLEEP)) }, async () => {
-  await withServer({ env: longRuns, tabs: (work) => [{ id: TAB_A, folder: work }, { id: TAB_B, name: "Design", folder: work }] }, async (server, c) => {
+test("an outside session that was already running when our worker started still warns (chat and leader heads-up); one created inside the run's window is taken as ours", { timeout: testTimeoutMs(runEndMs(longRuns.FAKE_RUN_SLEEP)) }, async () => {
+  await withServer({ fixedControls: true, env: longRuns }, async (server, c) => {
     await c.chatAndFinish(TAB_A, "start the leader");
-    await sleep(11_000); // past the leader turn's window and its slack, so only the crew run's window is in play
+    await sleep(11_000); // past the leader turn's window and its slack, so only the worker run's window is in play
     const early = Date.now();
     const files = [codexRecord(server, "ext-codex-before", early), claudeRecord(server, "ext-claude-before", early)];
     opencodeRecord(server, "ext-oc-before", early, early);
     await sleep(1_600); // the run's window opens clearly after these were created
-    c.send({ type: "run", tabId: TAB_B, slot: "coder", prompt: "work" });
-    await c.wait(() => c.messages.find((m) => m.type === "folderBusy" && m.action === "run" && m.tabId === TAB_B), "the Run is held for the outsiders");
-    c.send({ type: "run", tabId: TAB_B, slot: "coder", prompt: "work", confirmBusy: true }); // held for the outsiders, so the person continues
-    await c.wait(() => c.messages.find((m) => m.type === "runStart" && m.tabId === TAB_B), "the run in the other tab started");
-    // The outsiders keep working inside the run's window; one more starts inside it (a crew CLI gives no id, so that one is taken as ours).
+    await launchHelper(server, TAB_A, "with outsiders"); // a leader-started launch never asks; it says the same in its heads-up line
+    await c.wait(() => c.messages.find((m) => m.type === "runStart" && m.tabId === TAB_A), "the worker started");
+    // The outsiders keep working inside the run's window; one more starts inside it (a worker CLI gives no id, so that one is taken as ours).
     for (const file of files) touch(file, Date.now());
     opencodeRecord(server, "ext-oc-before", Date.now(), early);
     codexRecord(server, "started-inside", Date.now());
     const held = await c.chat(TAB_A, "hello");
     assert.ok(held.held, `held, got ${JSON.stringify(held.answer)}`);
-    assert.deepEqual(held.answer.items.filter((i: any) => !i.writer).map((i: any) => i.tool).sort(), ["Claude Code", "Codex", "OpenCode"], "all three already-running outsiders warn; the session created inside the window does not (one Codex, not two)");
-    assert.equal(held.answer.items.filter((i: any) => i.writer).length, 1, "and the other tab's coder, as before");
-    // A leader-started run says the same in its heads-up line.
-    c.send({ type: "testGatedLaunch", tabId: TAB_A, slot: "reviewer1", brief: "with outsiders" });
-    await c.wait(() => c.messages.find((m) => m.type === "testGatedLaunchResult" && m.tabId === TAB_A), "the launch");
+    assert.deepEqual(held.answer.items.map((i: any) => i.tool).sort(), ["Claude Code", "Codex", "OpenCode"], "all three already-running outsiders warn; the session created inside the window does not (one Codex, not two)");
     const line = c.messages.find((m) => m.type === "chatMessage" && m.role === "notice" && m.tabId === TAB_A && /Heads up/.test(m.text))?.text ?? "";
     assert.match(line, /a Codex session outside Command Center is active/);
     assert.match(line, /a Claude Code session outside Command Center is active/);
     assert.match(line, /an OpenCode session outside Command Center is active/);
-    assert.equal(line.match(/Codex session/g)?.length, 1, "the session created inside the window is not announced");
-    await c.wait(() => c.runEnds() >= 2, "the runs ended", runEndMs(longRuns.FAKE_RUN_SLEEP));
+    assert.equal(line.match(/Codex session/g)?.length, 1, "one Codex session is announced");
+    await c.wait(() => c.runEnds() >= 1, "the run ended", runEndMs(longRuns.FAKE_RUN_SLEEP));
   });
 });
 
 const shortRuns = { FAKE_RUN_SLEEP: "7" };
-test("another Command Center tab working on the same folder is not an outsider (its run and its file change warn only as that tab's writer)", { timeout: testTimeoutMs(runEndMs(shortRuns.FAKE_RUN_SLEEP)) }, async () => {
-  await withServer({ env: shortRuns }, async (server, c) => {
-    c.send({ type: "run", tabId: TAB_A, slot: "coder", prompt: "long work" });
+test("another tab's read-only worker in the same folder is not an outsider and not a writer (its run and its file change never warn this tab)", { timeout: testTimeoutMs(runEndMs(shortRuns.FAKE_RUN_SLEEP)) }, async () => {
+  await withServer({ fixedControls: true, env: shortRuns }, async (server, c) => {
+    await c.chatAndFinish(TAB_A, "start the leader");
+    await launchHelper(server, TAB_A, "long work");
     await c.wait(() => c.messages.find((m) => m.type === "runStart" && m.tabId === TAB_A), "the run in the first tab started");
     await c.wait(() => existsSync(join(server.work, "run-wrote.txt")), "its CLI wrote a file");
     await sleep(600); // the watch event for that file arrives (late events are common)
     assert.equal(c.runEnds(), 0, "the first tab's run is still working");
-    const seen = await c.busyProbe(TAB_B);
-    assert.deepEqual(seen.map((i) => i.writer?.tabName), [TAB_A], "the second tab sees the first tab's coder and nothing outside");
-    assert.ok((await c.chat(TAB_B, "from the other tab")).held, "the message is held for it");
-    const other = await c.chatAndFinish(TAB_B, "from the other tab", { confirmBusy: true });
-    assert.ok(other.taken, "Continue anyway sends it");
+    assert.deepEqual(await c.busyProbe(TAB_B), [], "the second tab sees no writer (the worker only reads) and nothing outside (its own file change is ours)");
+    const other = await c.chatAndFinish(TAB_B, "from the other tab");
+    assert.ok(other.taken, `not held: ${JSON.stringify(other.answer)}`);
     await c.wait(() => c.runEnds() >= 1, "the run ended", runEndMs(shortRuns.FAKE_RUN_SLEEP));
   });
 });
@@ -232,10 +238,10 @@ test("catch-all: a file written into the folder while none of our agents works t
   });
 });
 
-test("our own windows end with the work: 12 s after a leader turn and a crew run, a file an outsider writes warns (nothing stays 'ours' for ever)", { timeout: testTimeoutMs(RUN_END_MS) }, async () => {
-  await withServer({}, async (server, c) => {
+test("our own windows end with the work: 12 s after a leader turn and a worker run, a file an outsider writes warns (nothing stays 'ours' for ever)", { timeout: testTimeoutMs(RUN_END_MS) }, async () => {
+  await withServer({ fixedControls: true }, async (server, c) => {
     await c.chatAndFinish(TAB_A, "a leader turn");
-    c.send({ type: "run", tabId: TAB_A, slot: "coder", prompt: "work" });
+    await launchHelper(server, TAB_A, "work");
     await c.wait(() => c.runEnds() >= 1, "the run ended", RUN_END_MS);
     await sleep(12_000); // a window still covers a late flush for 10 s after its work ended
     writeFileSync(join(server.work, "outsider.txt"), "someone else");

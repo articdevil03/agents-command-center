@@ -21,7 +21,8 @@ test("mode change race: a queued change that reaches a busy Codex leader is refu
     await h.wait(() => h.ipc.some((m) => m.type === "modeChangeStarted"), "the first change is in flight");
     // No busy leader at request time, so race_2 passes the first check and queues behind race_1: only the queued callback's check can refuse it.
     h.send({ type: "setPermissionMode", tabId: TAB, mode: "ask", confirm: true, requestId: "race_2" });
-    await h.update({ slot: LEADER.slotId, cli: "codex", model: "gpt-6-sol" }, () => h.seat(LEADER.slotId).cli === "codex");
+    // The saved Codex choice replaces the idle Claude leader when the next message sees the changed fixed signature.
+    assert.equal((await h.assign(LEADER.slotId, CODEX_LEADER)).type, "actionResult");
     const start = h.chat(script({ sleep: 3500 }, { say: "still going" }));
     await h.wait(() => startedPids(h).length === 1 && h.tab().derived.leaderTurnActive, "the Codex leader is running the turn");
     const second = await modeReply(h, mark, "race_2");
@@ -69,11 +70,12 @@ test("OpenCode leader: Stop while a reply is still being acknowledged still reje
   });
 });
 
-test("OpenCode leader: the effort sent with each prompt follows the saved seat", { timeout: 60000 }, async () => {
+test("OpenCode leader: the effort sent with each prompt follows the saved fixed assignment", { timeout: 60000 }, async () => {
   // OpenCode offers one effort today: the test runner widens the list to two so a leader that froze its effort at start is caught.
-  await withServer({ leader: OPENCODE_LEADER, env: { CC_TEST_OPENCODE_EFFORTS: "max,high" } }, async (h) => {
+  await withServer({ leader: OPENCODE_LEADER, installed: ["opencode"], env: { CC_TEST_OPENCODE_EFFORTS: "max,high" } }, async (h) => {
+    await h.refresh();
     let start = h.chat("first"); await h.wait(() => h.turnEnded(start).length === 1, "first turn"); await h.idle();
-    await h.update({ slot: LEADER.slotId, effort: "high" }, () => h.seat(LEADER.slotId).effort === "high");
+    assert.equal((await h.assign(LEADER.slotId, { ...OPENCODE_LEADER, effort: "high" })).type, "actionResult");
     start = h.chat("second"); await h.wait(() => h.turnEnded(start).length === 1, "second turn");
     assert.deepEqual(h.cliEntries().filter((e) => e.path?.endsWith("/prompt_async")).map((e) => e.body.variant), ["max", "high"]);
   });

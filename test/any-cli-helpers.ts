@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { join, resolve } from "node:path";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
 import { importWithTempDataRoot, newAppKey, keyedWsUrl } from "./temp-root.ts";
 import { attachCrashCatcher, crashFactsAfterDeath } from "./crash-catcher.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
@@ -36,14 +36,15 @@ export const { opencodeRules, opencodeApprovalRequest, createOpencodeLeader } = 
 // Every test here starts the real server with fake Codex / OpenCode CLIs behind the leader's spawn.
 // Guards are driven through WebSocket messages and the bridge HTTP route, never through helpers.
 
-export const SEATS = getProcessDefinition("dev", "main").seats;
+// The fixed roster's own preferred setups name the three seats these tests use: the leader, one Claude seat that writes and one that only reads.
+const preferred = (slot: string) => ({ slotId: slot, ...FIXED_CREW.find((seat) => seat.slot === slot)!.preferred });
 
-export const LEADER = SEATS.find((seat) => seat.isLeader)!;
+export const LEADER = preferred("leader");
 
 // Seats that start on Claude, so a switch to Codex or OpenCode really changes the CLI.
-export const WORKER = SEATS.find((seat) => !seat.isLeader && seat.canWrite === true && seat.cli === "claude")!;
+export const WORKER = preferred("designCoder");
 
-export const READER = SEATS.find((seat) => !seat.isLeader && seat.canWrite !== true && seat.cli === "claude")!;
+export const READER = preferred("researcher");
 
 export const TAB = "anycli-dev";
 
@@ -120,11 +121,15 @@ function readCrashReport(temp: string): string {
 export type Boot = { leader: { cli: string; model: string; effort: string }; killDoesNothing?: boolean; tree?: boolean; env?: Record<string, string>; installed?: string[]; unknown?: string[]; advisor?: string; workerModel?: string; workerEffort?: string };
 
 export async function boot(options: Boot) {
+  // Loaded here, not at the top: the fixture reaches config.ts, which must first be imported on the temp data root (see the import above).
+  const { fixedProject, fixedTab, fixedWorkspaces } = await import("./fixed-server-fixture.ts");
   const temp = mkdtempSync(join(tmpdir(), "cc-anycli-"));
   const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work");
   mkdirSync(home); mkdirSync(work); mkdirSync(join(data, "config"), { recursive: true });
-  const crew = SEATS.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, ...(seat.isLeader ? options.leader : { cli: seat.cli, model: seat === WORKER && options.workerModel ? options.workerModel : seat.model, effort: seat === WORKER && options.workerEffort ? options.workerEffort : seat.effort }) }));
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "anycli", name: "AnyCli", folder: work, tabs: [{ id: TAB, name: TAB, kind: "dev", process: "main", folder: work, crew, ...(options.advisor ? { advisor: { model: options.advisor } } : {}) }] }] }));
+  const leader = { cli: options.leader.cli as "claude", model: options.leader.model, effort: options.leader.effort, ...(options.advisor ? { advisor: options.advisor } : {}) };
+  const worker = { cli: "claude" as const, model: options.workerModel ?? WORKER.model, effort: options.workerEffort ?? WORKER.effort };
+  const reader = { cli: "claude" as const, model: READER.model, effort: READER.effort };
+  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("anycli", work, [fixedTab(TAB, work, { leader, [WORKER.slotId]: worker, [READER.slotId]: reader }, TAB)]), name: "AnyCli" }])));
   const responses: Record<string, unknown> = {};
   for (const cli of ["claude", ...(options.installed ?? [])]) responses[JSON.stringify([cli, "--version"])] = { code: 0, stdout: `${cli} 1.0.0`, stderr: "" };
   // Exit code 1 is neither "ran" nor "not found": installed stays null (not checked).
@@ -175,27 +180,27 @@ export async function boot(options: Boot) {
   socket.on("message", (raw) => messages.push(JSON.parse(String(raw))));
   await once(socket, "open").then(() => { socket.send(JSON.stringify({ type: "hello" })); return wait(state, "initial state"); }).catch(abandon);
   const tab = () => state().projects[0].tabs[0];
-  const seat = (slot: string) => tab().crew.find((s: any) => s.slot === slot);
+  // A seat's current assignment in the state the client receives (undefined while nothing is assigned).
+  const seat = (slot: string) => { const assignment = tab().fixedCrew?.preferences?.[slot]?.assignment; return assignment ? { slot, ...assignment } : undefined; };
   let number = 0, asked = false;
   const h = {
     port, temp, work, child, messages, exit: () => exit, log: () => log, state, tab, seat, wait, ipc,
     cliEntries: () => (existsSync(cliLog) ? readFileSync(cliLog, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []) as any[],
-    savedCrew: () => JSON.parse(readFileSync(join(data, "config", "workspaces.json"), "utf8")).projects[0].tabs[0].crew as any[],
+    savedFixed: () => JSON.parse(readFileSync(join(data, "config", "workspaces.json"), "utf8")).projects[0].tabs[0].fixedCrew as { preferences: Record<string, { assignment: any; source: string }>; roleExtras: Record<string, string> },
+    savedSeat: (slot: string) => JSON.parse(readFileSync(join(data, "config", "workspaces.json"), "utf8")).projects[0].tabs[0].fixedCrew.preferences[slot].assignment as any,
     send: (payload: any) => socket.send(JSON.stringify(payload)),
     // The made-up processes the server's process list also shows, and which of them cannot be killed (Boot.tree).
     // Written beside the file and renamed over it: the server reads it at every list and kill and must never see half of it.
     setTree: (extra: Array<{ pid: number; ppid: number; created: number }>, failKill: number[]) => { writeFileSync(join(temp, "tree.json.tmp"), JSON.stringify({ extra, failKill })); renameSync(join(temp, "tree.json.tmp"), join(temp, "tree.json")); },
     // Every pretended kill of a made-up process the server was asked for, in order.
     treeKills: () => (existsSync(join(temp, "tree.json.kills")) ? readFileSync(join(temp, "tree.json.kills"), "utf8").split("\n").filter((line) => line.endsWith("}")).map((line) => JSON.parse(line)) : []) as Array<{ pid: number; ok: boolean; at: number }>,
-    // A message is answered by an error frame, or by a state that satisfies `done`.
-    update: async (payload: any, done?: () => any) => {
-      const start = messages.length; socket.send(JSON.stringify({ type: "updateSeat", tabId: TAB, ...payload }));
-      return await wait(() => messages.slice(start).find((m) => m.type === "error") ?? (done?.() ? { type: "ok" } : null), `updateSeat ${JSON.stringify(payload)}`);
-    },
     action: async (payload: any) => {
       const requestId = `anycli_${++number}`; socket.send(JSON.stringify({ ...payload, requestId }));
       return await wait(() => messages.find((m) => m.requestId === requestId && (m.type === "error" || m.type === "actionResult" || m.type === "permissionModeChanged")), payload.type);
     },
+    // A fixed-crew assignment or role-extra change: answered by an error frame or an actionResult, the saved choice is then in the state.
+    assign: (slot: string, assignment: object | null) => h.action(assignment === null ? { type: "clearCrewAssignment", tabId: TAB, slot } : { type: "setCrewAssignment", tabId: TAB, slot, assignment }),
+    roleExtra: (slot: string, text: string) => h.action({ type: "setCrewRoleExtra", tabId: TAB, slot, text }),
     chat: (text: string) => { const start = messages.length; socket.send(JSON.stringify({ type: "chat", tabId: TAB, text })); return start; },
     turnEnded: (start: number) => messages.slice(start).filter((m) => (m.type === "chatDone" || m.type === "chatError") && m.tabId === TAB),
     idle: () => wait(() => !tab().derived.leaderTurnActive, "leader idle"),

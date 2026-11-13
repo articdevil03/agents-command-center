@@ -7,20 +7,22 @@
     const step = `<span class="act" data-activity${stepByTab.get(tab.id) ? "" : " hidden"}>${esc(stepByTab.get(tab.id) ?? "")}</span>`;
     const stream = draft ? `<div class="msg" data-stream>${seatImg(lead)}<div class="body"><span class="meta"><b>${esc(lead?.name ?? "Lead")}</b>Replying${step}</span><div class="md">${mdHtml(draft)}</div></div></div>`
       : tab.derived?.leaderTurnActive && !tab.pendingApprovals?.length ? `<div class="msg">${seatImg(lead)}<div class="body"><span class="meta"><b>${esc(lead?.name ?? "Lead")}</b>Replying${step}</span><span class="typing" role="img" aria-label="Replying"><i></i><i></i><i></i></span></div></div>` : "";
-    const look = lookCard(tab);
     // The server could not read this tab's saved transcript (the file is kept as it is): say why the chat is empty.
     const problem = tab.chatProblem ? `<p class="action-status" data-status="failed" role="alert" data-chat-problem>This chat could not be read (${esc(tab.chatProblem)}). Clear the chat to start a new one; the damaged file is kept as a copy.</p>` : "";
     const view = $("view");
+    const taskPanel = $("fixedView"), markup = document.createElement("template");
     const previousScrollTop = view.scrollTop;
     const stickToBottom = view.dataset.tabId !== tab.id || view.dataset.mode !== "chat" || view.scrollHeight - view.scrollTop - view.clientHeight <= 4;
-    if (!messages && !stream && !look) {
+    if (!lead && tab.fixedCrew) {
+      markup.innerHTML = `<div class="thread" aria-label="Saved leader chat">${problem}${messages}${stream}<p class="empty-chat">Leader has no model. Choose a model for Leader in the task panel to continue.</p></div>`;
+    } else if (!messages && !stream) {
       const name = lead?.name ?? "The leader";
-      view.innerHTML = `<div class="thread" aria-label="Chat with ${esc(name)}">${problem}<div class="empty empty-chat">${seatImg(lead)}<h2>${esc(name)} is ready</h2><p>Tell ${esc(name)} what you want. The crew picks it up from there, and anything that needs you shows up in Needs you at the top.</p><div class="chips">${["Where did we leave off?", "What is left?", "What should we build next?"].map((text) => `<button type="button" data-suggest>${esc(text)}</button>`).join("")}</div></div></div>`;
-    } else view.innerHTML = `<div class="thread" aria-label="Chat with ${esc(lead?.name ?? "the leader")}">${problem}${messages}${stream}${look}</div>`;
+      markup.innerHTML = `<div class="thread" aria-label="Chat with ${esc(name)}">${problem}<div class="empty empty-chat">${seatImg(lead)}<h2>${esc(name)} is ready</h2><p>Tell ${esc(name)} what you want. The crew picks it up from there, and anything that needs you shows up in Needs you at the top.</p><div class="chips">${["Where did we leave off?", "What is left?", "What should we build next?"].map((text) => `<button type="button" data-suggest>${esc(text)}</button>`).join("")}</div></div></div>`;
+    } else markup.innerHTML = `<div class="thread" aria-label="Chat with ${esc(lead?.name ?? "the leader")}">${problem}${messages}${stream}</div>`;
+    for (const child of [...view.children]) if (child !== taskPanel) child.remove();
+    view.append(markup.content);
+    if (!view.contains(taskPanel)) view.prepend(taskPanel);
     view.dataset.tabId = tab.id; view.dataset.mode = "chat";
-    view.querySelectorAll("[data-process-action]").forEach((button) => button.addEventListener("click", () => runProcessAction(tab, button.dataset.processAction)));
-    view.querySelector("[data-ask-changes]")?.addEventListener("click", askForChanges);
-    view.querySelectorAll("[data-open-screenshots]").forEach((button) => button.addEventListener("click", () => openScreenshotViewer(button.dataset.openScreenshots, null, button)));
     view.querySelectorAll("[data-open-shot]").forEach((button) => button.addEventListener("click", () => openScreenshotViewer(tab.id, button.dataset.openShot, button)));
     view.querySelectorAll("[data-suggest]").forEach((button) => {
       button.disabled = chatSendLocked(tab.id) || savePending.has(tab.id);
@@ -147,7 +149,7 @@
     const historyOpen = selectedView === "history";
     const requested = historyRunRequested.get(key);
     const stopping = active.length ? stopLabelFor(tab, active) : "";
-    const head = `<div id="stagehead" class="wv"><button type="button" class="back" data-back-chat>${ICONS.back}<span>Back to the chat with ${esc(leaderName(tab))}</span></button><div class="vhead"><span class="av big">${seatImg(seat)}<i class="dot ${esc(dot)}"></i></span><div class="vwho"><b><span data-seat-name title="${esc(seat.name)}">${esc(seat.name)}</span></b><small title="${esc(seatRole(tab, seat))} · ${esc(cliLabel(seat.cli))}">${esc(seatRole(tab, seat))} · ${esc(cliLabel(seat.cli))}</small></div><span class="vstat ${esc(line.cls)}" role="status"><i></i><span class="vt" title="${esc(line.text)}">${esc(line.text)}</span></span><span class="spacer"></span><button type="button" class="btn primary sm" data-run-seat>${active.length ? "Run another" : "Run"}</button>${active.length || seat.status === "working" ? `<button type="button" class="btn danger sm" data-stop-seat title="Stops every run of ${esc(seat.name)} and blocks new launches until you allow it"${stopping ? " disabled" : ""}>${stopping ? esc(stopping) : `Stop seat (${active.length || 1})`}</button>` : ""}<button type="button" class="soft ico" data-seat-more="${esc(seat.slot)}" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(seat.name)}: model, name, picture and launches" title="Model, name, picture and launches">${ICONS.dots}</button></div>${seatFacts(tab, seat, selected, finished[0], line, blocked)}${blocked ? `<div class="blk">${ICONS.warn}<span>Launch blocked after a stop. ${esc(seat.name)} cannot start until you allow it.</span><button type="button" class="btn sm" data-seat-unblock>Allow again</button></div>` : ""}<div class="vbar"><div class="segs" role="tablist" aria-label="Run view"><button type="button" role="tab" data-run-view="live" aria-selected="${String(!historyOpen)}">Live</button><button type="button" role="tab" data-run-view="history" aria-selected="${String(historyOpen)}">History</button></div>${!historyOpen && active.length > 1 ? `<div class="runtabs" role="tablist" aria-label="Live runs">${active.map((run) => `<button type="button" role="tab" data-run-tab="${esc(run.runId)}" aria-selected="${String(run.runId === selected.runId)}" title="${plainMd(run.label)}"><span class="d"></span><span>${plainMd(run.label)}</span></button>`).join("")}</div>` : ""}</div></div>`;
+    const head = `<div id="stagehead" class="wv"><button type="button" class="back" data-back-chat>${ICONS.back}<span>Back to the chat with ${esc(leaderName(tab))}</span></button><div class="vhead"><span class="av big">${seatImg(seat)}<i class="dot ${esc(dot)}"></i></span><div class="vwho"><b><span data-seat-name title="${esc(seat.name)}">${esc(seat.name)}</span></b><small title="${esc(seatRole(tab, seat))} · ${esc(cliLabel(seat.cli))}">${esc(seatRole(tab, seat))} · ${esc(cliLabel(seat.cli))}</small></div><span class="vstat ${esc(line.cls)}" role="status"><i></i><span class="vt" title="${esc(line.text)}">${esc(line.text)}</span></span><span class="spacer"></span><button type="button" class="btn primary sm" data-run-seat>${active.length ? "Run another" : "Run"}</button>${active.length || seat.status === "working" ? `<button type="button" class="btn danger sm" data-stop-seat title="Stops every run of ${esc(seat.name)} and blocks new launches until you allow it"${stopping ? " disabled" : ""}>${stopping ? esc(stopping) : `Stop seat (${active.length || 1})`}</button>` : ""}<button type="button" class="soft ico" data-seat-more="${esc(seat.slot)}" aria-haspopup="dialog" aria-expanded="false" aria-label="${esc(seat.name)}: seat details and launches" title="Seat details and launches">${ICONS.dots}</button></div>${seatFacts(tab, seat, selected, finished[0], line, blocked)}${blocked ? `<div class="blk">${ICONS.warn}<span>Launch blocked after a stop. ${esc(seat.name)} cannot start until you allow it.</span><button type="button" class="btn sm" data-seat-unblock>Allow again</button></div>` : ""}<div class="vbar"><div class="segs" role="tablist" aria-label="Run view"><button type="button" role="tab" data-run-view="live" aria-selected="${String(!historyOpen)}">Live</button><button type="button" role="tab" data-run-view="history" aria-selected="${String(historyOpen)}">History</button></div>${!historyOpen && active.length > 1 ? `<div class="runtabs" role="tablist" aria-label="Live runs">${active.map((run) => `<button type="button" role="tab" data-run-tab="${esc(run.runId)}" aria-selected="${String(run.runId === selected.runId)}" title="${plainMd(run.label)}"><span class="d"></span><span>${plainMd(run.label)}</span></button>`).join("")}</div>` : ""}</div></div>`;
     let body = "";
     const detail = requested !== undefined ? historyDetails.get(`${key}:${requested}`) : null;
     if (historyOpen && detail) body = historyDetailMarkup(seat, key, detail);
@@ -250,6 +252,7 @@
   }
   function renderStage() {
     const tab = currentTab(); const seat = selectedSeat(tab);
+    const taskPanel = $("fixedView");
     renderPermissionButton(tab);
     const nextHistoryKey = selectedView === "history" && tab && seat ? seat.seatKey ?? `${tab.id}.${seat.slot}` : null;
     const openedHistory = nextHistoryKey && nextHistoryKey !== historyViewKey;
@@ -276,12 +279,15 @@
     renderFolderButton(tab);
     renderJobsLine(tab);
     syncComposerVisibility();
-    if (!tab || !seat) { $("view").innerHTML = '<p class="muted empty-chat">Waiting for server state.</p>'; return; }
+    fixedCrewUi?.renderTask(tab, seat?.isLeader !== false && selectedView !== "history"); // a fixed tab's task panel over the leader's chat (public/fixed-crew/task-view.js)
+    if (tab?.fixedCrew && !seat && selectedView !== "history") { renderChat(tab); return; }
+    if (!tab || !seat) { $("view").innerHTML = '<p class="muted empty-chat">Waiting for server state.</p>'; $("view").prepend(taskPanel); return; }
     renderAttachments();
     updateChatLoading(tab.id);
     if (!seat.isLeader) renderRunView(tab, seat);
     else if (selectedView === "history") renderLeaderHistory(tab, seat);
     else renderChat(tab);
+    if (!$("view").contains(taskPanel)) $("view").prepend(taskPanel);
   }
   function syncComposerVisibility() {
     const tab = currentTab();
@@ -314,74 +320,4 @@
     $("folder").textContent = tab ? folderName(tab.folder) : "";
     button.title = tab ? `Works in ${tab.folder}. Click to change the folder` : "";
     button.setAttribute("aria-label", tab ? `Home folder ${tab.folder}. Change folder` : "Change folder");
-  }
-
-  // ---------- details: activity, changes, notes and usage ----------
-  function renderSide() {
-    const tab = currentTab();
-    $("side").hidden = !sideOpen; $("main").classList.toggle("side", sideOpen);
-    $("sideBtn").setAttribute("aria-pressed", String(sideOpen));
-    const rows = activity.filter((item) => !item.tabId || item.tabId === tab?.id);
-    $("feed").innerHTML = rows.length ? rows.map((item) => `<div class="ev"><span class="d ${esc(item.type)}"></span><span class="x">${esc(item.text)}</span><time>${esc(item.at)}</time></div>`).join("") : '<span class="faint">Nothing yet in this tab.</span>';
-    renderUsage(tab);
-    renderLower();
-  }
-  function renderUsage(tab) {
-    const usage = $("usage");
-    if (!tab) { usage.innerHTML = '<span class="faint">No usage reported yet.</span>'; return; }
-    $("usageTitle").textContent = `This session in ${tab.name}`;
-    // Numbers only where the server measured them (the leader's last turn, each live run); every other seat says Not reported.
-    const rows = [];
-    const lead = leader(tab);
-    for (const seat of tab.crew) {
-      if (seat.isLeader) { rows.push({ seat, model: formatModel(seat.cli, seat.model, tab), value: formatUsage(tab.leaderUsage) }); continue; }
-      const live = (tab.runs ?? []).filter((run) => run.seatSlotId === seat.slot && run.status === "working" && formatUsage(run.usage));
-      if (live.length) for (const run of live) rows.push({ seat, model: formatModel(run.cli, run.model), value: formatUsage(run.usage) });
-      else rows.push({ seat, model: formatModel(seat.cli, seat.model), value: null });
-    }
-    // An advisor is a per-seat setting now: every seat that has one shows its row, whichever seat it is.
-    const advisors = tab.crew.filter((seat) => seat.advisor && cliCap(seat.cli)?.advisor);
-    const row = (picture, name, model, value, note) => `<div class="useRow${value ? "" : " unmeasured"}">${picture}<span title="${esc(name)} · ${esc(model)}">${esc(name)} <span class="faint">· ${esc(model)}</span></span>${value ? `<span class="v">${esc(value)}</span>` : `<span class="nr">${esc(note)}</span>`}</div>`;
-    usage.innerHTML = (rows.some((item) => item.value) ? "" : '<p class="faint" data-usage-empty>No usage reported yet.</p>')
-      + rows.map((item) => row(seatImg(item.seat), item.seat.name, item.model, item.value, "Not reported")).join("")
-      + advisors.map((seat) => row('<span class="advglyph" aria-hidden="true">✦</span>', `Advisor for ${seat.name}`, formatModel(seat.cli, seat.advisor), null, "Not reported separately")).join("");
-    $("contextLine").textContent = lead ? `${lead.name}'s context: ${contextLine(tab)} · ${formatModel(lead.cli, lead.model, tab)}. Numbers cover the leader's last turn and live runs; a finished run's numbers stay in its own log.` : "";
-  }
-  function renderLower() {
-    document.querySelectorAll(".pills [data-l]").forEach((button) => { const on = button.dataset.l === lowerSection; button.setAttribute("aria-selected", String(on)); button.tabIndex = on ? 0 : -1; });
-    $("sideBody").setAttribute("aria-labelledby", `sp-${lowerSection}`);
-    $("feed").hidden = lowerSection !== "activity";
-    $("usagePanel").hidden = lowerSection !== "usage";
-    $("lowerBody").hidden = !["changes", "notes"].includes(lowerSection);
-    if (lowerSection === "changes") renderChanges();
-    else if (lowerSection === "notes") renderNotes();
-  }
-  function renderChanges() {
-    const tab = currentTab(); const changes = tab?.changes;
-    if (!tab || !changes) { $("lowerBody").innerHTML = '<p class="faint" style="margin:0">Git status is unavailable right now. It is read again when a run finishes or you open this tab.</p>'; return; }
-    if (!changes.repo) { $("lowerBody").innerHTML = `<div class="kv"><span>Folder</span><span class="path" title="${esc(tab.folder)}">${esc(tab.folder)}</span></div><p class="change-empty faint" data-change-not-repo style="margin:0">Not a git repository. This folder has no commits or uncommitted files to show.</p>`; return; }
-    const files = Array.isArray(changes.uncommittedFiles) ? changes.uncommittedFiles : [];
-    const ahead = Math.max(0, Number(changes.ahead) || 0), behind = Math.max(0, Number(changes.behind) || 0);
-    const hash = changes.lastCommit?.hash ?? "No commit recorded";
-    const remote = `${ahead ? `${ahead} commit${ahead === 1 ? "" : "s"} not pushed` : "Up to date"}${behind ? ` · ${behind} behind` : ""}`;
-    const rows = [
-      `<div class="kv" data-change-row="branch"><span>Branch</span><span class="mono" title="${esc(changes.branch ?? "Unknown")}">${esc(changes.branch ?? "Unknown")}</span></div>`,
-      `<div class="kv" data-change-row="commit"><span>Last commit</span><span class="mono" title="${esc(`${hash}${changes.lastCommit?.subject ? ` ${changes.lastCommit.subject}` : ""}`)}">${esc(hash)}</span></div>`,
-      `<div class="kv" data-change-row="remote"><span>Remote</span><span style="color:${ahead ? "var(--warn-text)" : "var(--working-text)"}">${esc(remote)}</span></div>`,
-      `<div class="kv" data-change-row="files"><span>Not committed</span><span class="mono change-count" style="color:${files.length ? "var(--warn-text)" : "var(--text-2)"}">${files.length} file${files.length === 1 ? "" : "s"}</span></div>`,
-    ];
-    const fileList = files.length ? `<div class="fl changes-files" data-change-file-list>${files.map((file) => {
-      const status = file.status === "??" ? "A" : (String(file.status || "?").match(/[MAD]/)?.[0] ?? "M");
-      return `<div><b class="${status}" aria-label="${status}">${status}</b><span title="${esc(file.path)}">${esc(file.path)}</span></div>`;
-    }).join("")}</div>` : '<span class="faint">Working tree clean.</span>';
-    $("lowerBody").innerHTML = `${rows.join("")}${fileList}`;
-  }
-  function openObsidianVault() {
-    const vaultPath = serverState?.settings?.vault?.path;
-    if (!vaultPath) return;
-    if (!window.cc || typeof window.cc.openObsidian !== "function") return;
-    const url = `obsidian://open?path=${encodeURIComponent(vaultPath)}`;
-    Promise.resolve(window.cc.openObsidian(url)).then((result) => {
-      if (result?.ok === false) showToast(result.message ?? "Could not open Obsidian");
-    }).catch((error) => showToast(error?.message ?? "Could not open Obsidian"));
   }

@@ -3,13 +3,15 @@ import { writeFileSync, mkdirSync, appendFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StringDecoder } from "node:string_decoder";
+import { setPriority, constants as osConstants } from "node:os";
 import { isValidModel, isValidEffort, isAcpKind, type SeatKind, type AcpKind } from "./config.ts";
 import { formatExitMarker } from "./history.ts";
 import type { UsageDelta } from "./usage.ts";
 import { resolveDataRoot } from "./data-root.ts";
-import { describeSpawnError, KILL_TIMEOUT_MS, LIST_TIMEOUT_MS, leaderChildEnv, spawnAcpChild, watchProcessTree, withResolvedCli, type AcpSpawn, type LeaderCallbacks, type LeaderHandle, type TreeWatch } from "./leader-common.ts";
+import { describeSpawnError, leaderChildEnv, spawnAcpChild, watchProcessTree, withResolvedCli, type AcpSpawn, type LeaderCallbacks, type LeaderHandle, type TreeWatch } from "./leader-common.ts";
 import { createAcpLeader } from "./leader-acp.ts";
-import { MCP_VAR, CREW_URL_VAR, CREW_TOKEN_VAR, CREW_SERVER, crewEnv, usesMcpFile, opencodeConfig, checkCrewTools } from "./runner-crew.ts";
+import { opencodeConfig } from "./runner-crew.ts";
+import { EXIT_DRAIN_MS, KILL_GRACE_MS, SWEEP_WAIT_MS, trackWorker, workerAdmissionClosed } from "./runner/lifecycle.ts";
 import {
   createAgentUsageState, feedClaudeOutput, flushClaudeOutput, scanCodexTokens, flushCodexTokens,
   type AgentUsageState, type AgentUsageEvent, type RateLimitWindows,
@@ -34,12 +36,12 @@ export type RunnerRun = {
   advisor?: string;
   // An ACP crew seat: the CLI's start command (cli is then "acp:<id>"; model and effort are "default").
   acp?: { name: string; program: string; args: string[] };
-  // Only on the run of the seat that runs the process: where the crew tools are and the token that opens them (never on a command line, never in a log).
-  crewTools?: { url: string; token: string };
   // A Researcher seat: live web search on (Claude: WebSearch and WebFetch allowed even in read-only mode, probed 2026-10-29; Codex: its --search switch, parse-checked only).
   webSearch?: boolean;
+  lowPriority?: boolean;
 };
 export type RunnerCallbacks = {
+  onTreeEnd?: (run: RunnerRun, evidence: "confirmed" | "unknown") => void;
   onUnconfirmedKill?: (run: RunnerRun, pid: number | undefined) => void;
   onReleasedClose?: (run: RunnerRun, exitCode?: number) => void;
   onOutput: (run: RunnerRun, chunk: string) => void;
@@ -48,6 +50,11 @@ export type RunnerCallbacks = {
   onRateLimit?: (windows: RateLimitWindows) => void;
 };
 type Spawn = typeof spawn;
+let fixedPriorityBoundary: ((pid: number) => void) | undefined;
+export function setFixedPriorityBoundaryForTests(priority: (pid: number) => void): void {
+  if (process.env.CC_TEST_FAKE_CLI !== "1") throw new Error("Priority injection requires the fake CLI harness.");
+  fixedPriorityBoundary = priority;
+}
 type RunningEntry = { run: RunnerRun; proc: ChildProcess; cb: RunnerCallbacks; logPath: string; flush: () => void; watch: TreeWatch | null; exitedAt?: number; unconfirmed?: boolean; stopRequested?: boolean; outcome?: "done" | "failed" };
 const running = new Map<string, RunningEntry>();
 const bySeat = new Map<string, Set<string>>();
@@ -55,8 +62,6 @@ const released = new Set<RunningEntry>();
 const lastLogTs = new Map<string, number>();
 
 const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";
-// Plan mode blocks every MCP tool (probed 2026-10-28), so a read-only seat that runs the process uses default mode; the denied-tools list is its boundary.
-const CLAUDE_READ_ONLY_CREW_FLAGS = "--permission-mode default --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";
 const CLAUDE_WRITE_FLAGS = "--permission-mode acceptEdits";
 
 function commandTimestamp(seatKey: string): number {
@@ -71,7 +76,7 @@ const BRIEF_VAR = "CC_BRIEF_PATH";
 const DIR_VAR = "CC_RUN_DIR";
 // A trailing backslash (a drive root such as D:\) is doubled so it cannot escape the closing quote of --dir "...".
 export function commandEnv(run: RunnerRun, briefPath: string): NodeJS.ProcessEnv {
-  return { [BRIEF_VAR]: briefPath, ...(run.cli === "opencode" ? { [DIR_VAR]: run.folder.replace(/\\+$/, (slashes) => slashes + slashes) } : {}), ...crewEnv(run) };
+  return { [BRIEF_VAR]: briefPath, ...(run.cli === "opencode" ? { [DIR_VAR]: run.folder.replace(/\\+$/, (slashes) => slashes + slashes) } : {}) };
 }
 export function buildCommand(run: RunnerRun, briefPath: string): string {
   if (!run.runId || !/^[A-Za-z0-9._-]+$/.test(run.runId)) throw new Error("buildCommand: unsafe run id");
@@ -81,22 +86,19 @@ export function buildCommand(run: RunnerRun, briefPath: string): string {
   if (typeof run.canWrite !== "boolean") throw new Error("buildCommand: slot permission is required");
   if (/[\u0000-\u001f\u007f"]/.test(run.folder)) throw new Error("buildCommand: refusing unsafe folder path");
   if (/[\u0000-\u001f\u007f"]/.test(briefPath)) throw new Error("buildCommand: refusing unsafe brief path");
-  checkCrewTools(run);
   const instruction = `"Read the file at %${BRIEF_VAR}% and follow it exactly as your instructions."`;
   switch (run.cli) {
     case "claude": {
       // Only a Claude run takes an advisor; a value that is not a Claude model throws, it is never put on the command line.
       if (run.advisor !== undefined && !isValidModel("claude", run.advisor)) throw new Error(`buildCommand: refusing invalid advisor for "${run.seatKey}": ${run.advisor}`);
       const advisor = run.advisor !== undefined ? ` --advisor ${run.advisor}` : "";
-      const mode = run.canWrite ? CLAUDE_WRITE_FLAGS : run.crewTools ? CLAUDE_READ_ONLY_CREW_FLAGS : CLAUDE_READ_ONLY_FLAGS;
-      const crew = (run.crewTools ? ` --mcp-config "%${MCP_VAR}%" --allowedTools mcp__${CREW_SERVER}` : "") + (run.webSearch ? " --allowedTools WebSearch,WebFetch" : "");
-      return `claude -p ${instruction} --model ${run.model} --effort ${run.effort}${advisor} ${mode}${crew} --output-format stream-json --verbose`;
+      const mode = run.canWrite ? CLAUDE_WRITE_FLAGS : CLAUDE_READ_ONLY_FLAGS;
+      const search = run.webSearch ? " --allowedTools WebSearch,WebFetch" : "";
+      return `claude -p ${instruction} --model ${run.model} --effort ${run.effort}${advisor} ${mode}${search} --output-format stream-json --verbose`;
     }
     case "codex": {
-      // The token is only in the environment (bearer_token_env_var names it); without default_tools_approval_mode `exec` refuses every MCP call (probed 2026-10-28).
-      const crew = run.crewTools ? ` -c "mcp_servers.${CREW_SERVER}.url=%${CREW_URL_VAR}%" -c mcp_servers.${CREW_SERVER}.bearer_token_env_var=${CREW_TOKEN_VAR} -c mcp_servers.${CREW_SERVER}.default_tools_approval_mode=approve` : "";
       // --skip-git-repo-check: a tab folder that is not a git repo would otherwise make every Codex run stop at once ("Not inside a trusted directory").
-      return `codex ${run.webSearch ? "--search " : ""}exec --skip-git-repo-check --model ${run.model} -c model_reasoning_effort=${run.effort}${crew} --sandbox ${run.canWrite ? "workspace-write" : "read-only"} ${instruction}`;
+      return `codex ${run.webSearch ? "--search " : ""}exec --skip-git-repo-check --model ${run.model} -c model_reasoning_effort=${run.effort} --sandbox ${run.canWrite ? "workspace-write" : "read-only"} ${instruction}`;
     }
     case "opencode":
       return `opencode run --dir "%${DIR_VAR}%" -m ${run.model} --variant ${run.effort} --auto --print-logs ${instruction}`;
@@ -137,27 +139,10 @@ export function releaseUnconfirmedRun(runId: string): boolean {
   return true;
 }
 
-// Hides the crew token from everything a run shows or saves. A token split across two chunks is still found: the end of a chunk that could be the start of the token waits for the next chunk.
-type Hider = { push: (text: string) => string; end: () => string };
-const passThrough: Hider = { push: (text) => text, end: () => "" };
-function createHider(secret: string): Hider {
-  if (!secret) return passThrough;
-  const HIDDEN = "[hidden]";
-  let held = "";
-  return {
-    push(text) {
-      const clean = (held + text).split(secret).join(HIDDEN);
-      let n = Math.min(secret.length - 1, clean.length);
-      while (n > 0 && !secret.startsWith(clean.slice(clean.length - n))) n--;
-      held = clean.slice(clean.length - n);
-      return clean.slice(0, clean.length - n);
-    },
-    // A run that ended inside the token: a start of four or more characters is hidden rather than shown.
-    end() { const rest = held; held = ""; return rest.length >= 4 ? HIDDEN : rest; },
-  };
-}
-export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spawnFn: Spawn = spawn): { ok: true; timestamp: number } | { ok: false; error: string } {
+export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spawnFn: Spawn = spawn, boundary: { priority?: (pid: number) => void; watch?: TreeWatch } = {}): { ok: true; timestamp: number } | { ok: false; error: string } {
   run = Object.freeze({ ...run });
+  // Shutdown has begun: nothing may start, even a launch that was waiting for an approval.
+  if (workerAdmissionClosed()) return { ok: false, error: "Worker admission is closed for shutdown." };
   if (running.has(run.runId)) return { ok: false, error: `run "${run.runId}" already exists` };
   if (!run.runId || !/^[A-Za-z0-9._-]+$/.test(run.runId) || !isSafeSeatKey(run.seatKey)) return { ok: false, error: "unsafe run or seat id" };
   // An ACP seat is started as a process with an argument list (no shell, no command line); buildCommand never sees it.
@@ -165,16 +150,13 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
   if (acp && !run.acp) return { ok: false, error: `no start command for CLI "${run.cli}" on "${run.seatKey}"` };
   const timestamp = commandTimestamp(run.seatKey);
   const briefPath = join(logsDir, `${run.seatKey}-${timestamp}.brief.txt`);
-  // Claude reads the crew tools from a config file that holds the token: it lives only as long as the run.
-  const mcpPath = usesMcpFile(run) ? join(logsDir, `${run.seatKey}-${timestamp}.mcp.json`) : null;
   const command = acp ? "" : buildCommand(run, briefPath);
   const opencode = opencodeConfig(run);
-  const env = leaderChildEnv({ ...commandEnv(run, briefPath), ...(run.cli === "opencode" && opencode ? { OPENCODE_CONFIG_CONTENT: opencode } : {}), ...(mcpPath ? { [MCP_VAR]: mcpPath } : {}) });
+  const env = leaderChildEnv({ ...commandEnv(run, briefPath), ...(run.cli === "opencode" && opencode ? { OPENCODE_CONFIG_CONTENT: opencode } : {}) });
   // The CLI is spawned by absolute path from PATH, never found in the project folder (see resolveCliPath); no resolved path means nothing is spawned.
   let resolvedCommand = "";
   if (!acp) { try { resolvedCommand = withResolvedCli(command, env, run.folder); } catch (err) { return { ok: false, error: err instanceof Error ? err.message : String(err) }; } }
   const logPath = join(logsDir, `${run.seatKey}-${timestamp}.log`);
-  const removeMcp = (): void => { if (mcpPath) try { unlinkSync(mcpPath); } catch { /* never written, or already gone */ } };
 
   // A failed log write (disk full, folder gone) must never stop the run from reporting its end; the first one per run is said on screen, once.
   let logFailed = false;
@@ -186,11 +168,8 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
       try { cb.onOutput(run, `\n[log] could not save this run's output to disk (${(err as Error).message}); History will be missing it\n`); } catch { /* the run still reports its end */ }
     }
   }
-  // The crew token never reaches the log or the page: every output chunk passes its stream's hider (a no-op for a run without crew tools).
-  const outHider = createHider(run.crewTools?.token ?? ""), errHider = createHider(run.crewTools?.token ?? "");
-  function emit(text: string, hider: Hider): void {
-    const shown = hider.push(text);
-    if (shown) { appendLog(shown); cb.onOutput(run, shown); }
+  function emit(text: string): void {
+    if (text) { appendLog(text); cb.onOutput(run, text); }
   }
 
   let entry!: RunningEntry;
@@ -215,18 +194,20 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
     };
     writeFileSync(briefPath, prompt, "utf8");
     leader = createAcpLeader({ model: "default", effort: "default" }, run.folder, events, {
-      cli: run.acp!, bridge: run.crewTools, needHttp: Boolean(run.crewTools), denyPermissions: !run.canWrite, spawnFn: acpSpawn,
+      cli: run.acp!, denyPermissions: !run.canWrite, spawnFn: acpSpawn,
     });
     if (!started.child) { leader.stop(); unlinkSync(briefPath); return { ok: false, error: describeSpawnError(started.error ?? new Error(`${run.acp!.name} could not start`), run.folder) }; }
     proc = started.child;
   } else {
     writeFileSync(briefPath, prompt, "utf8");
-    if (mcpPath) writeFileSync(mcpPath, JSON.stringify({ mcpServers: { [CREW_SERVER]: { type: "http", url: run.crewTools!.url, headers: { Authorization: `Bearer ${run.crewTools!.token}` } } } }), { encoding: "utf8", mode: 0o600 });
-    try { proc = spawnFn(resolvedCommand, { shell: true, cwd: run.folder, stdio: ["ignore", "pipe", "pipe"], env }); }
-    catch (error) { removeMcp(); throw error; }
+    proc = spawnFn(resolvedCommand, { shell: true, cwd: run.folder, stdio: ["ignore", "pipe", "pipe"], env, ...(run.lowPriority ? { windowsHide: true } : {}) });
   }
   // Only a real child has descendants to find; a fake process (tests) has a made-up pid that could name something else.
-  const watch = spawnFn === spawn && proc.pid ? watchProcessTree(proc.pid, Date.now()) : null;
+  const watch = boundary.watch ?? (spawnFn === spawn && proc.pid ? watchProcessTree(proc.pid, Date.now()) : null);
+  if (run.lowPriority && proc.pid) {
+    try { (boundary.priority ?? fixedPriorityBoundary ?? ((pid) => setPriority(pid, osConstants.priority.PRIORITY_BELOW_NORMAL)))(proc.pid); }
+    catch (error) { emit(`\n[priority] could not lower owned child priority: ${(error as Error).message}\n`); }
+  }
 
   const stdoutDecoder = new StringDecoder("utf8");
   const stderrDecoder = new StringDecoder("utf8");
@@ -235,7 +216,7 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
 
   function emitClaudeEvents(events: AgentUsageEvent[]): void {
     for (const event of events) {
-      if (event.text) emit(event.text, outHider);
+      if (event.text) emit(event.text);
       if (event.usage) cb.onUsage?.(run, event.usage);
       if (event.rateLimit) cb.onRateLimit?.(event.rateLimit);
     }
@@ -245,21 +226,21 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
     const stdoutTail = stdoutDecoder.end();
     if (stdoutTail) {
       if (claudeState) emitClaudeEvents(feedClaudeOutput(claudeState, stdoutTail));
-      else emit(stdoutTail, outHider);
+      else emit(stdoutTail);
     }
     const stderrTail = stderrDecoder.end();
     if (stderrTail) {
-      emit(stderrTail, errHider);
+      emit(stderrTail);
       if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, stderrTail));
     }
     if (claudeState) emitClaudeEvents(flushClaudeOutput(claudeState));
     if (codexState) emitCodexTokenDeltas(flushCodexTokens(codexState));
-    // What the hiders still held back (the start of a token that never completed) goes out last.
-    for (const tail of [outHider.end(), errHider.end()]) if (tail) emit(tail, passThrough);
   }
 
   entry = { run, proc, cb, logPath, flush, watch };
   running.set(run.runId, entry);
+  // Tracked until the final callbacks have completed (see runner/lifecycle.ts); removeRun() alone does not mean the end was published.
+  const tracked = trackWorker(run.runId);
   const ids = bySeat.get(run.seatKey) ?? new Set<string>();
   ids.add(run.runId);
   bySeat.set(run.seatKey, ids);
@@ -269,13 +250,13 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
     const text = stdoutDecoder.write(chunk);
     if (!text) return;
     if (claudeState) { emitClaudeEvents(feedClaudeOutput(claudeState, text)); return; }
-    emit(text, outHider);
+    emit(text);
   });
   if (!acp) proc.stderr?.on("data", (chunk: Buffer) => {
     if (!ownsRun(run.runId, entry)) return;
     const text = stderrDecoder.write(chunk);
     if (!text) return;
-    emit(text, errHider);
+    emit(text);
     if (codexState) emitCodexTokenDeltas(scanCodexTokens(codexState, text));
   });
   // One finalizer for close, exit and spawn error: ownership makes it run once, and
@@ -283,44 +264,49 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
   function finish(code: number | undefined, spawnError?: Error): void {
     if (!ownsRun(run.runId, entry)) return;
     removeRun(run.runId, entry);
-    removeMcp();
     try { flush(); } catch { /* the end is still reported below */ }
     if (spawnError) {
       const message = `\n[spawn error] ${describeSpawnError(spawnError, run.folder)}\n`;
       appendLog(message); cb.onOutput(run, message);
     }
-    const report = (): void => {
-      const status = spawnError ? "failed" : entry.stopRequested ? "stopped" : entry.outcome ?? (code === 0 ? "done" : "failed");
-      appendLog(formatExitMarker(status, code));
-      cb.onStatus(run, status, code);
-      letGoOfPipes();
+    const report = (confirmed = false): void => {
+      let completed = false;
+      try {
+        const status = spawnError ? "failed" : entry.stopRequested ? "stopped" : entry.outcome ?? (code === 0 ? "done" : "failed");
+        appendLog(formatExitMarker(status, code));
+        cb.onTreeEnd?.(run, confirmed ? "confirmed" : "unknown");
+        cb.onStatus(run, status, code);
+        completed = true;
+        letGoOfPipes();
+      } finally { tracked.settle(completed && confirmed); }
     };
-    if (!watch) { report(); return; }
+    if (!watch) { report(!proc.pid); return; }
     // Whatever the CLI left running (a dev server, a background shell) is stopped before the run is reported over; bounded, so a slow process list never holds the report.
     let capped: ReturnType<typeof setTimeout> | undefined;
     const bounded = new Promise<void>((resolveBound) => { capped = setTimeout(resolveBound, SWEEP_WAIT_MS); capped.unref(); });
     // A check that could not finish (no process list, an error, the cap) never changes the run's outcome, but the log says so.
-    let checked = false, said = false;
+    let checked = false, said = false, confirmed = false;
     const unchecked = (): void => { if (said) return; said = true; const message = "\n[cleanup] could not check for processes this run left running\n"; appendLog(message); cb.onOutput(run, message); };
     const swept = watch.sweep(entry.exitedAt ?? Date.now()).then((killed) => {
       checked = true;
       if (killed === null) return unchecked();
       // A leftover that could not be stopped is said, never a quiet Done: it may still be editing files.
       const failed = watch.failed;
+      confirmed = failed === 0;
       const say = (count: number, what: string): void => { const message = `\n[cleanup] ${what} ${count} process${count === 1 ? "" : "es"} this run left running\n`; appendLog(message); cb.onOutput(run, message); };
       if (killed) say(killed, "stopped");
       if (failed > 0) say(failed, "could not stop");
     }, () => { checked = true; unchecked(); });
-    void Promise.race([swept, bounded]).then(() => { clearTimeout(capped); if (!checked) unchecked(); report(); });
+    void Promise.race([swept, bounded]).then(() => { clearTimeout(capped); if (!checked) unchecked(); report(checked && confirmed); });
   }
   // A leftover that inherited the CLI's output pipes would hold the server's handles after the run is over (it is stopped by the sweep, or said in the log when it could not be); output is flushed and the status reported before this runs.
   function letGoOfPipes(): void { proc.stdout?.destroy?.(); proc.stderr?.destroy?.(); }
   function ended(code: number | null): void {
     if (released.delete(entry)) {
-      removeMcp();
       void watch?.sweep(entry.exitedAt ?? Date.now()).catch(() => {});
       letGoOfPipes();
-      entry.cb.onReleasedClose?.(run, code ?? undefined);
+      // A released run's end was never published as confirmed, so it can never satisfy a shutdown drain.
+      try { entry.cb.onReleasedClose?.(run, code ?? undefined); } finally { tracked.settle(false); }
       return;
     }
     // A close with no exit code (the process was killed from outside) is a failed run, not a failed spawn.
@@ -339,10 +325,6 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
 }
 
 function isSafeSeatKey(value: string): boolean { return value.length > 0 && /^[A-Za-z0-9._-]+$/.test(value); }
-const KILL_GRACE_MS = 5000;
-const EXIT_DRAIN_MS = 750;
-// The cap must cover the work it waits for: one process list, then the kills (they run together), plus a margin.
-const SWEEP_WAIT_MS = LIST_TIMEOUT_MS + KILL_TIMEOUT_MS + 1000;
 function reportUnconfirmedKill(runId: string, entry: RunningEntry, reason: string): void {
   if (!ownsRun(runId, entry)) return;
   entry.unconfirmed = true;

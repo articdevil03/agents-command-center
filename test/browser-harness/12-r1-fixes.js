@@ -1,5 +1,5 @@
 (() => {
-  const { check, dropSocket, waitFor, text, $, requireElement, latestTab, openTabMenu, clickMenuItem, openSeatView } = window.__ccHarness;
+  const { check, dropSocket, waitFor, text, $, requireElement, latestTab, openSeatView } = window.__ccHarness;
   // Round 1 fixes of the simple-look pack: each wait the app owns must end when the connection or the picker moves on.
   const runR1Fixes = async () => {
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -15,17 +15,33 @@
     };
     closeAll(); window.__ccSeed.selectedTabId = tabId; seedTab().pendingApprovals = []; seedTab().derived.leaderTurnActive = false; deliverSeed(); await sleep(30);
 
-    // F01: a crew picker opened and closed on one tab must never act for that tab once another tab's picker is open.
-    clickMenuItem(openTabMenu("alpha-dev"), "Kind and crew"); closeAll(); await sleep(20);
-    clickMenuItem(openTabMenu("alpha-design"), "Kind and crew");
-    const nativeSetTimeout = window.setTimeout;
-    window.setTimeout = (callback, delay, ...args) => nativeSetTimeout(callback, delay === 10000 ? 0 : delay, ...args);
-    requireElement('#setupPop [data-use-template="duo"]').click();
-    window.setTimeout = nativeSetTimeout;
-    await waitFor(() => window.__sent.some((message) => message.type === "useSetup" && message.templateId === "duo"), "crew change sent");
-    const crewSent = window.__sent.filter((message) => message.type === "useSetup" && message.templateId === "duo").at(-1);
-    check("a crew picker closed on one tab cannot redraw or send for it after another tab's picker opens", crewSent?.tabId === "alpha-design", { crewSent });
-    window.__ccDeliver({ type: "error", action: "useSetup", tabId: "alpha-design", message: "released by the harness" }); await sleep(30); closeAll(); await sleep(20);
+    // F01: a fixed Settings picker opened and closed on one tab must never act for that tab once another tab's picker is open, and an old reply settles only its own request.
+    const settingsChip = (id, slot) => requireElement(`#setBody section.fc[data-fc-tab="${id}"] [data-fc-row="${slot}"] [data-fc-model]`);
+    const assignSends = () => window.__sent.filter((message) => message.type === "setCrewAssignment");
+    // Each tab picks on a position it has a model for: alpha-dev's coder (Codex, which takes a typed id) and alpha-design's designCoder (Claude, which takes a listed model).
+    const typeModel = async (model) => { $("mq").value = model; $("mq").dispatchEvent(new Event("input", { bubbles: true })); await sleep(10); requireElement(`#pop [data-model="${model}"]`).click(); await sleep(30); };
+    const listedModel = async () => { const option = [...document.querySelectorAll("#pop [data-model]")].find((button) => button.getAttribute("aria-pressed") === "false" && button.dataset.cli === "claude"); if (!option) throw new Error(`no other listed Claude model; matched ${JSON.stringify([...document.querySelectorAll("#pop [data-model]")].map((button) => [button.dataset.cli, button.dataset.model]))}`); option.click(); await sleep(30); };
+    const closeLayers = async () => { closeAll(); await sleep(20); closeAll(); await sleep(20); };
+    const assignBefore = assignSends().length;
+    $("setBtn").click(); await sleep(30);
+    settingsChip("alpha-dev", "coder").click(); await sleep(30);
+    const firstOpen = !$("pop").hidden;
+    await typeModel("gpt-6-picker-one");
+    const firstSend = assignSends().at(-1);
+    await closeLayers();
+    window.__ccSeed.selectedTabId = "alpha-design"; deliverSeed(); await sleep(30);
+    $("setBtn").click(); await sleep(30);
+    settingsChip("alpha-design", "designCoder").click(); await sleep(30);
+    const secondOpen = !$("pop").hidden && /Choose model and effort/.test($("pop").getAttribute("aria-label"));
+    const statusBefore = text('[data-fc-model-status="designCoder"]', $("setBody"));
+    window.__ccDeliver({ type: "actionResult", action: "setCrewAssignment", tabId: "alpha-dev", requestId: firstSend?.requestId }); await sleep(30);
+    const stillOpen = !$("pop").hidden && assignSends().length === assignBefore + 1 && text('[data-fc-model-status="designCoder"]', $("setBody")) === statusBefore;
+    await listedModel();
+    const secondSend = assignSends().at(-1);
+    check("a fixed Settings picker closed on one tab cannot redraw or send for it after another tab's picker opens, and an old reply leaves the open picker's request alone", firstOpen && secondOpen && stillOpen && assignSends().length === assignBefore + 2 && firstSend?.tabId === "alpha-dev" && secondSend?.tabId === "alpha-design" && secondSend.slot === "designCoder" && typeof secondSend.requestId === "string" && secondSend.requestId !== firstSend.requestId && text('[data-fc-model-status="designCoder"]', $("setBody")) === "Saving…", { firstOpen, secondOpen, stillOpen, firstSend, secondSend, status: text('[data-fc-model-status="designCoder"]', $("setBody")) });
+    window.__ccDeliver({ type: "error", action: "setCrewAssignment", tabId: "alpha-design", requestId: secondSend?.requestId, message: "released by the harness" }); await sleep(30);
+    await closeLayers();
+    window.__ccSeed.selectedTabId = tabId; deliverSeed(); await sleep(30);
 
     // F02: after a launch's outcome is unknown, editing the brief cannot re-enable Start or send a second run.
     openSeatView("coder"); requireElement("#stagehead [data-run-seat]").click();
@@ -90,8 +106,11 @@
     $("createProj").click();
     const landedProject = window.__sent.filter((message) => message.type === "addProject").at(-1);
     const seedProject = window.__ccSeed.projects.find((project) => project.tabs.some((tab) => tab.id === tabId));
-    const newProject = structuredClone(seedProject); newProject.id = landedProject.id; newProject.name = "Landed Project";
-    newProject.tabs.forEach((tab) => { tab.id = `${landedProject.id}-${tab.id}`; });
+    // A landed snapshot carries a complete fixed clone (tab id, seat keys, process state), made by the fixed helper with its own publish held back until the reconnect.
+    const quiet = (run) => { const live = window.__ccDeliver; window.__ccDeliver = () => {}; try { return run(); } finally { window.__ccDeliver = live; } };
+    const landedCopy = quiet(() => window.__ccHarness.fixed.cloneIdleTab(tabId, `${landedProject.id}-${tabId}`, "Landed Tab"));
+    seedProject.tabs = seedProject.tabs.filter((tab) => tab.id !== landedCopy.id);
+    const newProject = { ...structuredClone({ ...seedProject, tabs: [] }), id: landedProject.id, name: "Landed Project", tabs: [landedCopy] };
     window.__ccSeed.projects.push(newProject);
     closeAll(); await sleep(30);
     $("addtab").click(); requireElement("#modal[aria-hidden=false]");
@@ -105,8 +124,8 @@
     $("createTab").click();
     const landedTab = window.__sent.filter((message) => message.type === "addTab").at(-1);
     const landedProjectRow = window.__ccSeed.projects.find((project) => project.id === landedTab.projectId);
-    const newTab = structuredClone(landedProjectRow.tabs.find((tab) => tab.id === tabId) ?? landedProjectRow.tabs[0]); newTab.id = "landed-tab"; newTab.name = "Landed Tab";
-    landedProjectRow.tabs.push(newTab);
+    const newTab = quiet(() => window.__ccHarness.fixed.cloneIdleTab(tabId, "landed-tab", "Landed Tab"));
+    if (!landedProjectRow.tabs.includes(newTab)) throw new Error("the landed tab clone is not in the project the create named");
     closeAll(); await sleep(30);
     $("addProj").click(); requireElement("#projModal[aria-hidden=false]");
     $("pName").value = "Second Project"; $("pName").dispatchEvent(new Event("input", { bubbles: true }));
@@ -122,122 +141,9 @@
     requireElement("#setBody [data-settings-refresh]").click();
     const refreshRunning = requireElement("#setBody [data-settings-refresh]").disabled;
     await dropAndReconnect("reconnect after a Check again with no answer"); await sleep(30);
-    const refreshAfter = { disabled: requireElement("#setBody [data-settings-refresh]").disabled, label: requireElement("#setBody [data-settings-refresh]").textContent, help: text("#setBody .settings-help") };
+    const refreshAfter = { disabled: requireElement("#setBody [data-settings-refresh]").disabled, label: requireElement("#setBody [data-settings-refresh]").textContent, help: text("#setBody #s-tools .settings-help") };
     check("Check again is usable again after the connection dropped before its answer", refreshRunning && !refreshAfter.disabled && refreshAfter.label === "Check again" && refreshAfter.help.includes("Could not check just now"), { refreshRunning, refreshAfter });
     closeAll(); await sleep(30);
-
-    // Two crew picks for one tab leave one notice and send only the last pick; picking the server's own crew cancels the waiting one.
-    window.__ccSeed.selectedTabId = tabId; deliverSeed(); await sleep(30);
-    const crewNotices = () => document.querySelectorAll("#undo [data-undo-held]").length;
-    // The tab is given a listed setup of its own first (a migrated old crew is not a menu choice), so picking "the current crew" is a real button.
-    const templateName = (id) => (window.__latestState.templates ?? []).find((item) => item.id === id)?.name;
-    const crewBeforePicks = structuredClone(seedTab().crew);
-    const currentTemplate = window.__latestState.templates.find((item) => item.id === "our-process");
-    seedTab().crew = currentTemplate.crew.map((seat) => ({ ...crewBeforePicks.find((old) => old.slot === seat.slot), ...seat, seatKey: `${tabId}.${seat.slot}` }));
-    seedTab().setupName = currentTemplate.name; deliverSeed(); await sleep(30);
-    const setProcessSent = () => window.__sent.filter((message) => message.type === "useSetup" && message.tabId === tabId);
-    const crewSentBefore = setProcessSent().length;
-    const pickCrew = (id) => { clickMenuItem(openTabMenu(tabId), "Kind and crew"); requireElement(`#setupPop [data-use-template="${id}"]`).click(); };
-    pickCrew("duo"); pickCrew("blank");
-    const twoPicksOneNotice = crewNotices() === 1 && $("undo").textContent.includes(templateName("blank"));
-    pickCrew("our-process");
-    const sameCrewCancels = crewNotices() === 0;
-    await sleep(100);
-    const nothingSentOnCancel = setProcessSent().length === crewSentBefore;
-    check("two crew picks for one tab leave exactly one notice; picking the current crew cancels the waiting change and sends nothing", twoPicksOneNotice && sameCrewCancels && nothingSentOnCancel, { twoPicksOneNotice, sameCrewCancels, nothingSentOnCancel, notices: crewNotices(), text: $("undo").textContent });
-    document.querySelector("#undo [data-undo-held]")?.click(); await sleep(20);
-    window.setTimeout = (callback, delay, ...args) => nativeSetTimeout(callback, delay === 10000 ? 0 : delay, ...args);
-    pickCrew("duo"); pickCrew("blank");
-    window.setTimeout = nativeSetTimeout;
-    await waitFor(() => setProcessSent().length > crewSentBefore, "the last crew pick is sent");
-    await sleep(60);
-    const crewSends = setProcessSent().slice(crewSentBefore);
-    check("two quick crew picks send exactly one useSetup, the last pick", crewSends.length === 1 && crewSends[0].templateId === "blank", { crewSends });
-    window.__ccDeliver({ type: "error", action: "useSetup", tabId, message: "released by the harness" }); await sleep(30); closeAll(); await sleep(20);
-    seedTab().crew = crewBeforePicks; deliverSeed(); await sleep(30);
-
-    // Three rapid clicks on the step button advance one step; a click after the pause works.
-    const stepState = (index) => {
-      const next = structuredClone(window.__ccSeed); const stepTab = latestTab(tabId, next);
-      stepTab.derived.leaderTurnActive = false; stepTab.pendingApprovals = [];
-      stepTab.processState.approval = { state: "approved" };
-      stepTab.derived.stepBar = ["brief", "work", "done"].map((stepId, at) => ({ stepId, type: stepId === "done" ? "finish" : "work", label: stepId[0].toUpperCase() + stepId.slice(1), owners: ["user"], state: at < index ? "done" : at === index ? "current" : "upcoming" }));
-      return { ...next, type: "state" };
-    };
-    window.__ccDeliver(stepState(0)); await sleep(30);
-    const advances = () => window.__sent.filter((message) => message.type === "advanceStep" && message.tabId === tabId).length;
-    const advanceBefore = advances();
-    const stepButton = () => document.querySelector('#stepActs [data-process-action="advanceStep"]');
-    stepButton().click();
-    window.__ccDeliver(stepState(1)); // the server answered: the next step's button now sits in the same spot
-    stepButton()?.click(); stepButton()?.click();
-    const oneStepOnly = advances() === advanceBefore + 1;
-    await sleep(700);
-    stepButton()?.click();
-    check("three rapid clicks on the step button advance exactly one step, and a click after the pause works", oneStepOnly && advances() === advanceBefore + 2, { oneStepOnly, advances: advances() - advanceBefore });
-    window.__ccDeliver(stepState(0)); await sleep(30);
-    // An unrelated state clears the wait; the guard starts only when the step really changes, even 700 ms later.
-    await sleep(700); // the step change just above started its own guard
-    const lateBefore = advances();
-    stepButton().click();
-    window.__ccDeliver(stepState(0)); // unrelated: same step
-    await sleep(700);
-    window.__ccDeliver(stepState(1)); // the real step change, late
-    stepButton()?.click();
-    const lateBlocked = advances() === lateBefore + 1;
-    await sleep(700);
-    stepButton()?.click();
-    check("a step change arriving after an unrelated state still blocks the immediate click, and a click after the pause works", lateBlocked && advances() === lateBefore + 2, { lateBlocked, advances: advances() - lateBefore });
-    window.__ccDeliver(stepState(0)); await sleep(30);
-    // Round transitions keep the step and the approval the same: only the phase and round change, and they start the pause too.
-    const roundState = (phase, round) => {
-      const next = stepState(1); const roundTab = latestTab(tabId, next);
-      roundTab.derived.stepBar = ["brief", "review", "done"].map((stepId, at) => ({ stepId, type: stepId === "review" ? "rounds" : stepId === "done" ? "finish" : "work", label: stepId[0].toUpperCase() + stepId.slice(1), owners: ["user"], state: at < 1 ? "done" : at === 1 ? "current" : "upcoming" }));
-      roundTab.processState.phase = phase; roundTab.processState.round = round;
-      return next;
-    };
-    const roundSent = (type) => window.__sent.filter((message) => message.type === type && message.tabId === tabId).length;
-    const roundButton = (action) => document.querySelector(`#stepActs [data-process-action="${action}"]`);
-    await sleep(700);
-    window.__ccDeliver(roundState("review", 1)); await sleep(700);
-    const findingsBefore = roundSent("reviewFindings");
-    roundButton("reviewFindings")?.click();
-    window.__ccDeliver(roundState("fix", 1)); // review -> fix: same step, same approval
-    roundButton("finishFix")?.click();
-    const fixBlocked = roundSent("finishFix") === 0;
-    await sleep(700);
-    roundButton("finishFix")?.click();
-    const fixAfterPause = roundSent("finishFix") === 1;
-    window.__ccDeliver(roundState("review", 2)); // fix -> next round
-    roundButton("reviewFindings")?.click();
-    const nextRoundBlocked = roundSent("reviewFindings") === findingsBefore + 1;
-    await sleep(700);
-    roundButton("reviewFindings")?.click();
-    check("a review round change (Found findings, Finish fixes) pauses the next step click for 600 ms, and a click after the pause works", roundSent("reviewFindings") === findingsBefore + 2 && fixBlocked && fixAfterPause && nextRoundBlocked, { fixBlocked, fixAfterPause, nextRoundBlocked, findings: roundSent("reviewFindings") - findingsBefore });
-    // A tab missing from a state loses its sent mark, so a stale mark cannot guard a later unrelated change.
-    const gone = structuredClone(window.__ccSeed); gone.projects.forEach((project) => { project.tabs = project.tabs.filter((tab) => tab.id !== tabId); });
-    roundButton("reviewFindings")?.click();
-    window.__ccDeliver({ ...gone, type: "state" }); await sleep(30);
-    window.__ccDeliver(roundState("review", 1)); await sleep(30);
-    document.querySelector(`#tabs [data-tab-id="${tabId}"]`)?.click(); await sleep(30);
-    window.__ccDeliver(roundState("fix", 1)); await sleep(30);
-    const staleBefore = roundSent("finishFix");
-    roundButton("finishFix")?.click();
-    check("a tab that left the state loses its sent mark: a later change starts no pause", roundSent("finishFix") === staleBefore + 1, { sent: roundSent("finishFix") - staleBefore });
-    // A drop between the click and its state keeps the mark: the reconnect snapshot shows the change and still starts the pause.
-    window.__ccDeliver(roundState("review", 1)); await sleep(700);
-    const dropBefore = roundSent("reviewFindings"); const dropFixBefore = roundSent("finishFix");
-    roundButton("reviewFindings")?.click();
-    const droppedSocket = window.__socket; dropSocket(droppedSocket);
-    await waitFor(() => window.__socket !== droppedSocket, "socket reconnect after the step click");
-    window.__socket.readyState = 1; window.__socket.emit("open", {}); await sleep(100); // the reconnect handshake settles first
-    window.__ccDeliver(roundState("fix", 1)); // the server applied the click while the socket was down
-    roundButton("finishFix")?.click();
-    const dropBlocked = roundSent("reviewFindings") === dropBefore + 1 && roundSent("finishFix") === dropFixBefore;
-    await sleep(700);
-    roundButton("finishFix")?.click();
-    check("a connection drop between a step click and its state keeps the pause: the immediate click is ignored, a click after the pause works", dropBlocked && roundSent("finishFix") === dropFixBefore + 1, { dropBlocked, finishFix: roundSent("finishFix") - dropFixBefore });
-    window.__ccDeliver(stepState(0)); await sleep(30);
   };
   Object.assign(window.__ccHarness, { runR1Fixes });
 })();

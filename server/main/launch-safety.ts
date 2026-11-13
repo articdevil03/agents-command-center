@@ -2,8 +2,10 @@ import { writeLaunchSafety } from "../config.ts";
 import type { RunnerRun } from "../runner.ts";
 import { broadcast } from "./broadcast.ts";
 import { blockedSeatKeys, describeError, launchSafety, unconfirmedRunIds } from "./state.ts";
+import { assertWorkspaceRecoveryReady } from "../fixed-crew/recovery.ts";
 
 export function persistLaunchSafety(): void {
+  assertWorkspaceRecoveryReady("launch-safety");
   launchSafety.blocked = [...blockedSeatKeys];
   writeLaunchSafety(launchSafety);
 }

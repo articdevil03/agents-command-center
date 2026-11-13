@@ -1,5 +1,6 @@
 (() => {
-  const { check, waitFor, text, $, requireElement, waitToastVisible, latestTab, clickTab, openTabMenu, clickMenuItem, openProjectMenu, pickProject, openInbox } = window.__ccHarness;
+  const { check, waitFor, text, $, requireElement, waitToastVisible, latestTab, clickTab, openTabMenu, clickMenuItem, openProjectMenu, pickProject, openInbox, fixed } = window.__ccHarness;
+  const { cloneIdleTab } = fixed;
   // Abandoned sends on switches, confirmed tab and project removal cleanup, fallback Undo, queued removals, stacked Undo, pagehide, Pick A/B/C fallbacks, unrelated errors.
   const b2SwitchesAndRemovals = async (ctx) => {
     const { revokedUrls, makeControlledImage, waitAttachmentReady, waitImageUpload, attachmentNames, actionFor, holdClock } = ctx;
@@ -73,11 +74,7 @@
     const projectPreviewReleased = Boolean(projectCleanupPreview) && revokedUrls.includes(projectCleanupPreview);
     check("completed attachment resources release after a project removal is confirmed", projectCleanupUpload.status === 200 && projectPreviewReleased, { upload: projectCleanupUpload, preview: projectCleanupPreview || "missing", previewReleased: projectPreviewReleased, removedProject: !window.__latestState.projects.some((project) => project.id === "beta") });
 
-    const fallbackState = structuredClone(window.__ccSeed);
-    const alphaProject = fallbackState.projects.find((project) => project.id === "alpha");
-    const fallbackTab = structuredClone(alphaProject.tabs[0]); fallbackTab.id = "alpha-fallback"; fallbackTab.name = "Fallback";
-    alphaProject.tabs.push(fallbackTab); window.__ccSeed = fallbackState;
-    window.__ccDeliver({ ...fallbackState, type: "state" });
+    cloneIdleTab("alpha-design", "alpha-fallback", "Fallback"); // a whole fixed tab: its own owner, seat keys and empty task, published to the page
     requireElement('#tabs [data-tab-id="alpha-fallback"]').click();
     await waitFor(() => window.__latestState.selectedTabId === "alpha-fallback" && text('#view [data-message-id="1"] .body > .md') === "Saved transcript for alpha-fallback", "load fallback tab transcript before the Undo race");
     requireElement('#tabs [data-tab-id="alpha-design"]').click();
@@ -101,13 +98,8 @@
     const fallbackHoldUndoWorked = Boolean(document.querySelector('#tabs [data-tab-id="alpha-design"]') && !$("undo").classList.contains("on") && restoredSelection);
     check("selected-tab Undo restores selection when fallback state is delayed", fallbackTranscriptVisible && fallbackUndoVisible && removeNotSentDuringHold && delayedFallbackSelection && fallbackHoldUndoWorked && window.__sent.filter((message) => message.type === "selectTab").length > fallbackSelectStart, { fallbackTranscriptVisible, fallbackUndoVisible, removeNotSentDuringHold, delayedFallbackSelection, delayedFallbackEvidence, restoredSelection, fallbackHoldUndoWorked, visibleTab: $("view").dataset.tabId, selectedTabId: window.__latestState.selectedTabId, transcript: text("#view .thread") });
 
-    const queueState = structuredClone(window.__ccSeed);
-    const queueProject = queueState.projects.find((project) => project.id === "alpha");
-    const queueTemplate = structuredClone(queueProject.tabs.find((tab) => tab.id === "alpha-design"));
-    const rejectedTab = { ...structuredClone(queueTemplate), id: "alpha-queued-rejected", name: "Queue rejected" };
-    const acceptedTab = { ...structuredClone(queueTemplate), id: "alpha-queued-accepted", name: "Queue accepted" };
-    queueProject.tabs.push(rejectedTab, acceptedTab); window.__ccSeed = queueState;
-    window.__ccDeliver({ ...queueState, type: "state" });
+    cloneIdleTab("alpha-design", "alpha-queued-rejected", "Queue rejected");
+    cloneIdleTab("alpha-design", "alpha-queued-accepted", "Queue accepted");
     await clickTab("Queue accepted");
     const queuedCleanup = await makeControlledImage("release-after-queued-removal.png");
     const queuedCleanupIndex = window.__ccImageUploads.length;
@@ -158,13 +150,13 @@
     const pagehideFlushedBoth = retryAfterReconnect && pagehideRemoveRequests.includes("alpha-fallback") && pagehideRemoveRequests.includes("alpha-design");
     check("pagehide flushes every held action after reconnect", pagehideFlushedBoth, { retryAfterReconnect, pagehideRemoveRequests, remainingUndoCount: document.querySelectorAll("#undo [data-undo-held]").length, remainingAlphaTabs: window.__latestState.projects.find((project) => project.id === "alpha")?.tabs.map((tab) => tab.id) });
 
-    const pickState = structuredClone(window.__ccSeed);
-    const pickAlpha = pickState.projects.find((project) => project.id === "alpha");
-    const pickTemplate = structuredClone(pickAlpha.tabs[0]);
-    pickTemplate.derived.busy = false; pickTemplate.derived.leaderTurnActive = false; pickTemplate.runs = (pickTemplate.runs ?? []).filter((run) => run.status !== "working");
-    pickAlpha.tabs = [];
-    for (const [id, name] of [["alpha-pick-a", "Pick A"], ["alpha-pick-b", "Pick B"], ["alpha-pick-c", "Pick C"]]) pickAlpha.tabs.push({ ...structuredClone(pickTemplate), id, name });
-    window.__ccSeed = pickState; window.__ccDeliver({ ...structuredClone(pickState), type: "state" });
+    // Alpha holds exactly Pick A, B and C (whole fixed clones of one idle tab), so the fallback order is the one the checks name.
+    const pickIds = [["alpha-pick-a", "Pick A"], ["alpha-pick-b", "Pick B"], ["alpha-pick-c", "Pick C"]];
+    const pickSource = window.__ccSeed.projects.find((project) => project.id === "alpha").tabs.at(-1).id;
+    for (const [id, name] of pickIds) cloneIdleTab(pickSource, id, name);
+    const pickState = window.__ccSeed, pickAlpha = pickState.projects.find((project) => project.id === "alpha");
+    pickAlpha.tabs = pickAlpha.tabs.filter((tab) => pickIds.some(([id]) => id === tab.id));
+    window.__ccDeliver({ ...structuredClone(pickState), type: "state" });
     const selectById = async (tabId) => {
       requireElement(`#tabs [data-tab-id="${CSS.escape(tabId)}"]`).click();
       await waitFor(() => window.__latestState.selectedTabId === tabId && $("view").dataset.tabId === tabId, `select ${tabId}`);
@@ -210,9 +202,9 @@
       ["the waiting card", () => {
         const waitingState = structuredClone(window.__ccSeed);
         const waitingTab = waitingState.projects.flatMap((project) => project.tabs).find((tab) => tab.id === "alpha-pick-b");
-        waitingTab.processState = { ...(waitingTab.processState ?? {}), approval: { ...(waitingTab.processState?.approval ?? {}), state: "pending" } };
+        waitingTab.pendingApprovals = [{ approvalId: "b2-pick-approval", tool: "Write", summary: "C:/b2/pick.ts", createdAt: 1 }];
         window.__ccDeliver({ ...waitingState, type: "state" });
-        requireElement('[data-wait-tab="alpha-pick-b"]', openInbox()).click();
+        requireElement('[data-wait-approval="b2-pick-approval"]', openInbox()).click();
         window.__ccDeliver({ ...structuredClone(window.__ccSeed), type: "state" });
       }],
       ["the project picker", () => pickProject("alpha")],

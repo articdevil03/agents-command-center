@@ -8,16 +8,18 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 import { KILL_TIMEOUT_MS, LIST_TIMEOUT_MS } from "../server/leader-common.ts";
 import { scratchDir } from "./temp-root.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 import { codexRecord as plantCodexRecord } from "./codex-record.ts";
 
-export const SEATS = getProcessDefinition("dev", "main").seats;
-export const LEADERS = { codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, claude: { cli: "claude", model: SEATS.find((seat) => seat.isLeader)!.model, effort: SEATS.find((seat) => seat.isLeader)!.effort }, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" } };
-export const crewFor = (process: "main" | "solo" = "main", leader: keyof typeof LEADERS = "codex") => getProcessDefinition("dev", process).seats.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort, ...(seat.isLeader ? LEADERS[leader] : {}) }));
+const LEADER_SEAT = FIXED_CREW.find((seat) => seat.slot === "leader")!;
+export const LEADERS = { codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, claude: { cli: LEADER_SEAT.preferred.cli, model: LEADER_SEAT.preferred.model, effort: LEADER_SEAT.preferred.effort }, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" } };
+// Run requests need an assigned Coder; a read-only Helper is what a fixed worker launch uses here (one heavy run at a time, so one worker at most).
+const WORKER = { cli: "codex", model: "gpt-6.1-sol", effort: "medium" };
 export const TAB_A = "p9-a", TAB_B = "p9-b";
 export const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 // A crew run is reported over only after its cleanup sweep, which the runner caps at SWEEP_WAIT_MS (LIST_TIMEOUT_MS + KILL_TIMEOUT_MS + 1000): a wait for a run's end outlasts that cap.
@@ -33,26 +35,34 @@ export const cliDir = scratchDir();
 for (const name of ["claude", "codex", "opencode"]) writeFileSync(join(cliDir, `${name}.cmd`), "@echo off\r\necho ran> \"%CD%\\run-wrote.txt\"\r\nif defined FAKE_RUN_SLEEP ping -n %FAKE_RUN_SLEEP% 127.0.0.1 >nul\r\nexit /b 0\r\n");
 
 export type Server = { port: number; key: string; temp: string; data: string; work: string; activityHome: string; child: ChildProcess; log: () => string; stop: (keep?: boolean) => Promise<void> };
-export type TabSpec = { id: string; name?: string; process?: "main" | "solo"; folder: string };
-export async function boot(options: { temp?: string; env?: Record<string, string>; noActivityHome?: boolean; leader?: keyof typeof LEADERS; tabs?: (work: string) => TabSpec[] } = {}): Promise<Server> {
+export type TabSpec = { id: string; name?: string; folder: string };
+export async function boot(options: { temp?: string; env?: Record<string, string>; noActivityHome?: boolean; leader?: keyof typeof LEADERS; tabs?: (work: string) => TabSpec[]; fixedControls?: boolean } = {}): Promise<Server> {
   const fresh = !options.temp;
   const temp = options.temp ?? mkdtempSync(join(tmpdir(), "cc-pack9-"));
   const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work"), activityHome = join(temp, "activity-home");
   for (const dir of [home, work, activityHome, join(data, "config")]) mkdirSync(dir, { recursive: true });
   if (fresh) {
-    const tab = (spec: TabSpec) => ({ id: spec.id, name: spec.name ?? spec.id, kind: "dev", process: spec.process ?? "main", folder: spec.folder, crew: crewFor(spec.process ?? "main", options.leader) });
+    const tab = (spec: TabSpec) => fixedTab(spec.id, spec.folder, { leader: LEADERS[options.leader ?? "codex"] as any, coder: WORKER as any, helper: WORKER as any }, spec.name ?? spec.id);
     const specs = options.tabs?.(work) ?? [{ id: TAB_A, folder: work }, { id: TAB_B, folder: work }];
     for (const spec of specs) mkdirSync(spec.folder, { recursive: true });
-    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p9", name: "P9", folder: work, tabs: specs.map(tab) }] }));
+    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p9", work, specs.map(tab)), name: "P9" }])));
   }
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: {} }));
+  if (options.fixedControls && process.env.CC_FCX_NATIVE_REPLAY !== "1") {
+    // A finite owned Node CLI avoids a cmd/ping grandchild in sandbox runs.
+    // Native replay keeps the original cmd fixtures and the real tree probe.
+    writeFileSync(join(temp, "worker.cjs"), `const fs=require('fs');fs.writeFileSync('run-wrote.txt','ran');setTimeout(()=>{},Math.max(0,Number(process.env.FAKE_RUN_SLEEP||0)-1)*1000);`);
+  }
   const key = randomBytes(32).toString("hex");
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
   const env: Record<string, string | undefined> = {
     ...process.env, HOME: home, USERPROFILE: home, PATH: [cliDir, dirname(process.execPath), system32].join(";"),
     CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1",
     CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_FAKE_LEADER_CLI: "1",
-    FAKE_LEADER_LOG: join(temp, "fake-leader.log"), CC_APP_KEY: key, ...(options.noActivityHome ? {} : { CC_TEST_FAKE_CLI_ACTIVITY_HOME: activityHome }), ...options.env,
+    FAKE_LEADER_LOG: join(temp, "fake-leader.log"), CC_APP_KEY: key, ...(options.noActivityHome ? {} : { CC_TEST_FAKE_CLI_ACTIVITY_HOME: activityHome }),
+    // Real fixed launch with a finite fake CLI. Descendant confirmation is an
+    // explicit test boundary unless native replay is requested outside sandbox.
+    ...(options.fixedControls ? { CC_FCX_SERVER: "1", CC_FCX_TREE_BOUNDARY: process.env.CC_FCX_NATIVE_REPLAY === "1" ? "0" : "1", CC_FCX_GIT_BOUNDARY: "0", NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --import ${new URL("./fixed-crew-execution-helpers.ts", import.meta.url).href}` } : {}), ...options.env,
   };
   const child = spawn(process.execPath, ["server/index.ts"], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: env as NodeJS.ProcessEnv });
   attachCrashCatcher(child.pid, "pack9-server");
@@ -146,8 +156,31 @@ export function opencodeRecord(server: Server, id: string, mtimeMs: number, crea
 }
 export const fakeLeaderTurns = (server: Server) => (existsSync(join(server.temp, "fake-leader.log")) ? readFileSync(join(server.temp, "fake-leader.log"), "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []).filter((e: any) => e.method === "turn/start").length;
 
+// A real fixed worker launch (the read-only Helper, through launchFixedAction, the leader's own tool path): the tab's leader must be started first. Needs boot({ fixedControls: true }).
+export function launchHelper(server: Server, tabId: string, brief: string): Promise<{ runId: string; reason: string }> {
+  const id = Math.random();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { server.child.off("message", receive); reject(new Error("the helper launch control timed out")); }, 10_000);
+    const receive = (m: any) => {
+      if (m?.fcxReply !== id) return;
+      clearTimeout(timer); server.child.off("message", receive);
+      if (m.error) reject(new Error(m.error)); else resolve(m.value);
+    };
+    server.child.on("message", receive);
+    server.child.send({ fcxControl: "assist", id, tabId, slot: "helper", brief, expected: null });
+  });
+}
+
 export async function withServer(options: Parameters<typeof boot>[0], body: (server: Server, c: Awaited<ReturnType<typeof client>>) => Promise<void>): Promise<void> {
   const server = await boot(options);
   const c = await client(server);
-  try { await body(server, c); } finally { c.close(); await server.stop(); }
+  try {
+    // A fixed worker launch asks the person first in Ask mode: these tests choose Bypass, as the fixed-crew server tests do.
+    if (options?.fixedControls) for (const tab of c.state().projects[0].tabs) {
+      const requestId = `p9mode-${tab.id}`;
+      c.send({ type: "setPermissionMode", tabId: tab.id, mode: "bypass", confirm: true, requestId });
+      assert.equal((await c.wait(() => c.messages.find((m) => m.requestId === requestId), `bypass for ${tab.id}`)).type, "actionResult");
+    }
+    await body(server, c);
+  } finally { c.close(); await server.stop(); }
 }

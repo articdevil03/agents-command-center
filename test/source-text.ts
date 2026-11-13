@@ -91,6 +91,7 @@ function logicalEntry(file: string, root: string): string {
   if (file.split("/").length === 2) return file;
   if (top === "public" && folder === "app") return "public/app.js";
   if (top === "server" && folder === "main") return "server/index.ts";
+  if ((top === "server" || top === "public") && folder === "fixed-crew" && file.split("/").length === 3) return file;
   if (top === "server" && existsSync(join(root, `server/${folder}.ts`))) return `server/${folder}.ts`;
   throw new Error(`${file} sits in a folder that is not a split part of any source file`);
 }

@@ -1,23 +1,24 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { isSafeSeatId, acpKindOf, isAcpKind, type LaunchStamp } from "../config.ts";
-import { runSeat, isRunning, logsDir, type RunnerRun } from "../runner.ts";
-import { buildLeaderToolSpecs, type LaunchResult } from "../leader-tools.ts";
+import { runSeat, logsDir, type RunnerRun } from "../runner.ts";
+import type { LaunchResult } from "../leader-tools.ts";
 import type { RateLimitWindows } from "../agent-usage.ts";
-import { runEvent, withRoleInstruction } from "../process.ts";
+import { runEvent } from "../process.ts";
 import { endRunWindow } from "./activity.ts";
 import { askerOf, denyRunApprovals, leaderNameOf } from "./approvals.ts";
 import { addRunUsage, appendRunOutput, broadcast, broadcastUsageState, stateMessage } from "./broadcast.ts";
-import { noteRunActivity, openBridge, runToolDeps } from "./crew-tools.ts";
 import { LAUNCH_WINDOW_MS, LEADER_LAUNCH_LIMIT, MAX_LAUNCH_NOTICES, NOTICE_BRIEF_MAX } from "./launch-gates.ts";
 import { addUnconfirmed, clearConfirmedKill, endLiveRun, persistLaunchSafety } from "./launch-safety.ts";
 import {
-  HOST, RUN_RECORDS_KEPT, acpClis, blockedSeatKeys, boundPort, describeError, folderActivity, launchSafety, pendingRelaunch, runBridgeRevokers,
-  runContexts, runOutput, runRecords, runUsage, runWindows, stallKillRuns, stallTrackers, tabs, unconfirmedRunIds, userKilledRuns, type Launcher,
+  RUN_RECORDS_KEPT, acpClis, blockedSeatKeys, describeError, folderActivity, launchSafety, runBridgeRevokers,
+  runContexts, runOutput, runRecords, runUsage, runWindows, stallTrackers, tabs, unconfirmedRunIds, type Launcher,
   type RunRecord,
 } from "./state.ts";
 import { crewDefinition, tabLocation } from "./tabs.ts";
 import { refreshTabDetails } from "./workspace.ts";
+import { isFixedTab } from "../fixed-crew/runtime.ts";
+import { assertFixedTaskLaunch, fixedExecution, fixedRunLog, fixedRunStatus, fixedTreeEnd, fixedWorkerPrompt, type FixedLaunchContext } from "./fixed-task-launch.ts";
 
 // Who started a run, as the page shows it: the leader, a seat (a planner that runs the process), or null for the user's own Run.
 function launchedByFor(tabId: string, source: "client" | "leader" | "seat", launcher?: Launcher): { kind: "leader" | "seat"; slot: string; name: string } | null {
@@ -27,9 +28,7 @@ function launchedByFor(tabId: string, source: "client" | "leader" | "seat", laun
 }
 export function launchedByOfRun(tabId: string, runId: string): { kind: "leader" | "seat"; slot: string; name: string } | null {
   const context = runContexts.get(runId);
-  if (context) return launchedByFor(tabId, context.source === "stall" ? "client" : context.source, context.launcher);
-  const pending = pendingRelaunch.get(runId);
-  return pending ? launchedByFor(tabId, pending.originSource, pending.launcher) : null;
+  return context ? launchedByFor(tabId, context.source, context.launcher) : null;
 }
 // A seat's run that ends (every way it can) takes its bridge entry and what it was waiting on with it.
 export function revokeRunBridge(runId: string): void {
@@ -45,13 +44,18 @@ export function endRunRecord(runId: string, status: RunRecord["status"], exitCod
 export function trimRunRecords(): void {
   for (const [id, record] of runRecords) { if (runRecords.size <= RUN_RECORDS_KEPT) break; if (record.status !== "working") runRecords.delete(id); }
 }
-export function launchWorker(tabId: string, slot: string, prompt: string, source: "client" | "leader" | "seat" | "stall" = "client", relaunchUsed = false, originSource?: "client" | "leader" | "seat", headsUp?: string, launcher?: Launcher): LaunchResult {
+export function launchWorker(tabId: string, slot: string, prompt: string, source: "client" | "leader" | "seat" = "client", headsUp?: string, launcher?: Launcher, launchContext?: FixedLaunchContext): LaunchResult {
   const location = tabLocation(tabId);
   if (!location) return { ok: false, error: `unknown tab: ${tabId}` };
-  const member = location.tab.crew.find((seat) => seat.slot === slot);
+  try { assertFixedTaskLaunch(tabId, slot, launchContext); }
+  catch (error) { return { ok: false, error: describeError(error) }; }
+  const fixed = isFixedTab(location.tab);
+  // Only a fixed crew starts workers, and only through its current leader (assertFixedTaskLaunch above).
+  if (!fixed) return { ok: false, error: "Only a fixed crew can start workers." };
+  const selected = fixed && launchContext ? fixedExecution(tabId, launchContext.executionId) : null;
+  const member = selected ? { ...crewDefinition(location.tab, slot)!, ...selected.assignment } : crewDefinition(location.tab, slot);
   const definition = crewDefinition(location.tab, slot);
   if (!member || !definition) return { ok: false, error: `unknown slot: ${slot}` };
-  if (definition.isLeader) return { ok: false, error: "the tab leader runs in-process and cannot be launched as a worker" };
   // A CLI added in Settings that was since removed: say so before anything is counted or saved.
   let acp: { name: string; program: string; args: string[] } | undefined;
   if (isAcpKind(member.cli)) {
@@ -71,33 +75,31 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
   if (blockedSeatKeys.has(seatKey)) return { ok: false, error: `launch blocked after a prior stop: ${seatKey}` };
   const legacyBlock = [...blockedSeatKeys].find((key) => !key.includes("."));
   if (legacyBlock) return { ok: false, error: `an old launch block (${legacyBlock}) blocks every launch; allow it again first` };
-  // One run at a time runs the process on a tab: a second one would answer the same step twice.
-  if (member.orchestrates === true && [...runContexts.values()].some((context) => context.run.seatKey === seatKey && isRunning(context.run.runId))) return { ok: false, error: `${member.name} already runs the process in this tab; wait for that run to end, or stop it first` };
 
   const previousTimestamps = [...launchSafety.timestamps];
   const previousNotices = [...launchSafety.notices];
   const previousNextNoticeId = launchSafety.nextNoticeId;
   const previousLive = [...launchSafety.live];
-  if (!relaunchUsed) {
-    const now = Date.now();
-    const cutoff = now - LAUNCH_WINDOW_MS;
-    // The budget is per tab: another tab's launches never use this one up. A bare number (a stamp from before this) names no tab and is dropped.
-    launchSafety.timestamps = launchSafety.timestamps.filter((stamp): stamp is LaunchStamp => typeof stamp !== "number" && stamp.at >= cutoff);
-    const mine = launchSafety.timestamps.filter((stamp) => stamp.tabId === tabId);
-    if (mine.length >= LEADER_LAUNCH_LIMIT) {
-      const waitMs = Math.min(...mine.map((stamp) => stamp.at)) + LAUNCH_WINDOW_MS - now;
-      const clearsInSeconds = Math.max(1, Math.ceil(waitMs / 1000));
-      return { ok: false, error: `launch budget exceeded: ${LEADER_LAUNCH_LIMIT} launches in ${LAUNCH_WINDOW_MS / 60000} minutes on tab "${location.tab.name}", and your own Run counts too; the next one is allowed in ${clearsInSeconds} s` };
-    }
-    launchSafety.timestamps.push({ tabId, at: now });
+  const now = Date.now();
+  const cutoff = now - LAUNCH_WINDOW_MS;
+  // The budget is per tab: another tab's launches never use this one up. A bare number (a stamp from before this) names no tab and is dropped.
+  launchSafety.timestamps = launchSafety.timestamps.filter((stamp): stamp is LaunchStamp => typeof stamp !== "number" && stamp.at >= cutoff);
+  const mine = launchSafety.timestamps.filter((stamp) => stamp.tabId === tabId);
+  if (mine.length >= LEADER_LAUNCH_LIMIT) {
+    const waitMs = Math.min(...mine.map((stamp) => stamp.at)) + LAUNCH_WINDOW_MS - now;
+    const clearsInSeconds = Math.max(1, Math.ceil(waitMs / 1000));
+    return { ok: false, error: `launch budget exceeded: ${LEADER_LAUNCH_LIMIT} launches in ${LAUNCH_WINDOW_MS / 60000} minutes on tab "${location.tab.name}", and your own Run counts too; the next one is allowed in ${clearsInSeconds} s` };
   }
+  launchSafety.timestamps.push({ tabId, at: now });
+
   const run: RunnerRun = {
-    runId: randomUUID(), seatKey, slotId: slot, name: member.name, cli: member.cli, model: member.model,
+    runId: selected?.id ?? randomUUID(), seatKey, slotId: slot, name: member.name, cli: member.cli, model: member.model,
     effort: member.effort, folder: location.tab.folder, canWrite: definition.canWrite === true, startedAt: Date.now(),
     // Only a Claude run can have an advisor; a CLI added in Settings runs through its own start command.
     ...(member.cli === "claude" && member.advisor ? { advisor: member.advisor } : {}),
     ...(acp ? { acp } : {}),
     ...(member.role.trim() === "Researcher" ? { webSearch: true } : {}),
+    lowPriority: true,
   };
   launchSafety.live.push({ seatId: seatKey, runId: run.runId });
   const notice = {
@@ -107,7 +109,7 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
     seatName: member.name,
     // The notice is a reminder of what was launched, not the brief itself (the run's log keeps that): a huge brief would otherwise ride in every state message.
     brief: prompt.length > NOTICE_BRIEF_MAX ? `${prompt.slice(0, NOTICE_BRIEF_MAX)}...` : prompt,
-    source: source === "leader" ? leaderNameOf(tabId) : source === "seat" ? launchedByFor(tabId, "seat", launcher)?.name ?? "A seat" : source === "stall" ? "Stall relaunch" : "Local client",
+    source: source === "leader" ? leaderNameOf(tabId) : source === "seat" ? launchedByFor(tabId, "seat", launcher)?.name ?? "A seat" : "Local client",
     pending: true,
     // Kept with the notice, so it survives a reload and is never part of the leader's chat.
     ...(headsUp ? { headsUp } : {}),
@@ -130,37 +132,25 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
     try { persistLaunchSafety(); }
     catch (err) { broadcast({ type: "error", message: `could not release rejected launch reservation: ${describeError(err)}` }); }
   };
-  const origin = source === "stall" ? originSource ?? "client" as const : source;
-  const context = { tabId, slot, run, prompt, source: origin, launcher, relaunchUsed };
+  const context = { tabId, slot, run, prompt, source, launcher };
   runContexts.set(run.runId, context);
-  const startedBy = launchedByFor(tabId, origin, launcher);
+  const startedBy = launchedByFor(tabId, source, launcher);
   runRecords.set(run.runId, { tabId, seatKey, status: "working", outcome: null, logPath: null });
   trimRunRecords();
-  if (member.orchestrates === true) {
-    // The seat that runs the process reaches the crew tools through its own bridge entry, which lives exactly as long as this run.
-    const key = `${tabId}.${run.runId}`;
-    const bridge = openBridge(key, buildLeaderToolSpecs(runToolDeps(tabId, run.runId, slot)), () => noteRunActivity(tabId, run.runId));
-    runBridgeRevokers.set(run.runId, bridge.revoke);
-    run.crewTools = { url: `http://${HOST}:${boundPort}/api/leader-mcp/${encodeURIComponent(key)}`, token: bridge.token };
-  }
   let result: ReturnType<typeof runSeat>;
-  // The role's built-in instruction goes in front of every launch here, the one place they all pass (the user's Run, a launch_seat, a stall relaunch); the saved brief shows it.
-  try { result = runSeat(run, withRoleInstruction(member.role, prompt), {
+  // The fixed role prompt goes in front of every launch here, the one place they all pass.
+  try { result = runSeat(run, fixedWorkerPrompt(tabId, run.runId, prompt), {
+    onTreeEnd: (startedRun, evidence) => { if (fixed) fixedTreeEnd(tabId, startedRun.runId, evidence === "confirmed"); },
     onOutput: (startedRun, chunk) => {
       appendRunOutput(startedRun.runId, chunk);
       const wasStalled = tabs.get(tabId)?.stalledRuns.has(startedRun.runId) ?? false;
       const recovered = stallTrackers.noteOutput(startedRun.runId, Buffer.byteLength(chunk, "utf8"), Date.now(), wasStalled);
-      if (recovered) {
-        tabs.get(tabId)?.stalledRuns.delete(startedRun.runId);
-        pendingRelaunch.delete(startedRun.runId);
-      }
+      if (recovered) tabs.get(tabId)?.stalledRuns.delete(startedRun.runId);
       broadcast({ type: "output", tabId, runId: startedRun.runId, seatKey: startedRun.seatKey, chunk });
     },
     onUsage: (_startedRun, delta) => { addRunUsage(run.runId, delta); broadcastUsageState(); },
     onRateLimit: (windows: RateLimitWindows) => broadcast({ type: "rateLimit", tabId, runId: run.runId, windows }),
     onUnconfirmedKill: (startedRun, pid) => {
-      pendingRelaunch.delete(startedRun.runId);
-      stallTrackers.markKilled(startedRun.runId);
       addUnconfirmed(startedRun, pid);
       tabs.get(tabId)?.stalledRuns.add(startedRun.runId);
       broadcast(stateMessage());
@@ -170,13 +160,12 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
       endRunWindow(startedRun.runId);
       runOutput.delete(startedRun.runId);
       runUsage.delete(startedRun.runId);
-      userKilledRuns.delete(startedRun.runId);
-      stallKillRuns.delete(startedRun.runId);
       stallTrackers.finishRun(startedRun.runId);
       clearConfirmedKill(startedRun.runId);
       broadcast(stateMessage());
     },
     onStatus: (startedRun, status, exitCode) => {
+      if (fixed && status !== "working") fixedRunStatus(tabId, startedRun.runId, status);
       if (status !== "working") { endLiveRun(startedRun.runId); endRunWindow(startedRun.runId); revokeRunBridge(startedRun.runId); denyRunApprovals(startedRun.runId); endRunRecord(startedRun.runId, status, exitCode); }
       else if (!runWindows.has(startedRun.runId)) runWindows.set(startedRun.runId, folderActivity.beginOwn(startedRun.folder));
       const runtime = tabs.get(tabId);
@@ -184,7 +173,6 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
       if (status === "working") {
         runtime.state = runEvent(runtime.state, { type: "start", run: { id: startedRun.runId, seatSlotId: slot, label: prompt.slice(0, 120), startedAt: startedRun.startedAt } });
         stallTrackers.startRun(startedRun.runId, startedRun.startedAt);
-        if (relaunchUsed) stallTrackers.markRelaunched(startedRun.runId, startedRun.startedAt);
         broadcast({ type: "runStart", tabId, runId: startedRun.runId, seatKey, cli: startedRun.cli, model: startedRun.model, effort: startedRun.effort, folder: startedRun.folder, startedAt: startedRun.startedAt, canWrite: startedRun.canWrite, launchedBy: startedBy });
         broadcast(stateMessage());
         return;
@@ -193,24 +181,11 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
       if (status === "stopped") runtime.state = runEvent(runtime.state, { type: "stop", runId: startedRun.runId, endedAt: Date.now() });
       else if (status === "done") runtime.state = runEvent(runtime.state, { type: "finish", runId: startedRun.runId, endedAt: Date.now(), outcome: "done" });
       else runtime.state = runEvent(runtime.state, { type: "fail", runId: startedRun.runId, endedAt: Date.now(), outcome: exitCode === undefined ? "spawn error" : `exit ${exitCode}` });
-      const pending = pendingRelaunch.get(startedRun.runId);
-      const internalStallStop = status === "stopped" && stallKillRuns.has(startedRun.runId);
-      broadcast({ type: status === "stopped" ? "runStop" : status === "done" ? "runFinish" : "runFail", tabId, runId: startedRun.runId, seatKey, outcome: status, exitCode, ...(status === "stopped" ? { internal: internalStallStop } : {}) });
+      broadcast({ type: status === "stopped" ? "runStop" : status === "done" ? "runFinish" : "runFail", tabId, runId: startedRun.runId, seatKey, outcome: status, exitCode });
       runContexts.delete(startedRun.runId);
       clearConfirmedKill(startedRun.runId);
-      if (pending && status === "stopped") {
-        pendingRelaunch.delete(startedRun.runId);
-        // Kill dispatch is asynchronous. Recheck user intent at close,
-        // since it can change after this relaunch queued.
-        if (!stallTrackers.isKilled(startedRun.runId) && !userKilledRuns.has(startedRun.runId)) {
-          const relaunched = launchWorker(pending.tabId, pending.slot, pending.prompt, "stall", true, pending.originSource, undefined, pending.launcher);
-          if (!relaunched.ok) broadcast({ type: "error", message: `stall relaunch failed: ${relaunched.error}` });
-        }
-      } else if (pending) pendingRelaunch.delete(startedRun.runId);
       runOutput.delete(startedRun.runId);
       runUsage.delete(startedRun.runId);
-      userKilledRuns.delete(startedRun.runId);
-      stallKillRuns.delete(startedRun.runId);
       stallTrackers.finishRun(startedRun.runId);
       broadcast(stateMessage());
       void refreshTabDetails(tabId);
@@ -227,6 +202,7 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
   }
   const record = runRecords.get(run.runId);
   if (record) record.logPath = join(logsDir, `${seatKey}-${result.timestamp}.log`);
+  if (fixed && record?.logPath) fixedRunLog(tabId, run.runId, record.logPath);
   notice.pending = false;
   try { persistLaunchSafety(); }
   catch (err) { broadcast({ type: "error", message: `launch started but its outcome could not be saved: ${describeError(err)}` }); }

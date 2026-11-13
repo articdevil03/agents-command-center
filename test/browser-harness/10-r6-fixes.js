@@ -1,5 +1,5 @@
 (() => {
-  const { check, waitFor, text, $, requireElement, latestTab, leaderNameOf, openSeatCard, openRequests, confirmIfAsked, pressApproval } = window.__ccHarness;
+  const { check, waitFor, text, $, requireElement, latestTab, leaderNameOf, openRequests, confirmIfAsked, pressApproval } = window.__ccHarness;
   const runR6Fixes = async () => {
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     const tabId = window.__latestState.selectedTabId;
@@ -104,25 +104,6 @@
     const typingKept = $("reqTitle").value === "Second one";
     check("a sent request empties the form once and a second click sends no duplicate", Boolean(sentRequest) && cleared && noDuplicate && typingKept, { cleared, noDuplicate, typingKept, status: $("reqStatus").textContent });
     closeAll();
-
-    // Seat picture: a finished upload must not close another dialog the user opened meanwhile.
-    const priorFetch = window.fetch; let releaseUpload;
-    window.fetch = (input, init = {}) => {
-      const url = new URL(typeof input === "string" ? input : input.url, location.href);
-      if (init.method === "POST" && url.pathname === "/api/avatar") return new Promise((resolve) => { releaseUpload = () => resolve(new Response(JSON.stringify({ path: "/api/avatar/r6-seat.png" }), { status: 200, headers: { "Content-Type": "application/json" } })); });
-      return priorFetch(input, init);
-    };
-    requireElement("[data-seat-picture]", openSeatCard("coder")).click(); requireElement('#avModal[aria-hidden="false"]');
-    const avatarData = new DataTransfer(); avatarData.items.add(new File(["avatar bytes"], "seat-picture.png", { type: "image/png" })); $("avUp").files = avatarData.files; $("avUp").dispatchEvent(new Event("change", { bubbles: true }));
-    await waitFor(() => typeof releaseUpload === "function", "seat upload in flight");
-    closeAll(); $("setBtn").click(); requireElement("#setModal[aria-hidden=false]");
-    const updateStart = window.__sent.length;
-    releaseUpload();
-    await waitFor(() => window.__sent.slice(updateStart).some((item) => item.type === "updateSeat" && item.slot === "coder"), "seat picture still applied");
-    await sleep(30);
-    const applied = window.__sent.slice(updateStart).filter((item) => item.type === "updateSeat" && item.slot === "coder").at(-1);
-    check("a seat-picture upload that finishes after its dialog was closed still applies and leaves the open Settings dialog alone", applied?.pic === "/api/avatar/r6-seat.png" && !$("setModal").hidden && $("avModal").hidden, { pic: applied?.pic, settingsOpen: !$("setModal").hidden, avatarClosed: $("avModal").hidden });
-    window.fetch = priorFetch; closeAll();
   };
   Object.assign(window.__ccHarness, { runR6Fixes });
 })();

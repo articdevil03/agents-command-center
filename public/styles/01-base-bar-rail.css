@@ -150,7 +150,6 @@ body:not(.light) .themetg button[aria-checked="true"]{background:var(--sel)}
 .rail{display:flex;flex-direction:column;align-items:center;gap:8px;min-height:0;min-width:0;overflow:hidden;padding:17px 0 12px;border-right:1px solid var(--line)}
 .rhead{display:flex;align-items:center;width:100%;padding:0 14px;flex:none;min-width:0}
 .rhead .rl{flex:1;min-width:0;margin-left:-4px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:12px;font-weight:600;color:var(--text-3);opacity:0;transition:opacity .15s;display:flex;gap:6px;align-items:center}
-.rflag{font-size:11px;font-weight:600;padding:2px 6px;border-radius:6px;background:var(--t-orange);color:var(--warn-text)}
 .rtg{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:var(--text-3);flex:none}
 .rtg:hover{background:var(--hv-sf);color:var(--text)}
 .rtg svg{transition:transform .22s var(--ease)}
@@ -240,38 +239,7 @@ body.light .seat.work{--k:color-mix(in oklab,var(--c,var(--working)) 78%,#000)}
 .pill.bad{background:var(--t-red);color:var(--danger-text)} .pill.bad i{background:var(--failed)}
 .pill.idle,.pill.off{color:var(--text-2)}
 #statusBtn .sub{color:var(--text-2);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-#statusBtn .stepn{color:var(--text-2);font-size:12.5px;font-weight:500;white-space:nowrap;display:inline-flex;align-items:center;gap:5px;flex:none;height:26px;padding:0 9px;border-radius:8px;background:var(--tb)}
-#statusBtn:hover .stepn{color:var(--text)}
-#statusBtn .stepn svg{transition:transform .2s var(--ease)}
-#statusBtn[aria-expanded="true"] .stepn svg{transform:rotate(180deg)}
 .savest{font-size:12.5px;color:var(--text-3);white-space:nowrap;display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;flex:none;max-width:200px}
 .savest .spin{display:inline-block;margin-right:6px;vertical-align:-2px}
 .savest.warn{color:var(--warn-text)} .savest.bad{color:var(--danger-text)}
-.stepsWrap{display:grid;grid-template-rows:0fr;transition:grid-template-rows .25s var(--ease);border-bottom:1px solid transparent}
-.stepsWrap.on{grid-template-rows:1fr;border-bottom-color:var(--line)}
-.stepsWrap > div{overflow:hidden;min-height:0}
-.steps{display:flex;align-items:center;flex-wrap:wrap;row-gap:8px;padding:12px 18px}
-.step{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--text-3);padding:4px 10px 4px 5px;border-radius:999px;white-space:nowrap;max-width:100%;min-width:0}
-.step .sx{overflow:hidden;text-overflow:ellipsis;min-width:0}
-.step .n{width:20px;height:20px;border-radius:50%;display:grid;place-items:center;background:var(--tb);color:var(--text-3);font-size:11px;font-weight:600;flex:none}
-.step.done{color:var(--text-2)} .step.done .n{background:var(--t-green);color:var(--working-text)}
-.step.now{color:var(--text);background:var(--t-orange);font-weight:500} .step.now .n{background:var(--waiting);color:var(--count-text)}
-.step.now.go{background:var(--t-green)} .step.now.go .n{background:var(--working);color:#06281a}
-.step.now.stop{background:var(--t-red)} .step.now.stop .n{background:var(--failed);color:#fff}
-.step.hot .n{box-shadow:0 0 0 2px var(--failed)}
-.link{width:12px;height:1px;background:var(--line-3);margin:0 3px;flex:none}
-.who{display:inline-flex;margin-left:2px;flex:none}
-.who img,.who .you{width:18px;height:18px;border-radius:6px;margin-left:-4px;box-shadow:0 0 0 2px var(--sf);object-fit:cover}
-.who img:first-child,.who .you:first-child{margin-left:0}
-.who .you{background:var(--text);color:var(--sf);display:grid;place-items:center;font-size:9.5px;font-weight:700}
-.stepacts{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 18px 12px;font-size:13px}
-.stepacts:empty{display:none}
-.stepacts .lbl{margin-right:2px}
-.makers{display:inline-flex;gap:2px;padding:3px;background:var(--tb);border-radius:10px}
-.makers button{padding:4px 10px;border-radius:7px;font-size:12.5px;color:var(--text-2)}
-.makers button[aria-checked="true"]{background:var(--sf);color:var(--text);box-shadow:var(--card)}
-.rounds{display:flex;gap:6px;flex-wrap:wrap;padding:0 18px 10px}
-.rounds:empty{display:none}
-.rounds span{font-size:12px;padding:3px 8px;border-radius:7px;background:var(--tb);color:var(--text-2)}
-.stepnote{padding:0 18px 12px;font-size:12.5px;color:var(--text-3)}
 

@@ -92,9 +92,17 @@
     const ask = () => { const before = answers.length; window.__ccWinAskClose(); return answers.slice(before); };
     const warning = () => ({ open: !$("confirmModal").hidden && $("confirmModal").classList.contains("on") && $("confirmModal").getAttribute("aria-hidden") === "false", title: text("#confirmTitle"), body: text("#confirmBody"), keep: text("#confirmCancel"), close: text("#confirmOk"), danger: $("confirmOk").classList.contains("danger"), role: $("confirmModal").getAttribute("role"), focused: $("confirmModal").contains(document.activeElement), modals: document.querySelectorAll(".modal.on").length, scrim: $("scrim").classList.contains("on") });
     // Which tabs work comes from each tab's activeWork (the server's own check), never from derived.busy: the two are set opposite here.
+    // A second and third fixed tab are whole idle copies of Beta's (the fixed clone helper: own preferences, seat keys and process state), built on a scratch copy of the seed so the
+    // seed itself and the page see no change until the state below is delivered.
+    const stateWith = (clones) => {
+      const liveSeed = window.__ccSeed, liveDeliver = window.__ccDeliver, scratch = structuredClone(liveSeed);
+      window.__ccSeed = scratch; window.__ccDeliver = () => {};
+      try { for (const [from, id, name] of clones) window.__ccHarness.fixed.cloneIdleTab(from, id, name); }
+      finally { window.__ccSeed = liveSeed; window.__ccDeliver = liveDeliver; }
+      return scratch;
+    };
     const withWork = (ids) => {
-      const state = structuredClone(window.__ccSeed), beta = state.projects.find((project) => project.id === "beta"), model = beta.tabs[0];
-      if (ids.includes("beta-qa")) beta.tabs.push({ ...structuredClone(model), id: "beta-qa", name: "QA" }, { ...structuredClone(model), id: "beta-docs", name: "Docs" });
+      const state = stateWith(ids.includes("beta-qa") ? [["beta-dev", "beta-qa", "QA"], ["beta-dev", "beta-docs", "Docs"]] : []);
       for (const tab of state.projects.flatMap((project) => project.tabs)) { tab.activeWork = ids.includes(tab.id); tab.derived.busy = !tab.activeWork; }
       window.__ccDeliver({ ...state, type: "state" });
     };
@@ -145,8 +153,7 @@
     withWork(["alpha-dev"]);
     const stackedAnswers = ask();
     const stacked = !$("modal").hidden && !$("confirmModal").hidden;
-    const created = structuredClone(window.__ccSeed), alphaProject = created.projects.find((project) => project.id === "alpha");
-    const newTab = structuredClone(alphaProject.tabs[0]); newTab.id = "alpha-new"; newTab.name = "New tab"; alphaProject.tabs.push(newTab);
+    const created = stateWith([["alpha-dev", "alpha-new", "New tab"]]);
     for (const tab of created.projects.flatMap((project) => project.tabs)) { tab.activeWork = tab.id === "alpha-dev"; tab.derived.busy = !tab.activeWork; }
     const answersBefore = answers.length;
     window.__ccDeliver({ ...created, type: "state" });

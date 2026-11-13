@@ -95,7 +95,8 @@ test("fix 1d: the reply ended normally but the state still says replying when th
     await delay(300);
     assert.equal((await sentOf(ev, "chat")).length, 0, "the state still says replying: nothing yet");
     await setActive(ev, tabA, false);
-    await waitFor(`window.__sent.some((m)=>m.type==="chat")`, "it goes out as soon as the state says idle");
+    await delay(500);
+    assert.equal((await sentOf(ev, "chat")).length, 1, "it goes out as soon as the state says idle");
     assert.equal((await sentOf(ev, "chat"))[0].text, "late file");
     assert.equal((await sentOf(ev, "steer")).length, 0);
   });

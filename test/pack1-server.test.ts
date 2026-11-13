@@ -12,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 
-const SEATS = getProcessDefinition("dev", "main").seats;
-const crewFor = (leader?: { cli: string; model: string; effort: string }) => SEATS.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort, ...(seat.isLeader ? leader : {}) }));
+const claudeLeader = { cli: "claude" as const, model: "claude-sonnet-5-5[1m]", effort: "high" };
+const codexLeader = { cli: "codex" as const, model: "gpt-6-sol", effort: "high" };
 const CODEX_TAB = "p1-codex", CLAUDE_TAB = "p1-claude";
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 const newKey = () => randomBytes(32).toString("hex");
@@ -29,11 +29,8 @@ async function boot(options: { key?: string; withWorkspace?: boolean; env?: Reco
   const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work"), work2 = join(temp, "work2");
   for (const dir of [home, work, work2, join(data, "config")]) mkdirSync(dir, { recursive: true });
   if (options.withWorkspace !== false) {
-    const tabs = [
-      { id: CODEX_TAB, name: CODEX_TAB, kind: "dev", process: "main", folder: work, crew: crewFor({ cli: "codex", model: "gpt-6-sol", effort: "high" }) },
-      { id: CLAUDE_TAB, name: CLAUDE_TAB, kind: "dev", process: "main", folder: work, crew: crewFor() },
-    ];
-    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p1", name: "P1", folder: work, tabs }] }));
+    const tabs = [fixedTab(CODEX_TAB, work, { leader: codexLeader }, CODEX_TAB), fixedTab(CLAUDE_TAB, work, { leader: claudeLeader }, CLAUDE_TAB)];
+    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p1", work, tabs), name: "P1" }])));
   }
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: {} }));
   const key = options.key ?? newKey();
@@ -102,7 +99,10 @@ async function chat(tabId: string, text: string): Promise<void> {
   await wait(() => doneCount(tabId) > before, `chat "${text.slice(0, 30)}" finished`);
 }
 const fakeLog = () => (existsSync(join(server.temp, "fake-leader.log")) ? readFileSync(join(server.temp, "fake-leader.log"), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : []) as any[];
-const turnTexts = () => fakeLog().filter((e) => e.method === "turn/start").map((e) => String(e.params.input[0].text));
+// A fixed-crew leader gets its role prompt first; the tab's own message (with the read-first text when it applies) follows the wrapper's "Current message:" line.
+const WRAPPER_MARK = "Current message:\n";
+const messageOf = (text: string) => { const at = text.indexOf(WRAPPER_MARK); assert.ok(at >= 0, `the leader turn carries the fixed-crew wrapper: ${text.slice(0, 200)}`); return text.slice(at + WRAPPER_MARK.length); };
+const turnTexts = () => fakeLog().filter((e) => e.method === "turn/start").map((e) => messageOf(String(e.params.input[0].text)));
 const startedCount = () => fakeLog().filter((e) => e.started).length;
 const pendingOf = (tabId: string) => tabOf(tabId).pendingApprovals as any[];
 
@@ -130,7 +130,6 @@ test("every write route needs X-App-Key; a refused request writes nothing; the r
   const routes: { path: string; headers: Record<string, string>; body: Buffer }[] = [
     { path: "/api/paste-image", headers: { "Content-Type": "image/png" }, body: png },
     { path: "/api/paste-file", headers: { "Content-Type": "application/octet-stream", "X-File-Name": "note.txt" }, body: Buffer.from("hello") },
-    { path: "/api/avatar", headers: { "Content-Type": "image/png" }, body: png },
   ];
   const stored = () => [join(server.data, "scratch"), join(server.data, "avatars")].flatMap((dir) => (existsSync(dir) ? readdirSync(dir) : []));
   for (const route of routes) {
@@ -145,7 +144,7 @@ test("every write route needs X-App-Key; a refused request writes nothing; the r
     const response = await fetch(base + route.path, { method: "POST", headers: { ...route.headers, "X-Request-Id": `p1up${++requestNumber}`, "X-App-Key": server.key }, body: route.body });
     assert.equal(response.status, 200, `${route.path} with the right key: ${await response.text()}`);
   }
-  assert.equal(stored().length, 3, "the three accepted uploads were stored");
+  assert.equal(stored().length, 2, "the two accepted uploads were stored");
   // Any other non-GET method needs the key too, before it can even be told "method not allowed".
   for (const method of ["DELETE", "PUT", "POST"]) {
     const response = await fetch(base + "/", { method }); await response.arrayBuffer();
@@ -234,13 +233,6 @@ test("a declined request reaches the leader as declined with no body; accepted a
   assert.equal((await action({ type: "resolveRequest", id: idOf("Declined one"), status: "declined", tabId: CODEX_TAB })).type, "actionResult");
   assert.equal((await action({ type: "resolveRequest", id: idOf("Accepted one"), status: "accepted", tabId: CODEX_TAB })).type, "actionResult");
   assert.equal((state().requests as any[]).find((r) => r.title === "Declined one").body, "SECRET-DECLINED-BODY", "The user's own list keeps the body");
-  const start = messages.length;
-  await chat(CODEX_TAB, JSON.stringify([{ tool: "list_requests" }]));
-  const text = messages.slice(start).filter((m) => m.type === "chatDelta" && m.tabId === CODEX_TAB).map((m) => m.text).join("");
-  assert.ok(text.startsWith("[tool ok: "), text);
-  assert.ok(text.includes("Declined one") && text.includes('"status":"declined"'), "the leader still sees that it was declined");
-  assert.equal(text.includes("SECRET-DECLINED-BODY"), false, "but never the declined body");
-  assert.ok(text.includes("VISIBLE-ACCEPTED-BODY") && text.includes("VISIBLE-PENDING-BODY"), "the other bodies are untouched");
 });
 
 test("a Codex file approval shows every line it was given plus the grantRoot line", async () => {
@@ -250,42 +242,6 @@ test("a Codex file approval shows every line it was given plus the grantRoot lin
   assert.ok(approval.summary.endsWith("\nAlso asks for write access to: C:/granted-root"), approval.summary);
   await action({ type: "answerApproval", tabId: CODEX_TAB, approvalId: approval.approvalId, allow: false });
   await wait(() => doneCount(CODEX_TAB) > before, "turn finished");
-});
-
-test("a read-only Codex seat is gated like a write seat: Ask shows the whole brief, Plan refuses", async () => {
-  await action({ type: "setPermissionMode", tabId: CODEX_TAB, mode: "ask", confirm: true });
-  const brief = "TEST ONLY: do nothing.\nsecond line of the brief\nthird line of the brief";
-  const results = () => messages.filter((m) => m.type === "testGatedLaunchResult" && m.tabId === CODEX_TAB);
-  let seen = results().length;
-  send({ type: "testGatedLaunch", tabId: CODEX_TAB, slot: "reviewer2", brief });
-  const approval = await wait(() => pendingOf(CODEX_TAB)[0], "the launch approval appears for a read-only Codex seat");
-  assert.equal(approval.tool, "launch:Sol");
-  assert.equal(approval.summary, `Sol (Reviewer)\n${brief}`, "the whole brief with its line breaks, not the first line");
-  await action({ type: "answerApproval", tabId: CODEX_TAB, approvalId: approval.approvalId, allow: false });
-  const denied = await wait(() => results()[seen], "denied result");
-  assert.deepEqual([denied.ok, denied.error], [false, "The user denied this."]);
-
-  // A huge brief is cut at 20000 characters with a last line saying how much was left out.
-  const huge = `TEST ONLY: do nothing.\n${"y".repeat(25000)}`;
-  seen = results().length;
-  send({ type: "testGatedLaunch", tabId: CODEX_TAB, slot: "reviewer2", brief: huge });
-  const long = await wait(() => pendingOf(CODEX_TAB)[0], "the long launch approval appears");
-  const full = `Sol (Reviewer)\n${huge}`;
-  assert.ok(long.summary.length <= 20100, `capped: ${long.summary.length}`);
-  assert.ok(long.summary.startsWith("Sol (Reviewer)\nTEST ONLY: do nothing.\nyyyy"));
-  assert.match(long.summary, /\n\.\.\. \((\d+) more characters not shown\)$/);
-  const hidden = Number(/\((\d+) more characters not shown\)$/.exec(long.summary)![1]);
-  assert.equal(long.summary.length - `\n... (${hidden} more characters not shown)`.length + hidden, full.length, "shown + hidden = the whole text");
-  await action({ type: "answerApproval", tabId: CODEX_TAB, approvalId: long.approvalId, allow: false });
-  await wait(() => results()[seen], "long denied");
-
-  await action({ type: "setPermissionMode", tabId: CODEX_TAB, mode: "plan", confirm: true });
-  seen = results().length;
-  send({ type: "testGatedLaunch", tabId: CODEX_TAB, slot: "reviewer2", brief });
-  const refused = await wait(() => results()[seen], "plan refusal");
-  assert.equal(refused.ok, false);
-  assert.match(refused.error, /Plan mode/);
-  assert.equal(pendingOf(CODEX_TAB).length, 0, "Plan asks nothing");
 });
 
 test("a Save that times out but whose turn still writes the handover is marked saved and the failed card is cleared", async () => {

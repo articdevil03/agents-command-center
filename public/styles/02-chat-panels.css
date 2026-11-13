@@ -33,12 +33,6 @@
 .file .fnm{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .file img{width:30px;height:30px;border-radius:6px;object-fit:cover;display:block;flex:none}
 .file-icon{font-family:var(--mono);font-size:10px;text-transform:uppercase;color:var(--text-3);flex:none}
-.ask{background:var(--t-orange);border-radius:16px;padding:16px 18px;display:grid;gap:10px;max-width:580px;min-width:0}
-.ask .h{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--warn-text);font-size:14.5px;min-width:0}
-.ask p{margin:0;color:var(--text-2);overflow-wrap:anywhere}
-.ask .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
-.ask.ok{background:var(--t-green)} .ask.ok .h{color:var(--working-text)}
-.ask.stop{background:var(--t-red)} .ask.stop .h{color:var(--danger-text)}
 .empty{display:grid;justify-items:center;gap:10px;text-align:center;padding:9vh 0 0}
 .empty img{width:64px;height:64px;border-radius:18px;box-shadow:var(--card)}
 .empty h2{margin:6px 0 0;font-size:20px;font-weight:600;max-width:100%;overflow-wrap:anywhere}
@@ -222,3 +216,10 @@ button.run:hover{background:var(--hv-sf)}
 .sec + .sec{padding-top:12px;border-top:1px solid var(--line)}
 .note-open-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
+
+.ask{background:var(--t-orange);border-radius:16px;padding:16px 18px;display:grid;gap:10px;max-width:580px;min-width:0}
+.ask .h{display:flex;align-items:center;gap:8px;font-weight:600;color:var(--warn-text);font-size:14.5px;min-width:0}
+.ask p{margin:0;color:var(--text-2);overflow-wrap:anywhere}
+.ask .acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+.ask.ok{background:var(--t-green)} .ask.ok .h{color:var(--working-text)}
+.ask.stop{background:var(--t-red)} .ask.stop .h{color:var(--danger-text)}

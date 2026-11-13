@@ -7,7 +7,7 @@ import { broadcast, sendError, stateMessage } from "../broadcast.ts";
 import { stopLeaderSession } from "../leader-session.ts";
 import type { MessageHandler } from "./types.ts";
 import {
-  acpClis, activeLeaderTurns, describeError, leaders, pendingHandoverReads, savedSetups, selectedTabId, setAcpClis, settingsService, workspaces,
+  acpClis, activeLeaderTurns, describeError, leaders, pendingHandoverReads, selectedTabId, setAcpClis, settingsService, workspaces,
 } from "../state.ts";
 import { acpLeaderOf, hasAcpLeader, leaderSeatOf, tabLocation } from "../tabs.ts";
 import { readCliId, requiredRequestId, runAsyncAction } from "../workspace.ts";
@@ -100,11 +100,11 @@ function onRemoveAcpCli(ws: WebSocket, message: any): void {
     if (!cli) throw new Error("Unknown ACP CLI");
     const kind = acpKindOf(cli);
     for (const tab of workspaces.projects.flatMap((project) => project.tabs)) {
+      if (tab.fixedCrew?.version === 1 && Object.values(tab.fixedCrew.preferences).some((preference) => preference.assignment?.cli === kind)) throw new Error(`${cli.name} is used by the fixed crew in "${tab.name}". Pick another CLI first.`);
+      if (tab.fixedCrew && tab.fixedCrew.version !== 1) throw new Error("A newer crew configuration is unavailable. Keep its ACP CLIs until it can be read");
       const member = tab.crew.find((seat) => seat.cli === kind);
       if (member) throw new Error(`${cli.name} is used by ${member.name} (${member.role}) in "${tab.name}". Pick another CLI for that seat first.`);
     }
-    const savedUse = savedSetups.find((setup) => setup.crew.some((seat) => seat.cli === kind));
-    if (savedUse) throw new Error(`${cli.name} is used by the saved setup "${savedUse.name}". Remove that setup, or change the CLI there, first.`);
     writeAcpClis(acpClis.filter((item) => item !== cli));
     setAcpClis(acpClis.filter((item) => item !== cli));
     broadcast(stateMessage());

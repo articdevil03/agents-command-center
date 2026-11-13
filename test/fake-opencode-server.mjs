@@ -81,8 +81,9 @@ const server = createServer(async (req, res) => {
     if (process.env.FAKE_OPENCODE_PROMPT_FAILS === "1") return json(res, 500, { name: "UnknownError", data: { message: process.env.FAKE_OPENCODE_PROMPT_LEAK === "1" ? "x".repeat(180) + password : "prompt refused by fake" } });
     // A prompt whose text holds REFUSE-ONCE is refused the first time it arrives (REFUSE-ONCE-SLOW: after 1200 ms) and accepted when it is sent again.
     const promptText = String(body?.parts?.[0]?.text);
-    if (promptText.includes("REFUSE-ONCE") && !refusedOnce.has(promptText)) {
-      refusedOnce.add(promptText);
+    const userText = promptText.split("Current message:\n").pop();
+    if (promptText.includes("REFUSE-ONCE") && !refusedOnce.has(userText)) {
+      refusedOnce.add(userText);
       if (promptText.includes("REFUSE-ONCE-SLOW")) await sleep(1200);
       return json(res, 500, { name: "UnknownError", data: { message: "prompt refused once by fake" } });
     }

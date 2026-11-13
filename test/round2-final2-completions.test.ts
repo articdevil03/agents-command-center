@@ -2,9 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { actionClient } from "./action-client.ts";
-import { loadServer, connect, waitFor } from "./round2-helpers.ts";
+import { loadFixed, fixedGateServer, connect, waitFor } from "./round2-helpers.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
-import { launchGateServer } from "./round2-gate-helpers.ts";
+
 
 async function permissionCompletions(server: any, ws: any, count: number, client: any) {
   for (let index = 0; index < count; index++) {
@@ -18,7 +18,7 @@ async function permissionCompletions(server: any, ws: any, count: number, client
 
 test("final2 in-flight MCP Add survives overwrite and 33 real permission completions", async () => {
   let release!: () => void, entered = false;
-  const server = await loadServer({ skipHealth: true, runCli: async (_bin: string, args: string[]) => {
+  const server = await loadFixed({ skipHealth: true, runCli: async (_bin: string, args: string[]) => {
     if (args[0] === "mcp" && args[1] === "add") { entered = true; await new Promise<void>((resolve) => { release = resolve; }); }
     return { code: 0, stdout: "", stderr: "" };
   } });
@@ -46,7 +46,7 @@ test("final2 in-flight MCP Add survives overwrite and 33 real permission complet
 });
 
 test("final2 folder Save stays Done after 1001 real permission completions and stale running state", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server), client = actionClient();
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server), client = actionClient();
   client.setState(server.stateMessage());
   client.pendingSettingsActions.set("folder-save", "completed_folder");
   ws.message({ type: "setDefaultProjectFolder", requestId: "completed_folder", folder: server.testRoot });
@@ -67,7 +67,7 @@ test("final2 folder Save stays Done after 1001 real permission completions and s
 });
 
 test("final2 request form cleared ids stay bounded across 1100 completions", async () => {
-  const server = await loadServer({ skipHealth: true }), client = actionClient();
+  const server = await loadFixed({ skipHealth: true }), client = actionClient();
   client.setState(server.stateMessage());
   for (let index = 0; index < 1100; index++) {
     const requestId = `cleared_${index}`;
@@ -88,7 +88,7 @@ test("final2 request form cleared ids stay bounded across 1100 completions", asy
 
 test("final2 never evicts more than 32 running actions and releases failed settings actions", async () => {
   const releases: Array<() => void> = [];
-  const server = await loadServer({ skipHealth: true, runCli: async (_bin: string, args: string[]) => {
+  const server = await loadFixed({ skipHealth: true, runCli: async (_bin: string, args: string[]) => {
     if (args[0] === "mcp" && args[1] === "add") { await new Promise<void>((resolve) => releases.push(resolve)); return { code: 1, stdout: "", stderr: "failed" }; }
     return { code: 0, stdout: "", stderr: "" };
   } }), ws = connect(server);
@@ -102,7 +102,7 @@ test("final2 never evicts more than 32 running actions and releases failed setti
 });
 
 test("final2 a pending id seen listed and then dropped is finished, never stuck on Working", async () => {
-  const server = await loadServer({ skipHealth: true }), client = actionClient();
+  const server = await loadFixed({ skipHealth: true }), client = actionClient();
   const listing = (ids: string[]) => { const state = server.stateMessage(); state.requestActions = Object.fromEntries(ids.map((id) => [id, { requestId: id, status: "running", message: "Working" }])); return state; };
   client.setState(server.stateMessage());
   client.pendingSettingsActions.set("mcp-add-claude", "restart_mcp");
@@ -121,7 +121,7 @@ test("final2 a pending id seen listed and then dropped is finished, never stuck 
 });
 
 test("final2 pending unlisted ids stay running and terminal snapshots retire only the matching id", async () => {
-  const server = await loadServer({ skipHealth: true }), client = actionClient();
+  const server = await loadFixed({ skipHealth: true }), client = actionClient();
   client.setState(server.stateMessage());
   client.pendingSettingsActions.set("folder-save", "new_folder");
   client.onMessage({ type: "actionResult", action: "setDefaultProjectFolder", requestId: "old_folder" });
@@ -151,7 +151,7 @@ test("final2 SDK live mode tracks successful switches and tool hook context", as
 });
 
 test("final2 Requests pending status belongs only to the sending tab", async () => {
-  const server = await loadServer({ skipHealth: true }), client = actionClient();
+  const server = await loadFixed({ skipHealth: true }), client = actionClient();
   const state = server.stateMessage(); client.setState(state);
   client.pendingRequestActions.set("alpha-dev", "only_alpha");
   client.renderRequests(); assert.equal(client.node("reqSend").disabled, true);
@@ -160,15 +160,15 @@ test("final2 Requests pending status belongs only to the sending tab", async () 
 });
 
 test("final2 dead or replaced leader cannot initiate launch in Accept", async () => {
-  const { server, ws, deps } = await launchGateServer("accept");
+  const { server, ws, deps } = await fixedGateServer("accept");
   ws.message({ type: "clear", tabId: "alpha-dev" });
-  const result = await deps.launch("coder", "stale write").catch(() => assert.fail("stale launch threw instead of refusing"));
-  assert.equal(server.launched.length, 0, "stale leader launches a writer in Accept");
+  const result = await deps.launch("helper", "stale work").catch(() => assert.fail("stale launch threw instead of refusing"));
+  assert.equal(server.launched.length, 0, "stale leader launches a worker in Accept");
   assert.match(result.error, /no longer current/);
 });
 
 test("final2 terminal control records are bounded by current controls", async () => {
-  const server = await loadServer({ skipHealth: true }), client = actionClient();
+  const server = await loadFixed({ skipHealth: true }), client = actionClient();
   client.setState(server.stateMessage());
   for (let index = 0; index < 1100; index++) {
     const id = `repeat_${index}`;
@@ -192,7 +192,7 @@ test("final2 terminal control records are bounded by current controls", async ()
 });
 
 test("final2 running snapshots never retire pending records", async () => {
-  const server = await loadServer({ skipHealth: true }), client = actionClient();
+  const server = await loadFixed({ skipHealth: true }), client = actionClient();
   const state = server.stateMessage();
   client.setState(state); client.pendingSettingsActions.set("folder-save", "still_running");
   state.requestActions.still_running = { requestId: "still_running", status: "running", message: "Working" };

@@ -6,78 +6,99 @@ import * as path from "node:path";
 import { ChatStore } from "../server/chat-store.ts";
 import { tempRoot } from "./temp-root.ts";
 import { config } from "./round2-setup.ts";
-import { fixtureWorkspaces, tempWorkspaceFolders, loadServer, connect, lastState, settleLeaderTurns, tick, waitFor } from "./round2-helpers.ts";
+import { fixtureWorkspaces, tempWorkspaceFolders, loadFixed, startHelper, setAssignment, connect, lastState, settleLeaderTurns, tick, waitFor } from "./round2-helpers.ts";
 
-const LEADER_SLOT = (tab: any) => tab.crew.find((member: any) => member.slot === "leader");
+const LEADER = (server: any) => server.getWorkspaces().projects[0].tabs[0].fixedCrew.preferences.leader;
+const CLAUDE_NEXT = () => ({ cli: "claude", model: config.MODEL_OPTIONS.claude!.find((model) => model !== "claude-sonnet-5-5[1m]")!, effort: "high" });
+const CLAUDE_NOW = { cli: "claude", model: "claude-sonnet-5-5[1m]", effort: "medium" };
 
-test("pack 2 C7: a leader model/effort change asked for mid-answer is saved at once and reaches the live leader only when the answer ends", async () => {
-  const server = await loadServer({ skipHealth: true, leaderDelayMs: 150 }), ws = connect(server);
+test("pack 2 C7: a leader assignment saved mid-answer is saved at once, never touches the live answer, and the next turn runs on a fresh leader with the saved choice", async () => {
+  const server = await loadFixed({ skipHealth: true, leaderDelayMs: 150 }), ws = connect(server);
   try {
   ws.message({ type: "chat", tabId: "alpha-dev", text: "long answer" });
   await tick(20);
   assert.equal(server.activeLeaderTurns.has("alpha-dev"), true, "an answer is being written");
   const handle = server.leaderHandles[0];
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", model: "claude-opus-5", effort: "high" });
+  const next = CLAUDE_NEXT();
+  assert.equal((await setAssignment(ws, "alpha-dev", "leader", next)).type, "actionResult");
   assert.deepEqual(handle.modelCalls, [], "the live leader is not touched while it answers");
-  assert.equal(server.leaderSeats.get("alpha-dev").effort, "medium", "nor is the effort the next turn will read");
-  const saved = LEADER_SLOT(server.getWorkspaces().projects[0].tabs[0]);
-  assert.deepEqual([saved.model, saved.effort], ["claude-opus-5", "high"], "the choice itself is saved at once");
-  assert.equal(server.queuedLeaderChanges.has("alpha-dev"), true);
+  assert.equal(handle.stopCalls, 0, "nor stopped");
+  assert.equal(server.leaderSeats.get("alpha-dev").effort, "medium", "nor is the effort the live session reads");
+  assert.deepEqual(LEADER(server), { assignment: next, source: "user" }, "the choice itself is saved at once");
   await waitFor(() => !server.activeLeaderTurns.has("alpha-dev"), "the answer ends");
   await tick(10);
-  assert.deepEqual(handle.modelCalls, ["claude-opus-5"], "the change reaches the live leader after the answer");
-  assert.equal(server.leaderSeats.get("alpha-dev").effort, "high");
-  assert.equal(server.queuedLeaderChanges.size, 0);
+  assert.deepEqual([handle.modelCalls, handle.stopCalls], [[], 0], "the finished answer does not change the live leader either");
   assert.ok(ws.messages.some((message: any) => message.type === "chatMessage" && message.role === "assistant" && message.text.endsWith("long answer")), "the answer was never cut");
   assert.equal(ws.messages.some((message: any) => message.type === "chatError"), false);
+  ws.message({ type: "chat", tabId: "alpha-dev", text: "next turn" });
+  await waitFor(() => server.leaderCreates.length === 2 && server.activeLeaderTurns.has("alpha-dev"), "the next turn's fresh leader");
+  assert.equal(handle.stopCalls, 1, "the old session is retired before the next turn");
+  assert.deepEqual([server.leaderCreates[1].settings.model, server.leaderCreates[1].settings.effort], [next.model, next.effort], "the fresh leader starts on the saved choice");
+  assert.deepEqual(server.leaderCreates[0].settings, { model: CLAUDE_NOW.model, effort: CLAUDE_NOW.effort }, "the first leader ran on the earlier choice");
+  await waitFor(() => !server.activeLeaderTurns.has("alpha-dev"), "the next answer ends");
+  ws.message({ type: "chat", tabId: "alpha-dev", text: "third turn" });
+  await waitFor(() => server.activeLeaderTurns.has("alpha-dev"), "the third turn starts");
+  assert.equal(server.leaderCreates.length, 2, "the fresh leader keeps serving: the saved choice it started on is recorded, so no further restart");
+  await waitFor(() => !server.activeLeaderTurns.has("alpha-dev"), "the third answer ends");
   } finally { await settleLeaderTurns(server); }
 });
 
-test("pack 2 C7: a queued model change that fails at the end of the answer reports it once and ends nothing; Stop drops a queued change", async () => {
-  const failing = await loadServer({ skipHealth: true, leaderDelayMs: 100, setModelResult: false }), ws = connect(failing);
+test("pack 2 C7: a leader CLI change mid-answer is refused and saves nothing; a Stop leaves the saved choice for the successor leader", async () => {
+  const live = await loadFixed({ skipHealth: true, leaderDelayMs: 100 }), ws = connect(live);
   let stopped: any = null;
   try {
   ws.message({ type: "chat", tabId: "alpha-dev", text: "answer" });
   await tick(10);
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", model: "claude-opus-5" });
-  await waitFor(() => ws.messages.some((message: any) => message.type === "error" && /leader model change failed/.test(message.message)), "the failed change is reported");
-  assert.equal(ws.messages.some((message: any) => message.type === "chatError"), false, "a failed change never fails a turn");
+  const refused = await setAssignment(ws, "alpha-dev", "leader", { cli: "codex", model: "gpt-6.1-sol", effort: "high" });
+  assert.match(refused.message, /Finish the leader's current reply before changing its CLI or instructions/);
+  assert.deepEqual(LEADER(live).assignment, CLAUDE_NOW, "a refused change saves nothing");
+  assert.equal(ws.messages.some((message: any) => message.type === "chatError"), false, "a refused change never fails a turn");
+  await waitFor(() => !live.activeLeaderTurns.has("alpha-dev"), "the answer ends");
 
-  stopped = await loadServer({ skipHealth: true, hangLeader: true });
+  stopped = await loadFixed({ skipHealth: true, hangLeader: true });
   const wsStopped = connect(stopped);
   wsStopped.message({ type: "chat", tabId: "alpha-dev", text: "hang" });
   await tick(10);
-  wsStopped.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", model: "claude-opus-5" });
-  assert.equal(stopped.queuedLeaderChanges.has("alpha-dev"), true);
+  const next = CLAUDE_NEXT();
+  assert.equal((await setAssignment(wsStopped, "alpha-dev", "leader", next)).type, "actionResult");
   wsStopped.message({ type: "stopSeat", tabId: "alpha-dev", slot: "leader" });
-  assert.equal(stopped.queuedLeaderChanges.size, 0, "a stopped leader has nothing to change; its successor reads the saved seat");
-  assert.deepEqual(stopped.leaderHandles[0].modelCalls, []);
-  } finally { await settleLeaderTurns(...[failing, stopped].filter(Boolean)); }
+  assert.equal(stopped.leaderHandles[0].dead, true, "the stopped leader is gone");
+  assert.equal(stopped.leaders.has("alpha-dev"), false);
+  assert.deepEqual(stopped.leaderHandles[0].modelCalls, [], "no live model change was ever sent to it");
+  assert.deepEqual(LEADER(stopped).assignment, next, "the saved choice survives the Stop");
+  stopped.leaderHandles.length = 0;
+  wsStopped.message({ type: "chat", tabId: "alpha-dev", text: "again" });
+  await tick(10);
+  assert.deepEqual([stopped.leaderCreates.at(-1).settings.model, stopped.leaderCreates.at(-1).settings.effort], [next.model, next.effort], "the successor reads the saved assignment");
+  } finally { await settleLeaderTurns(...[live, stopped].filter(Boolean)); }
 });
 
-test("round 1 fix 1: a model/effort change whose save failed mid-answer never reaches the live leader afterwards", async () => {
+test("round 1 fix 1: a leader assignment whose save failed mid-answer leaves both the saved and the live settings unchanged", async () => {
   let failWrite = false;
-  const server = await loadServer({ skipHealth: true, leaderDelayMs: 150, failWorkspaceWrite: () => failWrite }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, leaderDelayMs: 150, failWorkspaceWrite: () => failWrite }), ws = connect(server);
   try {
     ws.message({ type: "chat", tabId: "alpha-dev", text: "long answer" });
     await tick(20);
     assert.equal(server.activeLeaderTurns.has("alpha-dev"), true, "an answer is being written");
     const handle = server.leaderHandles[0];
     failWrite = true;
-    ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "leader", model: "claude-opus-5", effort: "high" });
+    const refused = await setAssignment(ws, "alpha-dev", "leader", CLAUDE_NEXT());
     failWrite = false;
-    assert.match(ws.messages.findLast((message: any) => message.type === "error").message, /workspace disk failed/, "the refusal is reported");
-    assert.equal(server.queuedLeaderChanges.size, 0, "nothing is queued for a save that did not happen");
+    assert.match(refused.message, /workspace disk failed/, "the refusal is reported");
+    assert.deepEqual(LEADER(server).assignment, CLAUDE_NOW, "the saved settings are unchanged");
+    assert.deepEqual(server.stateMessage().projects[0].tabs[0].fixedCrew.preferences.leader.assignment, CLAUDE_NOW, "and so are the current (in-memory) settings the page and the next turn read");
     await waitFor(() => !server.activeLeaderTurns.has("alpha-dev"), "the answer ends");
-    await tick(10);
-    assert.deepEqual(handle.modelCalls, [], "the live leader keeps the model the saved settings have");
+    ws.message({ type: "chat", tabId: "alpha-dev", text: "next turn" });
+    await waitFor(() => !server.activeLeaderTurns.has("alpha-dev") && server.chats.length === 2, "the next answer");
+    assert.deepEqual([handle.modelCalls, handle.stopCalls], [[], 0], "the live leader keeps the settings the saved crew has");
+    assert.equal(server.leaderCreates.length, 1, "no fresh leader: the saved settings never changed");
     assert.equal(server.leaderSeats.get("alpha-dev").effort, "medium");
   } finally { await settleLeaderTurns(server); }
 });
 
 test("round 1 fix 3: Save broadcasts 'saved' only after the leader's history entry exists, even when that write is slow", async () => {
   const slowWrite = (async (file: any, ...rest: any[]) => { if (String(file).endsWith(".brief.txt")) await tick(120); return (writeFile as any)(file, ...rest); }) as typeof writeFile;
-  const server = await loadServer({ skipHealth: true, writeHandover: true, workspaces: tempWorkspaceFolders(), writeFile: slowWrite });
+  const server = await loadFixed({ skipHealth: true, writeHandover: true, workspaces: tempWorkspaceFolders("fixed"), writeFile: slowWrite });
   const ws = connect(server);
   const logs = path.join(server.testRoot, "logs");
   const entriesAtSaved: string[][] = [];
@@ -100,7 +121,7 @@ test("round 2 fix 2: a Clear while Save's history entry is being written leaves 
   const entered = new Promise<void>((ok) => { enter = ok; });
   const open = new Promise<void>((ok) => { release = ok; });
   const heldWrite = (async (file: any, ...rest: any[]) => { if (String(file).endsWith(".brief.txt")) { enter(); await open; } return (writeFile as any)(file, ...rest); }) as typeof writeFile;
-  const server = await loadServer({ skipHealth: true, writeHandover: true, workspaces: tempWorkspaceFolders(), writeFile: heldWrite }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, writeHandover: true, workspaces: tempWorkspaceFolders("fixed"), writeFile: heldWrite }), ws = connect(server);
   try {
     ws.message({ type: "chat", tabId: "alpha-dev", text: "answer before saving" });
     await waitFor(() => ws.messages.some((message: any) => message.type === "chatDone"), "the answer");
@@ -118,7 +139,7 @@ test("round 2 fix 2: a Clear while Save's history entry is being written leaves 
 });
 
 test("pack 2 C1: Accept/Decline is answered by the tab the request was sent to, whichever tab is open", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "hello" });
   ws.message({ type: "sendRequest", requestId: "c1_send", fromTabId: "alpha-dev", toTabId: "beta-dev", title: "Review", body: "Check it." });
   await waitFor(() => ws.messages.some((message: any) => message.requestId === "c1_send" && message.type === "actionResult"), "request sent");
@@ -139,7 +160,7 @@ test("pack 2 C1: Accept/Decline is answered by the tab the request was sent to, 
 });
 
 test("pack 2 C5: the crew rail and details panel layout is a client pref the server saves", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "hello" });
   assert.deepEqual([lastState(ws).clientPrefs.crewRailOpen, lastState(ws).clientPrefs.detailsOpen], [true, false]);
   ws.message({ type: "updateClientPref", key: "crewRailOpen", value: false });
@@ -153,7 +174,7 @@ test("pack 2 C5: the crew rail and details panel layout is a client pref the ser
 });
 
 test("pack 2: hello ignores a localPrefs field (the localStorage migration is gone) and Settings Check again answers with the page's requestId, also on failure", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "hello", localPrefs: { sidebarCollapsed: true } });
   assert.equal(server.prefWrites.length, 0);
   assert.equal(lastState(ws).clientPrefs.sidebarCollapsed, false);
@@ -175,7 +196,7 @@ test("pack 2: hello ignores a localPrefs field (the localStorage migration is go
 });
 
 test("pack 2 C8: a successful Save writes one leader history entry (transcript + handover path) that the seat's history lists", async () => {
-  const server = await loadServer({ skipHealth: true, leaderDelayMs: 10, writeHandover: true, workspaces: tempWorkspaceFolders() }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, leaderDelayMs: 10, writeHandover: true, workspaces: tempWorkspaceFolders("fixed") }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "decide the plan" });
   await waitFor(() => ws.messages.some((message: any) => message.type === "chatDone" && message.tabId === "alpha-dev"), "first answer");
   assert.equal((await server.listHistory("alpha-dev.leader")).length, 0, "nothing is saved yet");
@@ -194,7 +215,7 @@ test("pack 2 C8: a successful Save writes one leader history entry (transcript +
   const brief = readFileSync(path.join(server.testRoot, "logs", entries[0].briefFile), "utf8");
   assert.equal(brief, `Saved handover: ${handoverPath}`);
   const log = readFileSync(path.join(server.testRoot, "logs", entries[0].logFile), "utf8");
-  assert.match(log, /^You: decide the plan\n\nAtlas: answer:.*decide the plan/s);
+  assert.match(log, /^You: decide the plan\n\nLeader: answer:.*decide the plan/s);
   assert.match(log, /\[exit\] status=done code=0\s*$/);
   // The page loads it exactly like a worker run.
   ws.message({ type: "historyRun", seatKey: "alpha-dev.leader", timestamp: entries[0].timestamp });
@@ -203,14 +224,14 @@ test("pack 2 C8: a successful Save writes one leader history entry (transcript +
   assert.equal(run.brief, brief);
   assert.match(run.output, /You: decide the plan/);
   // A refused/failed Save records nothing.
-  const failed = await loadServer({ skipHealth: true, failSave: true, workspaces: tempWorkspaceFolders() }), wsFailed = connect(failed);
+  const failed = await loadFixed({ skipHealth: true, failSave: true, workspaces: tempWorkspaceFolders("fixed") }), wsFailed = connect(failed);
   wsFailed.message({ type: "chat", tabId: "alpha-dev", text: "x" }); await tick(20);
   wsFailed.message({ type: "save", tabId: "alpha-dev" }); await tick(120);
   assert.equal((await failed.listHistory("alpha-dev.leader")).length, 0);
 });
 
 test("pack 2 C8: only the newest 50 saved sessions of a leader are kept, oldest removed file by file", async () => {
-  const server = await loadServer({ skipHealth: true, leaderDelayMs: 5, writeHandover: true, workspaces: tempWorkspaceFolders() }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, leaderDelayMs: 5, writeHandover: true, workspaces: tempWorkspaceFolders("fixed") }), ws = connect(server);
   const logs = path.join(server.testRoot, "logs");
   for (let i = 1; i <= 52; i++) { writeFileSync(path.join(logs, `alpha-dev.leader-${i}.log`), "old"); writeFileSync(path.join(logs, `alpha-dev.leader-${i}.brief.txt`), "old"); }
   writeFileSync(path.join(logs, "beta-dev.leader-1.log"), "another seat's");
@@ -227,7 +248,7 @@ test("pack 2 C8: only the newest 50 saved sessions of a leader are kept, oldest 
 });
 
 test("pack 2: Stop keeps the half answer the leader had already written, marked as cut short; a stop with no text adds nothing", async () => {
-  const server = await loadServer({ skipHealth: true, hangLeader: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, hangLeader: true }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "write a lot" });
   await tick(10);
   server.leaderHandles[0].callbacks.onDelta("half an ans");
@@ -245,7 +266,7 @@ test("pack 2: Stop keeps the half answer the leader had already written, marked 
 });
 
 test("pack 2: finishing a turn survives a chat log that cannot be written, and a result with no turn waiting sends no stray chatDone", async () => {
-  const server = await loadServer({ skipHealth: true, failAssistantAppend: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, failAssistantAppend: true }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "answer please" });
   await waitFor(() => ws.messages.some((message: any) => message.type === "chatDone" && message.tabId === "alpha-dev"), "the turn still ends");
   assert.ok(ws.messages.some((message: any) => message.type === "error" && /could not save the answer to the chat log: chat disk failed/.test(message.message)));
@@ -257,7 +278,7 @@ test("pack 2: finishing a turn survives a chat log that cannot be written, and a
 });
 
 test("pack 2: a leader that cannot start fails the chat as a turn error and leaves nothing registered", async () => {
-  const server = await loadServer({ skipHealth: true, createLeaderThrows: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, createLeaderThrows: true }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "start please" });
   await tick(10);
   assert.ok(ws.messages.some((message: any) => message.type === "chatMessage" && message.role === "user"), "the user's message is saved");
@@ -267,9 +288,9 @@ test("pack 2: a leader that cannot start fails the chat as a turn error and leav
   assert.equal(server.leaderSeats.size, 0);
   assert.equal(server.activeLeaderTurns.size, 0);
 
-  const workspaces = fixtureWorkspaces();
-  for (const member of workspaces.projects[0].tabs[0].crew) if (member.slot === "leader") { member.cli = "opencode"; member.model = "opencode/glm-5.2"; member.effort = "max"; }
-  const bridge = await loadServer({ skipHealth: true, opencodeThrows: true, workspaces }), wsBridge = connect(bridge);
+  const workspaces = fixtureWorkspaces("fixed");
+  workspaces.projects[0].tabs[0].fixedCrew!.preferences.leader.assignment = { cli: "opencode", model: "opencode/glm-5.2", effort: "max" };
+  const bridge = await loadFixed({ skipHealth: true, opencodeThrows: true, workspaces }), wsBridge = connect(bridge);
   wsBridge.message({ type: "chat", tabId: "alpha-dev", text: "start please" });
   await tick(10);
   assert.ok(wsBridge.messages.some((message: any) => message.type === "chatError" && /opencode could not start/.test(message.message)));
@@ -280,7 +301,7 @@ test("pack 2: a leader that cannot start fails the chat as a turn error and leav
 test("pack 2: activeWork counts an unconfirmed process of an earlier session in its own tab; globalWork names work that belongs to no tab", async () => {
   const safetyPath = path.join(tempRoot(), "launch-safety.json");
   config.writeLaunchSafety({ blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: [], uncertain: [{ seatId: "alpha-dev.coder", pid: 4242, runId: "old-run" }], live: [] }, safetyPath);
-  const server = await loadServer({ skipHealth: true, safetyPath }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, safetyPath }), ws = connect(server);
   ws.message({ type: "hello" });
   const tabOf = (id: string) => lastState(ws).projects.flatMap((project: any) => project.tabs).find((tab: any) => tab.id === id);
   assert.deepEqual([tabOf("alpha-dev").activeWork, tabOf("beta-dev").activeWork], [true, false]);
@@ -297,7 +318,7 @@ test("pack 2: activeWork counts an unconfirmed process of an earlier session in 
 });
 
 test("pack 2: a damaged chat transcript costs only its own tab, never the whole state message", async () => {
-  const server = await loadServer({ skipHealth: true, preload: (root) => mkdirSync(path.join(root, "chats", "alpha-dev.jsonl"), { recursive: true }) }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, preload: (root) => mkdirSync(path.join(root, "chats", "alpha-dev.jsonl"), { recursive: true }) }), ws = connect(server);
   ws.message({ type: "hello" });
   const tabs = lastState(ws).projects.flatMap((project: any) => project.tabs);
   assert.match(tabs.find((tab: any) => tab.id === "alpha-dev").chatProblem, /EISDIR|illegal operation|directory/i);
@@ -308,8 +329,8 @@ test("pack 2: a damaged chat transcript costs only its own tab, never the whole 
 });
 
 test("pack 2: a burst of usage events sends one state at once and folds the rest into one more", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  server.launchWorker("alpha-dev", "reviewer2", "busy"); const entry = server.launched[0];
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  await startHelper(server, "alpha-dev", "reviewer2", "busy"); const entry = server.launched[0];
   const states = () => ws.messages.filter((message: any) => message.type === "state").length;
   const before = states();
   for (let i = 1; i <= 20; i++) entry.callback.onUsage(entry.run, { modelId: null, contextTokens: i, contextWindow: null, costUsd: i / 100 });

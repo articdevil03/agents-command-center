@@ -4,23 +4,24 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { appSource as readAppSource } from "./source-text.ts";
+import { chatNode, chatTemplate } from "./frontend-dom.ts";
 
 export const publicDir = join(process.cwd(), "public");
 
 // ---- pack 1 block 3 ----
 
 export const appSource = readAppSource().replaceAll("\r\n", "\n");
-// The model and advisor menus moved to their own file; the page loads it before app.js, and so does pageHarness.
+// The model menu moved to its own file; the page loads it before app.js, and so does pageHarness.
 export const pickerSource = readFileSync(join(publicDir, "model-picker.js"), "utf8").replaceAll("\r\n", "\n");
 
 // ---- pack 18: the server's CLI list (state.clis, one CliCap per CLI) and a way to drive the page's own DOM code against a stub ----
 export const CLIS = [
-  { id: "claude", label: "Claude Code", advisor: true, readOnlyEnforced: true, crewTools: true, customModel: null, installed: true, models: ["claude-opus-5-5[1m]", "claude-sonnet-5-5[1m]"], efforts: ["low", "medium", "high"] },
-  { id: "codex", label: "Codex", advisor: false, readOnlyEnforced: false, crewTools: true, customModel: "^gpt-[A-Za-z0-9][A-Za-z0-9._-]{0,95}$", installed: true, models: ["gpt-6.1-sol"], efforts: ["low", "medium", "high"] },
-  { id: "opencode", label: "OpenCode", advisor: false, readOnlyEnforced: true, crewTools: true, customModel: "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._/-]+$", installed: true, models: ["deepseek/deepseek-flash"], efforts: ["low", "high"] },
-  { id: "acp:kimi", label: "Kimi", advisor: false, readOnlyEnforced: false, crewTools: true, customModel: null, installed: true, models: ["default"], efforts: ["default"] },
-  { id: "acp:oracle", label: "Oracle", advisor: true, readOnlyEnforced: false, crewTools: true, customModel: null, installed: true, models: ["default"], efforts: ["default"] },
-  { id: "acp:bare", label: "Bare", advisor: false, readOnlyEnforced: false, crewTools: false, customModel: null, installed: true, models: ["default"], efforts: ["default"] },
+  { id: "claude", label: "Claude Code", advisor: true, readOnlyEnforced: true, customModel: null, installed: true, models: ["claude-opus-5-5[1m]", "claude-sonnet-5-5[1m]"], efforts: ["low", "medium", "high"] },
+  { id: "codex", label: "Codex", advisor: false, readOnlyEnforced: false, customModel: "^gpt-[A-Za-z0-9][A-Za-z0-9._-]{0,95}$", installed: true, models: ["gpt-6.1-sol"], efforts: ["low", "medium", "high"] },
+  { id: "opencode", label: "OpenCode", advisor: false, readOnlyEnforced: true, customModel: "^[A-Za-z0-9._-]+\\/[A-Za-z0-9._/-]+$", installed: true, models: ["deepseek/deepseek-flash"], efforts: ["low", "high"] },
+  { id: "acp:kimi", label: "Kimi", advisor: false, readOnlyEnforced: false, customModel: null, installed: true, models: ["default"], efforts: ["default"] },
+  { id: "acp:oracle", label: "Oracle", advisor: true, readOnlyEnforced: false, customModel: null, installed: true, models: ["default"], efforts: ["default"] },
+  { id: "acp:bare", label: "Bare", advisor: false, readOnlyEnforced: false, customModel: null, installed: true, models: ["default"], efforts: ["default"] },
 ];
 // The page asks a stub element for its buttons with querySelectorAll("[data-x]"): this answers from the html the page just wrote, one fake button per tag, each keeping the click handlers the page adds.
 export function wireNode(node: any) {
@@ -50,6 +51,7 @@ export function pageHarness(options: { raf?: (fn: () => void) => number } = {}) 
     if (!nodes.has(id)) nodes.set(id, { id, value: "", textContent: "", innerHTML: "", hidden: false, disabled: false, dataset: {}, options: [], style: { setProperty() {} },
       classList: { contains: () => false, toggle() {}, add() {}, remove() {} }, querySelector: () => null, querySelectorAll: () => [], addEventListener() {}, setAttribute() {}, removeAttribute() {},
       getAttribute: () => null, focus() {}, closest: () => null, matches: () => false, append() {}, replaceChildren() {}, getBoundingClientRect: () => ({ left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }) });
+    if ((id === "view" || id === "fixedView") && !nodes.get(id).children) Object.defineProperties(nodes.get(id), Object.getOwnPropertyDescriptors(chatNode(id)));
     return nodes.get(id);
   };
   const closeAnswers: string[] = [];
@@ -77,16 +79,17 @@ ${appSource.slice(0, end)}
     const confirmCalls = [];
     ${mediaListenerLine}
     // The page's own functions, taken before the stubs below replace the renderers: pack 3 tests call them with the state onMessage built.
-    const real = { seatLine, liveRuns, avatarKeyFor, seatPic, sideWidth, saveSideWidth, contextLine, renderMeters, modelRows, modelLine, drawModelPicker, renderToolApproval, renderSettings, renderPipe, renderSeatCard, openAdvisor, processMenu, settingsCrewSection, stepActions, lookCard, accessText, readOnlyWarning, attentionCard, pickerClis, openAddTab, createTab };
+    const real = { leader, selectedSeat, renderStage, renderChat, seatLine, liveRuns, avatarKeyFor, seatPic, sideWidth, saveSideWidth, contextLine, renderMeters, modelRows, modelLine, renderToolApproval, renderSettings, renderSeatCard, accessText, readOnlyWarning, attentionCard, pickerClis, openAddTab, createTab };
     confirmAction = (options, callback, opener, onCancel) => { confirmCalls.push({ ...options, callback, onCancel }); };
-    renderAll = renderStage = renderSide = renderSettings = renderUndo = renderInbox = renderCrew = renderHeader = renderToolApproval = renderMeters = renderTabs = renderStatusLine = renderChatIfShown = () => {};
+    renderAll = renderStage = renderSide = renderSettings = renderUndo = renderInbox = renderCrew = renderHeader = renderToolApproval = renderMeters = renderTabs = renderStatusLine = () => {};
     return {
-      real, onMessage, connect, send, answerCloseRequest, renderChat, confirmCalls, killRun, stopAll, holdAction, runProcessAction, requestHistory, renderUsage, skillBlock, requestCard, approvalTitle, showApp, saveDismissed, pickerHints, bindHistoryView, mePic, renderMessage, clearConfirmMenu, setTheme, applyTheme,
+      real, document, onMessage, connect, send, startRun, openRunDialog, leader, selectedSeat, answerCloseRequest, renderChat, confirmCalls, killRun, stopAll, holdAction, requestHistory, renderUsage, skillBlock, requestCard, approvalTitle, showApp, saveDismissed, bindHistoryView, mePic, renderMessage, clearConfirmMenu, setTheme, applyTheme,
+      runState: () => ({ pendingRun, runTarget }), setRunTarget: (value) => { runTarget = value; },
       setMe: (av) => { me = { av }; }, setRefresh: (value) => { refreshState = value; }, setMakeMenu: (fn) => { makeMenu = fn; }, setLayers: () => { openPopover = () => {}; openModal = () => {}; },
-      snap: () => ({ historyRunRequested, historyDetails, historyRunTokens, historyFullRequested, outputByRun, activity, stopStates, killOrder, processPending, historyInFlight, historyFailed, transcriptRequests, pendingActions, stallActions, refreshState, stopAllTrack, clientPrefOverrides, railWide, sideOpen, seenNotices }),
+      snap: () => ({ historyRunRequested, historyDetails, historyRunTokens, historyFullRequested, outputByRun, activity, stopStates, killOrder, historyInFlight, historyFailed, transcriptRequests, pendingActions, refreshState, stopAllTrack, clientPrefOverrides, railWide, sideOpen, seenNotices }),
     };
   })()`, {
-    document: { getElementById: node, querySelectorAll: () => [], querySelector: () => null, activeElement: null, hasFocus: () => false, body: { classList: { remove: (name: string) => bodyClasses.delete(name), toggle: (name: string, on?: boolean) => { if (on === false || (on === undefined && bodyClasses.has(name))) bodyClasses.delete(name); else bodyClasses.add(name); }, add: (name: string) => bodyClasses.add(name) } } },
+    document: { createElement: (tag: string) => { assert.equal(tag, "template"); return chatTemplate(); }, getElementById: node, querySelectorAll: () => [], querySelector: () => null, activeElement: null, hasFocus: () => false, body: { classList: { remove: (name: string) => bodyClasses.delete(name), toggle: (name: string, on?: boolean) => { if (on === false || (on === undefined && bodyClasses.has(name))) bodyClasses.delete(name); else bodyClasses.add(name); }, add: (name: string) => bodyClasses.add(name) } } },
     window: pageWindow, Notification: FakeNotification, WebSocket: FakeWebSocket,
     Map, Set, console, CSS: { escape: (s: string) => s }, Blob, TextEncoder, URL, atob, Uint8Array,
     location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, history: { replaceState() {} }, sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },

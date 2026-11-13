@@ -7,6 +7,7 @@ test("streamed reply: a 200-message chat and 600 deltas make a bounded number of
   await withPage(async ({ ev, waitFor, tabA }) => {
     await ev(`__ccDeliver({type:"chatHistory",tabId:${J(tabA)},messages:${J(historyOf(200))},revision:200,savedRevision:200});true`);
     await waitFor(`document.querySelectorAll("#view .msg").length===200`, "200 messages rendered");
+    assert.ok(await ev("window.__renders") >= 1, "controlled full chat history proves the replacement counter is alive");
     // Control: the chat really scrolls, and sits at the bottom to start with.
     assert.ok(await ev(`document.querySelector("#view").scrollHeight-document.querySelector("#view").clientHeight`) > 1000, "the 200-message chat scrolls");
     await ev(`(()=>{const v=document.querySelector("#view");v.scrollTop=v.scrollHeight;return true})()`);
@@ -30,6 +31,32 @@ test("streamed reply: a 200-message chat and 600 deltas make a bounded number of
     assert.ok(afterDone - duringStream <= 3, `finishing the reply costs at most 3 renders, got ${afterDone - duringStream}`);
     assert.equal(await ev(`document.querySelector("#view .msg:last-of-type .body .md").textContent`), full, "the final message shows the same text");
     assert.ok(await ev("__gap()") <= 4, "still at the bottom after the reply is saved");
+  });
+});
+
+// The paint keeps a reader who scrolled up where they are: it scrolls to the bottom only when the chat was already at the bottom. Either conditional-scroll mutant
+// (stick always true, or the scroll without `if (stick)`) pulls this reader down and turns the test red.
+test("streamed reply: a reader scrolled up keeps their place", async (t) => {
+  if (process.env.CC_SKIP_BROWSER === "1") { t.skip("CC_SKIP_BROWSER=1 was explicitly set"); return; }
+  await withPage(async ({ ev, waitFor, tabA }) => {
+    await ev(`__ccDeliver({type:"chatHistory",tabId:${J(tabA)},messages:${J(historyOf(60))},revision:60,savedRevision:60});true`);
+    await waitFor(`document.querySelectorAll("#view .msg").length===60`, "60 messages rendered");
+    assert.ok(await ev(`document.querySelector("#view").scrollHeight-document.querySelector("#view").clientHeight`) > 1000, "control: the history really scrolls");
+    // The first delta creates the streaming bubble (a full render); only the later ones are painted into it.
+    await ev(`__stream(${J(tabA)},["first "],3)`);
+    await waitFor(`__bubble()==="first "`, "the streaming bubble exists");
+    await ev(`(()=>{const v=document.querySelector("#view");v.scrollTop=v.scrollHeight;return true})()`);
+    assert.ok(await ev("__gap()") <= 4, "control: at the bottom before the reader scrolls away");
+    await ev(`(()=>{const v=document.querySelector("#view");v.scrollTop=Math.max(0,v.scrollHeight-v.clientHeight-600);return true})()`);
+    const away = await ev(`({top:document.querySelector("#view").scrollTop,gap:__gap()})`);
+    assert.ok(away.gap > 100 && away.top > 0, `control: the reader is scrolled up, away from the bottom: ${JSON.stringify(away)}`);
+    const parts = Array.from({ length: 40 }, (_, index) => `later${index} `);
+    await ev(`__stream(${J(tabA)},${J(parts)},3)`);
+    await waitFor(`__bubble()===${J(`first ${parts.join("")}`)}`, "the later deltas are all painted");
+    const after = await ev(`({top:document.querySelector("#view").scrollTop,gap:__gap()})`);
+    console.log(`Scroll place: before ${JSON.stringify(away)}, after the stream ${JSON.stringify(after)}`);
+    assert.equal(after.top, away.top, `the reader's scroll position did not move: before ${away.top}, after ${after.top}`);
+    assert.ok(after.gap > 4, `the reader is not pulled to the bottom (gap ${after.gap})`);
   });
 });
 

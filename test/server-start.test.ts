@@ -95,15 +95,9 @@ const OWN_CLEANUP: Record<string, string> = {
   "http-helpers.ts": "after(): stopChild(child)",
   "http-requests-packaged.test.ts": "finally: stopChild(proc)",
   "overlap.test.ts": "finally: kills the server and waits for exit",
-  "pack10-markdown-helpers.ts": "finally: kills the server and waits for exit",
-  "pack12-page-helpers.ts": "finally: kills the server and waits for exit",
-  "pack13-page.test.ts": "finally: kills the server and waits for exit",
-  "pack14-page.test.ts": "finally: kills the server and waits for exit",
   "pack18-editor-harness.ts": "finally: kills the server and waits for exit",
-  "pack9-page-helpers.ts": "finally: kills the server and waits for exit",
-  "stream-perf-helpers.ts": "finally: kills the server and waits for exit",
 };
-const HELPER_USERS = 12;
+const HELPER_USERS = 13;
 
 test("every file that spawns the server uses the shared wait or has its own stop-on-failure", () => {
   const directory = new URL("./", import.meta.url);

@@ -8,7 +8,18 @@ import * as path from "node:path";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
-import { config, readWorkspaces, buildLeaderOptions, SEATS, LEADER, WORKER, READER, TAB, OPENCODE_LEADER, CLAUDE_LEADER, exitWithin, boot, withServer, script, bridgePost } from "./any-cli-helpers.ts";
+import { config, readWorkspaces, buildLeaderOptions, LEADER, WORKER, READER, TAB, OPENCODE_LEADER, CLAUDE_LEADER, exitWithin, withServer, script, bridgePost } from "./any-cli-helpers.ts";
+
+const FIXED_TOOLS = ["accept_planner_report", "begin_planning", "finish_fixed_task", "get_fixed_task", "get_task_archive", "list_task_archives", "reconcile_task_execution", "request_task_action", "verify_task_evidence"];
+const SONNET_SEAT = { cli: "claude", model: READER.model, effort: READER.effort };
+
+// A saved fixed-crew file: the leader (with an optional advisor) and the Claude writer seat hold the given values; every other slot is unassigned.
+// The fixture reaches config.ts, so it is loaded here, after the helpers imported config on the temp data root.
+async function fixedFile(folder: string, worker: object, advisor?: string, leader: object = SONNET_SEAT) {
+  const { fixedProject, fixedTab, fixedWorkspaces } = await import("./fixed-server-fixture.ts");
+  const tab = fixedTab("p-dev", folder, { leader: { ...leader, ...(advisor !== undefined ? { advisor } : {}) }, [WORKER.slotId]: worker } as any);
+  return fixedWorkspaces([{ ...fixedProject("p", folder, [tab]), name: "P" }]);
+}
 
 test("bridge: bearer token, no Origin, POST only, 1 MiB cap, the MCP methods", { timeout: 60000 }, async () => {
   await withServer({ leader: OPENCODE_LEADER }, async (h) => {
@@ -32,10 +43,10 @@ test("bridge: bearer token, no Origin, POST only, 1 MiB cap, the MCP methods", {
     const note = await bridgePost(h.port, path, good, rpc("notifications/initialized", {}, false));
     assert.deepEqual([note.status, note.body], [202, ""]);
     const list = JSON.parse((await bridgePost(h.port, path, good, rpc("tools/list"))).body).result.tools;
-    assert.deepEqual(list.map((t: any) => t.name).sort(), ["get_crew_status", "launch_seat", "list_requests", "send_request"]);
-    const status = JSON.parse((await bridgePost(h.port, path, good, rpc("tools/call", { name: "get_crew_status", arguments: {} }))).body).result;
-    assert.equal(JSON.parse(status.content[0].text).tab, TAB); assert.equal(status.isError, undefined);
-    const bad = JSON.parse((await bridgePost(h.port, path, good, rpc("tools/call", { name: "launch_seat", arguments: { slot: 1 } }))).body).result;
+    assert.deepEqual(list.map((t: any) => t.name).sort(), FIXED_TOOLS);
+    const status = JSON.parse((await bridgePost(h.port, path, good, rpc("tools/call", { name: "get_fixed_task", arguments: {} }))).body).result;
+    assert.deepEqual(Object.keys(JSON.parse(status.content[0].text)).sort(), ["executions", "task"]); assert.equal(status.isError, undefined);
+    const bad = JSON.parse((await bridgePost(h.port, path, good, rpc("tools/call", { name: "begin_planning", arguments: { expected: null, brief: 1 } }))).body).result;
     assert.equal(bad.isError, true); assert.match(bad.content[0].text, /invalid arguments/);
     const missing = JSON.parse((await bridgePost(h.port, path, good, rpc("tools/call", { name: "nope" }))).body).result;
     assert.equal(missing.isError, true);
@@ -55,33 +66,42 @@ test("saved models: an advisor alias, a seat alias and an unlisted full id start
     assert.equal(h.seat(WORKER.slotId).model, "fable");
     assert.equal(h.seat(LEADER.slotId).model, "claude-opus-6-0");
     const saved = JSON.parse(readFileSync(join(h.temp, "data", "config", "workspaces.json"), "utf8")).projects[0].tabs[0];
-    assert.equal(saved.advisor.model, "fable", "his saved value is not rewritten: the file keeps its old shape until the next write");
+    assert.equal(saved.fixedCrew.preferences.leader.assignment.advisor, "fable", "his saved value is not rewritten");
   });
 });
 
-test("saved models: a malformed Claude model or advisor is still refused at load", () => {
+test("saved models: a malformed Claude model or advisor is still refused at load", async () => {
   const dir = mkdtempSync(join(tmpdir(), "cc-savedmodel-"));
   try {
     const path = join(dir, "workspaces.json");
-    const write = (model: string, advisor?: string) => writeFileSync(path, JSON.stringify({ projects: [{ id: "p", name: "P", folder: dir, tabs: [{ id: "p-dev", name: "Dev", kind: "dev", process: "main", folder: dir, ...(advisor !== undefined ? { advisor: { model: advisor } } : {}), crew: SEATS.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat === WORKER ? model : seat.model, effort: seat.effort })) }] }] }));
-    // Was: ... "not-a-claude-model" ... refused at load. It is safe in shape, so round 8 loads it (the live list judges it only when a user picks it).
+    const write = async (model: string, advisor?: string) => writeFileSync(path, JSON.stringify(await fixedFile(dir, { cli: "claude", model, effort: WORKER.effort }, advisor)));
+    // A model that is safe in shape loads (the live list judges it only when a user picks it); an unsafe one is refused: the tab loads with a fresh
+    // crew and says why (the recovery notice), and the bad value is nowhere in what was loaded.
+    const loaded = () => readWorkspaces(path).projects[0].tabs[0].fixedCrew!.preferences;
+    const refused = (message: RegExp, label: string) => {
+      const preferences = loaded();
+      assert.equal(preferences[WORKER.slotId].assignment, null, `${label}: the unsafe seat was not loaded`);
+      assert.equal(preferences.leader.assignment, null, `${label}: the whole saved crew was set aside`);
+      assert.match(config.fixedCrewRecovery("p-dev", path) ?? "", message, label);
+    };
     for (const bad of ["../x", "a".repeat(200), "fa ble", 'fa"ble', "fa;ble", "fa&ble", "fa|ble", "fa\u0001ble", "fa\nble", "-flag", "a/../b", ""]) {
-      write(bad);
-      assert.throws(() => readWorkspaces(path), /invalid slot\/model\/effort/, `seat model ${JSON.stringify(bad.slice(0, 20))}`);
-      write("sonnet", bad);
-      assert.throws(() => readWorkspaces(path), /invalid advisor/, `advisor ${JSON.stringify(bad.slice(0, 20))}`);
+      await write(bad);
+      refused(/Invalid crew assignment/, `seat model ${JSON.stringify(bad.slice(0, 20))}`);
+      await write("sonnet", bad);
+      refused(/Invalid crew advisor/, `advisor ${JSON.stringify(bad.slice(0, 20))}`);
     }
-    write("fable", "claude-opus-6-0"); readWorkspaces(path);
-    write("not-a-claude-model", "not-a-claude-model"); readWorkspaces(path);
+    await write("fable", "claude-opus-6-0");
+    assert.deepEqual([loaded()[WORKER.slotId].assignment!.model, loaded().leader.assignment!.advisor], ["fable", "claude-opus-6-0"], "control: safe values load unchanged");
+    await write("not-a-claude-model", "not-a-claude-model");
+    assert.deepEqual([loaded()[WORKER.slotId].assignment!.model, loaded().leader.assignment!.advisor], ["not-a-claude-model", "not-a-claude-model"]);
   } finally { removeWithRetry(dir); }
 });
 
 test("saved models: an advisor chosen in the app still refuses an unknown model", { timeout: 60000 }, async () => {
   await withServer({ leader: CLAUDE_LEADER, advisor: "fable" }, async (h) => {
-    const start = h.messages.length;
-    h.send({ type: "updateSeat", tabId: TAB, slot: LEADER.slotId, advisor: "nope" });
-    const error = await h.wait(() => h.messages.slice(start).find((m) => m.type === "error"), "the advisor is refused");
-    assert.match(error.message, /invalid advisor/);
+    await h.refresh();
+    const error = await h.assign(LEADER.slotId, { ...CLAUDE_LEADER, advisor: "nope" });
+    assert.equal(error.type, "error"); assert.match(error.message, /Unknown crew advisor/);
     assert.equal(h.seat(LEADER.slotId).advisor, "fable");
   });
 });
@@ -96,12 +116,15 @@ for (const saved of SAVED_MODEL_CASES) {
       // Discovery is skipped in this server, so the live list holds the saved value only through the boot adoption.
       assert.ok(h.state().modelOptions.claude.includes(saved), "listed in modelOptions");
       assert.ok(h.state().claudeModels.some((m: any) => m.value === saved), "listed in claudeModels");
-      const answer = await h.update({ slot: READER.slotId, model: saved }, () => h.seat(READER.slotId).model === saved);
-      assert.notEqual(answer.type, "error", "the live list accepts a saved value for another seat");
-      const renamed = await h.update({ slot: WORKER.slotId, name: "Renamed" }, () => h.seat(WORKER.slotId).name === "Renamed");
-      assert.notEqual(renamed.type, "error", "a later save of another field works");
-      assert.equal(h.savedCrew().find((s) => s.slot === WORKER.slotId).model, saved, "his value is not rewritten");
-      assert.equal(JSON.parse(readFileSync(join(h.temp, "data", "config", "workspaces.json"), "utf8")).projects[0].tabs[0].crew.find((seat: any) => seat.slot === LEADER.slotId).advisor, saved);
+      await h.refresh();
+      const answer = await h.assign(READER.slotId, { cli: "claude", model: saved, effort: READER.effort });
+      assert.equal(answer.type, "actionResult", "the live list accepts a saved value for another seat");
+      assert.equal(h.savedSeat(READER.slotId).model, saved);
+      const extra = await h.roleExtra(WORKER.slotId, "a later save");
+      assert.equal(extra.type, "actionResult", "a later save of another field works");
+      assert.equal(h.savedFixed().roleExtras[WORKER.slotId], "a later save");
+      assert.equal(h.savedSeat(WORKER.slotId).model, saved, "his value is not rewritten");
+      assert.equal(h.savedSeat(LEADER.slotId).advisor, saved);
     });
   });
 }
@@ -110,21 +133,23 @@ test("saved models: a saved discovered effort (ultra) starts the server, is list
   await withServer({ leader: CLAUDE_LEADER, workerEffort: "ultra" }, async (h) => {
     assert.equal(h.seat(WORKER.slotId).effort, "ultra");
     assert.ok(h.state().effortOptions.claude.includes("ultra"), "listed in effortOptions");
-    const renamed = await h.update({ slot: WORKER.slotId, name: "Renamed" }, () => h.seat(WORKER.slotId).name === "Renamed");
-    assert.notEqual(renamed.type, "error");
-    assert.equal(h.savedCrew().find((s) => s.slot === WORKER.slotId).effort, "ultra");
+    const extra = await h.roleExtra(WORKER.slotId, "a later save");
+    assert.equal(extra.type, "actionResult");
+    assert.equal(h.savedSeat(WORKER.slotId).effort, "ultra");
   });
 });
 
 test("saved models: updateSeat still refuses a model, an effort or an advisor that is not in the live list", { timeout: 60000 }, async () => {
   await withServer({ leader: CLAUDE_LEADER, advisor: "fable", workerModel: "fable", workerEffort: "ultra" }, async (h) => {
+    await h.refresh();
+    const saved = { cli: "claude", model: "fable", effort: "ultra" };
     for (const payload of [{ model: "nope" }, { model: "fable.7" }, { effort: "turbo" }, { effort: "ul tra" }, { model: "../x" }]) {
-      const answer = await h.update({ slot: WORKER.slotId, ...payload });
+      const answer = await h.assign(WORKER.slotId, { ...saved, ...payload });
       assert.equal(answer.type, "error", JSON.stringify(payload));
     }
-    const start = h.messages.length;
-    h.send({ type: "updateSeat", tabId: TAB, slot: LEADER.slotId, advisor: "fable.7" });
-    assert.match((await h.wait(() => h.messages.slice(start).find((m) => m.type === "error"), "the advisor is refused")).message, /invalid advisor/);
+    assert.deepEqual(h.savedSeat(WORKER.slotId), saved, "every refusal left the saved seat alone");
+    const refused = await h.assign(LEADER.slotId, { ...CLAUDE_LEADER, advisor: "fable.7" });
+    assert.equal(refused.type, "error"); assert.match(refused.message, /Unknown crew advisor/);
     assert.equal(h.seat(LEADER.slotId).advisor, "fable");
   });
 });
@@ -136,8 +161,7 @@ test("saved models: before discovery, and after a discovery that narrows the lis
   try {
     const data = join(temp, "data"), work = join(temp, "work"), home = join(temp, "home");
     for (const dir of [join(data, "config"), work, home]) mkdirSync(dir, { recursive: true });
-    const crew = SEATS.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat === WORKER ? "fable.5" : seat.model, effort: seat === WORKER ? "ultra" : seat.isLeader ? "xhigh" : seat.effort }));
-    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p", name: "P", folder: work, tabs: [{ id: "p-dev", name: "Dev", kind: "dev", process: "main", folder: work, crew, advisor: { model: "fable-5" } }] }] }));
+    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(await fixedFile(work, { cli: "claude", model: "fable.5", effort: "ultra" }, "fable-5", { ...SONNET_SEAT, effort: "xhigh" })));
     const script = join(temp, "boot.mjs");
     const url = (file: string) => pathToFileURL(resolve(file)).href;
     writeFileSync(script, `
@@ -179,7 +203,8 @@ test("saved models: before discovery, and after a discovery that narrows the lis
 });
 
 // Runs `body` in a child process that has the real config module, a data folder holding `workspace` (or none),
-// and `make(patch, advisor)` which returns that workspace with the coder seat / advisor changed.
+// and `make(patch, advisor)` which returns a fixed workspace with the Claude writer seat / the leader's advisor changed.
+// The seed is written before the child imports config, so config never sees a legacy file.
 async function configChild(workspace: object | null, body: string): Promise<any> {
   const temp = mkdtempSync(join(tmpdir(), "cc-configchild-"));
   try {
@@ -187,14 +212,14 @@ async function configChild(workspace: object | null, body: string): Promise<any>
     for (const dir of [join(data, "config"), work, home]) mkdirSync(dir, { recursive: true });
     if (workspace) writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(workspace));
     const script = join(temp, "child.mjs");
-    const crew = SEATS.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort }));
+    const base = await fixedFile(work, { cli: "claude", model: WORKER.model, effort: WORKER.effort });
     writeFileSync(script, `
       import { join } from "node:path";
       const config = await import(${JSON.stringify(pathToFileURL(resolve("server/config.ts")).href)});
       const out = {};
       const tmpPath = join(${JSON.stringify(temp)}, "scratch-workspaces.json");
-      const process_ = await import(${JSON.stringify(pathToFileURL(resolve("server/process.ts")).href)});
-      const make = (patch, advisor) => { const base = process_.legacySetup("dev", "main"); return { projects: [{ id: "p", name: "P", folder: ${JSON.stringify(work)}, tabs: [{ id: "p-dev", name: "Dev", kind: "dev", folder: ${JSON.stringify(work)}, setupName: base.name, steps: base.steps, crew: base.crew.map((s) => s.slot === ${JSON.stringify(WORKER.slotId)} ? { ...s, ...patch } : s.isLeader && advisor ? { ...s, advisor } : s) }] }] }; };
+      const base = ${JSON.stringify(base)};
+      const make = (patch, advisor) => { const next = structuredClone(base), seats = next.projects[0].tabs[0].fixedCrew.preferences; seats[${JSON.stringify(WORKER.slotId)}].assignment = { ...seats[${JSON.stringify(WORKER.slotId)}].assignment, ...patch }; if (advisor) seats.leader.assignment = { ...seats.leader.assignment, advisor }; return next; };
       const attempt = (fn) => { try { fn(); return "ok"; } catch (e) { return "THROWS " + e.message; } };
       ${body}
       console.log("RESULT " + JSON.stringify(out));
@@ -231,8 +256,8 @@ test("saved values: a write and a user pick need a safe shape AND the list/CLI c
     out.trips = trips;
   `);
   assert.deepEqual(out.picks, [false, false, false, false, false], "user picks with an unsafe shape are refused");
-  assert.ok(out.writes.every((w: string) => /^THROWS .*invalid slot\/model\/effort/.test(w)), `writes ${out.writes}`);
-  assert.match(out.advisorWrite, /^THROWS .*invalid advisor/);
+  assert.ok(out.writes.every((w: string) => /^THROWS .*Invalid crew (assignment|model)/.test(w)), `writes ${out.writes}`);
+  assert.match(out.advisorWrite, /^THROWS .*Invalid crew advisor/);
   assert.equal(out.fileWritten, false, "nothing was written for any refused value");
   const unsafe = ["has space", "a".repeat(101), "-flag", "a/../b", "bad eff", "-x", "-vendor/model", "vendor/../model", "gpt-bad one", "opencode/gpt-bad one"];
   for (const list of [out.claudeListed, out.claudeInfo, out.claudeEfforts, out.opencode, out.codex]) for (const bad of unsafe) assert.ok(!list.includes(bad), `${JSON.stringify(bad.slice(0, 20))} must not be offered`);
@@ -241,8 +266,7 @@ test("saved values: a write and a user pick need a safe shape AND the list/CLI c
 });
 
 test("saved values: the saved sets follow the current workspace, so a value nobody uses any more is not listed or accepted after a refresh", { timeout: 60000 }, async () => {
-  const seed = (model: string, effort: string, advisor?: string) => ({ projects: [{ id: "p", name: "P", folder: ".", tabs: [{ id: "p-dev", name: "Dev", kind: "dev", process: "main", folder: ".", ...(advisor ? { advisor: { model: advisor } } : {}), crew: SEATS.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat === WORKER ? model : seat.model, effort: seat === WORKER ? effort : seat.effort })) }] }] });
-  const out = await configChild(seed("fable.5", "ultra", "fable-5"), `
+  const out = await configChild(await fixedFile(".", { cli: "claude", model: "fable.5", effort: "ultra" }, "fable-5"), `
     config.adoptSavedValues(config.readWorkspaces());
     const snapshot = () => ({ listed: config.MODEL_OPTIONS.claude.slice(), efforts: config.EFFORT_OPTIONS.claude.slice(), info: config.CLAUDE_MODEL_INFO.map((m) => m.value), fableOk: config.isValidModel("claude", "fable.5"), advisorOk: config.isValidModel("claude", "fable-5"), ultraOk: config.isValidEffort("claude", "ultra") });
     out.start = snapshot();
@@ -269,16 +293,16 @@ test("saved values: the saved sets follow the current workspace, so a value nobo
 test("saved values: through the real server, a value whose last use is removed is no longer listed or accepted for user input (a still-used one stays)", { timeout: 60000 }, async () => {
   await withServer({ leader: CLAUDE_LEADER, advisor: "fable", workerModel: "fable.5", workerEffort: "ultra" }, async (h) => {
     assert.ok(h.state().modelOptions.claude.includes("fable.5") && h.state().effortOptions.claude.includes("ultra"), "control: adopted at boot");
-    const moved = await h.update({ slot: WORKER.slotId, model: "sonnet", effort: "high" }, () => h.seat(WORKER.slotId).model === "sonnet" && h.seat(WORKER.slotId).effort === "high");
-    assert.notEqual(moved.type, "error");
+    await h.refresh();
+    const moved = await h.assign(WORKER.slotId, { cli: "claude", model: "sonnet", effort: "high" });
+    assert.equal(moved.type, "actionResult");
     await h.wait(() => !h.state().modelOptions.claude.includes("fable.5") && !h.state().effortOptions.claude.includes("ultra"), "unused values unlisted");
     assert.ok(h.state().modelOptions.claude.includes("fable"), "the advisor's value stays");
-    const again = await h.update({ slot: READER.slotId, model: "fable.5" });
+    const again = await h.assign(READER.slotId, { cli: "claude", model: "fable.5", effort: READER.effort });
     assert.equal(again.type, "error", "no longer accepted for user input");
-    const start = h.messages.length;
-    h.send({ type: "updateSeat", tabId: TAB, slot: LEADER.slotId, advisor: null });
+    const removed = await h.assign(LEADER.slotId, CLAUDE_LEADER);
+    assert.equal(removed.type, "actionResult", "the advisor is dropped by saving the leader without one");
     await h.wait(() => !h.seat(LEADER.slotId).advisor && !h.state().modelOptions.claude.includes("fable"), "advisor removed, its value unlisted");
-    assert.equal(h.messages.slice(start).some((m) => m.type === "error"), false);
   });
 });
 
@@ -297,10 +321,10 @@ test("advisor: the leader seat's saved advisor reaches the Claude leader's CLI a
     await h.wait(() => h.turnEnded(start).length === 1, "first turn"); await h.idle();
     assert.deepEqual(h.ipc.find((m) => m.type === "queryStarted").extraArgs, { effort: LEADER.effort, "replay-user-messages": null }, "no advisor yet");
     // A changed advisor applies when the next session starts: end this one, then chat.
-    h.send({ type: "updateSeat", tabId: TAB, slot: LEADER.slotId, advisor: "claude-fable-5-1[1m]" });
-    await h.wait(() => h.seat(LEADER.slotId).advisor === "claude-fable-5-1[1m]", "advisor saved");
-    h.send({ type: "stopSeat", tabId: TAB, slot: LEADER.slotId });
-    await h.wait(() => h.tab().leaderStatus === "not-started", "session ended");
+    // The saved change does not touch the idle session; the next message sees the new fixed signature and starts a fresh one.
+    await h.refresh();
+    assert.equal((await h.assign(LEADER.slotId, { ...CLAUDE_LEADER, advisor: "claude-fable-5-1[1m]" })).type, "actionResult");
+    assert.equal(h.seat(LEADER.slotId).advisor, "claude-fable-5-1[1m]");
     const before = h.ipc.filter((m) => m.type === "queryStarted").length;
     start = h.chat(script({ tool: "Read", input: { file_path: "x" } }));
     await h.wait(() => h.ipc.filter((m) => m.type === "queryStarted").length > before, "new session");
@@ -310,13 +334,12 @@ test("advisor: the leader seat's saved advisor reaches the Claude leader's CLI a
 
 // ---- other seats ----
 
-test("a non-leader read-only seat can also change CLI (the worker setup is per run)", { timeout: 60000 }, async () => {
+test("a non-leader read-only seat can be assigned another CLI, and the saved choice is kept", { timeout: 60000 }, async () => {
   await withServer({ leader: CLAUDE_LEADER, installed: ["opencode"] }, async (h) => {
     await h.refresh();
-    await h.update({ slot: READER.slotId, cli: "opencode", model: "opencode/glm-5.2" }, () => h.seat(READER.slotId).cli === "opencode");
+    assert.equal((await h.assign(READER.slotId, { cli: "opencode", model: "opencode/glm-5.2", effort: "max" })).type, "actionResult");
     assert.deepEqual([h.seat(READER.slotId).model, h.seat(READER.slotId).effort], ["opencode/glm-5.2", "max"]);
-    // A restart reads the saved seat back: a CLI that differs from the slot default is valid.
-    assert.equal(h.savedCrew().find((s) => s.slot === READER.slotId).cli, "opencode");
+    assert.deepEqual(h.savedSeat(READER.slotId), { cli: "opencode", model: "opencode/glm-5.2", effort: "max" });
   });
 });
 

@@ -55,7 +55,7 @@ test("renderAll's focus layers cover every popover and modal in index.html", () 
   for (const tag of layers) assert.ok(classes(tag).some((c) => c === "pop" || c === "modal"), `a dialog layer has the pop or modal class: ${tag.slice(0, 80)}`);
   const app = readAppSource();
   assert.match(app, /const LAYERS = "\.pop,\.modal", layerId/, "renderAll matches layers by the shared classes, so no popover or modal can be missed");
-  for (const id of ["pop", "seatPop", "projPop", "ctxPop", "setupPop", "permPop", "soundPop", "inboxPop", "modal", "projModal", "renameModal", "avModal", "viewer", "setModal", "runModal", "confirmModal"]) {
+  for (const id of ["pop", "seatPop", "projPop", "ctxPop", "permPop", "soundPop", "inboxPop", "modal", "projModal", "renameModal", "avModal", "viewer", "setModal", "runModal", "confirmModal"]) {
     assert.ok(layers.some((tag) => tag.includes(`id="${id}"`)), `${id} is a dialog layer in index.html`);
   }
 });
@@ -114,7 +114,8 @@ test("the page takes the app key from the Electron bridge or #key=, sends it on 
   assert.match(appSource, /getAppKey\(\)\.then\(\(key\) => \{ if \(ticket === connectTicket\) openSocket\(key\); \}\)/, "the socket is opened with the resolved key");
   const rawFetches = [...appSource.matchAll(/(?<![\w.])fetch\(/g)];
   assert.equal(rawFetches.length, 1, "the only plain fetch( is the one inside keyedFetch");
-  for (const route of ["/api/paste-image", "/api/paste-file", "/api/avatar"]) assert.ok(appSource.includes(`await keyedFetch("${route}",`), `${route} goes through keyedFetch`);
+  for (const route of ["/api/paste-image", "/api/paste-file"]) assert.ok(appSource.includes(`await keyedFetch("${route}",`), `${route} goes through keyedFetch`);
+  assert.ok(!/keyedFetch\(\s*["'`]\/api\/avatar/.test(appSource) && !/openSeatAvatar|avatarTarget|avatarPending|avatarUploadRequestId|renderAvatarStatus/.test(appSource), "the retired seat-picture POST and its page state are gone (the server endpoint stays, with its own tests)");
 });
 
 test("no page copy promises a Codex sandbox boundary", () => {

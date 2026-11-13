@@ -1,5 +1,5 @@
 (() => {
-  const { fail, check, waitFor, text, $, requireElement, installTenSecondClock, latestTab, clickTab, openTabMenu, clickMenuItem, showChat, openSeatView, openProjectMenu, settleMicrotasks, deliver, safeId } = window.__ccHarness;
+  const { fail, check, waitFor, text, $, requireElement, installTenSecondClock, latestTab, clickTab, openTabMenu, clickMenuItem, showChat, openProjectMenu, settleMicrotasks, deliver, safeId } = window.__ccHarness;
   const checkUploadsAndScreenshots = async () => {
     const uploadRequests = [];
     const nativeFetch = window.fetch.bind(window);
@@ -7,28 +7,12 @@
       const url = new URL(typeof input === "string" ? input : input.url, location.href);
       const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
       const promise = nativeFetch(input, init);
-      if (init.method === "POST" && ["/api/avatar", "/api/paste-file", "/api/paste-image"].includes(url.pathname)) {
+      if (init.method === "POST" && ["/api/paste-file", "/api/paste-image"].includes(url.pathname)) {
         const record = { path: url.pathname, method: init.method, requestId: headers.get("X-Request-Id"), fileName: headers.get("X-File-Name"), promise: promise.then(async (response) => ({ status: response.status, value: await response.clone().json() })) };
         uploadRequests.push(record);
       }
       return promise;
     };
-
-    openSeatView("coder");
-    const avatarOpener = requireElement("#view [data-seat-more]"); avatarOpener.focus(); avatarOpener.click();
-    requireElement("#seatPop [data-seat-picture]").click();
-    requireElement('#avModal[aria-hidden="false"]');
-    const avatarFile = new File(["avatar bytes"], "seat-picture.png", { type: "image/png" });
-    const avatarData = new DataTransfer(); avatarData.items.add(avatarFile); $("avUp").files = avatarData.files; $("avUp").dispatchEvent(new Event("change", { bubbles: true }));
-    const avatarRunning = $("avatarStatus").dataset.status === "running" && $("avatarStatus").textContent === "Uploading";
-    await waitFor(() => uploadRequests.some((request) => request.path === "/api/avatar"), "seat avatar POST");
-    const avatarRequest = uploadRequests.find((request) => request.path === "/api/avatar");
-    const avatarResult = await avatarRequest.promise;
-    await waitFor(() => window.__sent.some((item) => item.type === "updateSeat" && item.slot === "coder"), "seat picture updateSeat");
-    const avatarUpdate = window.__sent.filter((item) => item.type === "updateSeat" && item.slot === "coder").at(-1);
-    const avatarFocusBack = document.activeElement?.matches('#view [data-seat-more="coder"]') === true;
-    const avatarGood = safeId(avatarRequest.requestId) && avatarResult.status === 200 && avatarUpdate?.tabId === "alpha-dev" && avatarUpdate.pic === avatarResult.value.path && $("avModal").hidden && avatarFocusBack;
-    check(`Seat picture uploads with an id, applies its server route and restores focus at ${innerWidth}px`, avatarRunning && avatarGood, { avatarRunning, upload: { path: avatarRequest.path, requestId: avatarRequest.requestId, status: avatarResult.status, value: avatarResult.value }, updateSeat: avatarUpdate ?? null, modalClosed: $("avModal").hidden, focusRestored: avatarFocusBack });
 
     showChat();
     const screenshotUploadId = "packc_screenshot";
@@ -37,23 +21,20 @@
     const screenshotUpload = await screenshotResponse.json();
     const screenshotState = structuredClone(window.__latestState);
     screenshotState.selectedTabId = "alpha-dev";
-    const screenshotTab = screenshotState.projects.flatMap((project) => project.tabs).find((tab) => tab.id === "alpha-dev");
-    screenshotTab.processState.approval = { state: "pending" }; screenshotTab.processState.currentStepIndex = 0;
-    screenshotTab.derived.stepBar = [{ stepId: "look", type: "look", state: "current", owners: ["user"], label: "Your look" }];
-    const designTab = screenshotState.projects.flatMap((project) => project.tabs).find((tab) => tab.id === "alpha-design");
-    designTab.processState.approval = { state: "pending" }; designTab.processState.currentStepIndex = 0;
-    designTab.derived.stepBar = [{ stepId: "look", type: "look", state: "current", owners: ["user"], label: "Your look" }];
     window.__ccSeed = structuredClone(screenshotState); deliver(screenshotState);
     window.__ccDeliver({ type: "chatHistory", tabId: "alpha-dev", messages: [{ id: "packc-shot", role: "user", text: "Screenshot from this tab", images: [screenshotUpload.path], at: Date.now() }], revision: 1, savedRevision: 1 });
-    const screenshotButton = requireElement('#view [data-open-screenshots="alpha-dev"]'); screenshotButton.click();
+    const shotButton = requireElement("#view [data-open-shot]");
+    const returnedPathExact = screenshotResponse.status === 200 && Boolean(screenshotUpload.path) && shotButton.dataset.openShot === screenshotUpload.path;
+    shotButton.click();
     const screenshotViewer = requireElement('#viewer[aria-hidden="false"]');
     const viewerImage = requireElement("#viewerFiles .viewer-file img");
-    const screenshotPathExact = screenshotResponse.status === 200 && viewerImage.src.includes(encodeURIComponent(screenshotUpload.path));
+    const viewerPathExact = viewerImage.src.includes(encodeURIComponent(screenshotUpload.path));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    const viewerClosed = $("viewer").hidden && $("viewer").getAttribute("aria-hidden") === "true";
     await clickTab("Design");
     window.__ccDeliver({ type: "chatHistory", tabId: "alpha-design", messages: [{ id: "packc-no-shot", role: "assistant", text: "No image in this tab", at: Date.now() }], revision: 1, savedRevision: 1 });
-    const noScreenshotButton = !document.querySelector('#view [data-open-screenshots="alpha-design"]');
-    check(`Approval screenshots use only the selected tab transcript at ${innerWidth}px`, screenshotViewer && screenshotPathExact && noScreenshotButton, { screenshotResponse: screenshotResponse.status, screenshotPath: screenshotUpload.path, viewerImage: viewerImage.src, noScreenshotButton });
+    const noShotInOtherTab = !document.querySelector("#view [data-open-shot]");
+    check(`Transcript images open in the viewer with their exact returned path, close, and stay with their own tab at ${innerWidth}px`, Boolean(screenshotViewer) && returnedPathExact && viewerPathExact && viewerClosed && noShotInOtherTab, { screenshotResponse: screenshotResponse.status, screenshotPath: screenshotUpload.path, buttonPath: shotButton.dataset.openShot, viewerImage: viewerImage.src, returnedPathExact, viewerPathExact, viewerClosed, noShotInOtherTab });
     return { uploadRequests, nativeFetch };
   };
   const checkFileAttachments = async (uploadRequests) => {
@@ -84,12 +65,12 @@
     const startHeldAction = async (kind) => {
       if (kind === "tab") clickMenuItem(openTabMenu("alpha-dev"), "Remove tab");
       else if (kind === "project") clickMenuItem(openProjectMenu("alpha"), "Remove from Command Center");
-      else { $("setupsBtn").click(); requireElement('#setupPop [data-use-template="blank"]').click(); }
+      else fail(`unknown held action kind ${kind}`);
       await waitFor(() => document.querySelector("#undo [data-undo-held]"), `${kind} Undo action`);
     };
     const raceClock = installTenSecondClock();
     const fileRaceNames = [];
-    for (const kind of ["tab", "project", "process"]) for (const order of ["read-before-undo", "read-after-undo"]) {
+    for (const kind of ["tab", "project"]) for (const order of ["read-before-undo", "read-after-undo"]) {
       if (!latestTab("alpha-dev")) fail(`file race target alpha-dev missing before ${kind} ${order}`);
       if (window.__latestState.selectedTabId !== "alpha-dev") await clickTab("Development");
       const name = `packc-undo-${kind}-${order}.md`; const controlled = await controlledFile(name);
@@ -102,7 +83,7 @@
       const { record, result } = await uploadDone(uploadIndex, name);
       await waitFor(() => [...document.querySelectorAll("#atts [data-attachment]")].some((item) => item.textContent.includes(name) && !item.textContent.includes("Loading file")), `file attachment ready after ${kind} Undo`);
       const attachments = [...document.querySelectorAll("#atts [data-attachment]")].filter((item) => item.textContent.includes(name));
-      const actionSent = window.__sent.slice(actionStart).some((item) => ["removeTab", "removeProject", "useSetup"].includes(item.type));
+      const actionSent = window.__sent.slice(actionStart).some((item) => ["removeTab", "removeProject"].includes(item.type));
       const correctFile = record.path === "/api/paste-file" && safeId(record.requestId) && result.status === 200 && result.value.requestId === record.requestId && result.value.name === name;
       const oneReadyChip = attachments.length === 1 && attachments[0].querySelector(".file-icon")?.textContent === "md" && !attachments[0].querySelector("img") && attachments[0].textContent.includes(name);
       check(`file attachment ${name} completes in ${order} around ${kind} Undo`, correctFile && oneReadyChip && !actionSent && heldReads.every((item) => item.file !== controlled.file), { kind, order, request: { path: record.path, requestId: record.requestId, fileName: record.fileName }, response: result, correctFile, attachmentCount: attachments.length, chipText: attachments[0]?.textContent, hasFileIcon: Boolean(attachments[0]?.querySelector(".file-icon")), noEmptyImage: !attachments[0]?.querySelector("img"), actionSent, pendingRead: heldReads.some((item) => item.file === controlled.file), tabId: window.__latestState.selectedTabId });

@@ -1,12 +1,16 @@
 (() => {
-  const { audit, auditNode, query, waitFor, runReal, runFake, runB2, runPackC, runRequestsReal, runPackCSettingsReal, runLayout, runToolApprovals, runR6Fixes, runR7Fixes, runR1Fixes, runLooksWrite, runLooksRead, runWindowButtons, runPackTwo, runPackThree, collisionAudit } = window.__ccHarness;
+  const { audit, auditNode, query, waitFor, runReal, runFake, runB2, runPackC, runRequestsReal, runPackCSettingsReal, runLayout, runToolApprovals, runR6Fixes, runR7Fixes, runR1Fixes, runLooksWrite, runLooksRead, runWindowButtons, runPackTwo, runPackThree, collisionAudit, runFixedSmoke, installTenSecondClock, b2SeatsAndSettings, b2LeaderHistoryAndUndo, b2NotificationsAndBell } = window.__ccHarness;
   const selected = query.get("case") || "all";
   (async () => {
     collisionAudit();
     if ((audit.mode === "real" || audit.mode === "fake") && (selected === "all" || selected === "render")) {
       if (audit.mode === "real") await runReal(); else await runFake();
     }
+    if ((audit.mode === "real" || audit.mode === "fake") && selected === "fixed-smoke") await runFixedSmoke();
     if (audit.mode === "fake" && selected === "b2") await runB2();
+    // Bounded partial cases for the fixed-crew conversions (announced by the host as partial; the full b2 and c2 cases above stay whole).
+    if (audit.mode === "fake" && selected === "b2-notifications") { await waitFor(() => window.__latestState?.type === "state", "Pack B2 fake state"); const ctx = { holdClock: installTenSecondClock() }; await b2SeatsAndSettings(ctx); await b2LeaderHistoryAndUndo(ctx); await b2NotificationsAndBell(ctx); }
+    if (audit.mode === "fake" && selected === "c2-through-r7") { await runPackC(); await runToolApprovals(); await runR6Fixes(); await runR7Fixes(); }
     if (audit.mode === "fake" && selected === "pack2") await runPackTwo();
     if (audit.mode === "fake" && selected === "pack3") await runPackThree();
     if (audit.mode === "fake" && selected === "titlebar") await runWindowButtons();

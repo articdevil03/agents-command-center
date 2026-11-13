@@ -4,6 +4,8 @@ import { extname, join } from "node:path";
 
 // The size cap: no file a change touches may be over 400 lines. Changed = differs from CC_LINE_CAP_BASE (default origin/master), plus
 // uncommitted and untracked files. `--all` checks every tracked file. Deleted files are ignored. Nothing is skipped silently.
+// When the DEFAULT base (origin/master) does not exist (a fresh repository), it says so and checks every tracked and non-ignored
+// untracked file. A base given in CC_LINE_CAP_BASE that does not exist is an error, never a fallback.
 const CAP = 400;
 const SKIPPED_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".json"]);
 const SKIPPED_FILES = new Set(["public/logos.js"]);
@@ -13,6 +15,10 @@ function git(cwd, ...args) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
   if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
   return result.stdout.split(args.includes("-z") ? "\0" : "\n").filter(Boolean);
+}
+
+function commitExists(cwd, ref) {
+  return spawnSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], { cwd, windowsHide: true }).status === 0;
 }
 
 export function skipReason(file) {
@@ -29,14 +35,24 @@ export function countLines(text) {
 
 if (import.meta.main) {
   const root = git(process.cwd(), "rev-parse", "--show-toplevel")[0];
-  const base = process.env.CC_LINE_CAP_BASE || "origin/master";
+  const explicitBase = process.env.CC_LINE_CAP_BASE;
+  const base = explicitBase || "origin/master";
+  if (explicitBase && !commitExists(root, explicitBase)) {
+    console.error(`CC_LINE_CAP_BASE ${explicitBase} is not a commit in this repository`);
+    process.exit(1);
+  }
+  const everyFile = () => git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard");
+  const noBase = !process.argv.includes("--all") && !explicitBase && !commitExists(root, base);
+  if (noBase) console.log(`${base} not found: no comparison base, checking every tracked and untracked file`);
   const files = process.argv.includes("--all")
     ? git(root, "ls-files", "-z")
-    : [...new Set([
-        ...git(root, "diff", "--name-only", "-z", "--no-renames", base),
-        ...git(root, "diff", "--name-only", "-z", "--no-renames"),
-        ...git(root, "ls-files", "-z", "--others", "--exclude-standard"),
-      ])].sort();
+    : noBase
+      ? [...new Set(everyFile())].sort()
+      : [...new Set([
+          ...git(root, "diff", "--name-only", "-z", "--no-renames", base),
+          ...git(root, "diff", "--name-only", "-z", "--no-renames"),
+          ...git(root, "ls-files", "-z", "--others", "--exclude-standard"),
+        ])].sort();
   const over = [];
   let checked = 0;
   for (const file of files) {

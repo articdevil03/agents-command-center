@@ -9,9 +9,12 @@
     check("the real browser server probes Gemini and GitHub through its scripted fake runner", refreshedSettings.tools.gemini.installed === false && refreshedSettings.tools.gemini.signedIn === null && refreshedSettings.github.connected === false, { gemini: refreshedSettings.tools.gemini, github: refreshedSettings.github, acknowledgment: window.__received.slice(settingsRefreshStart).find((item) => item.type === "settingsRefreshed") });
     const tabById = (id) => window.__latestState.projects.flatMap((project) => project.tabs).find((tab) => tab.id === id);
     const beta = window.__latestState.projects.find((project) => project.id === "beta");
-    const addedTab = { type: "addTab", projectId: "beta", name: "Temporary request target", kind: "dev", template: "duo", folder: beta.folder };
+    // A fixed crew tab: the creation message carries the fixed crew version, the picked positions and the auto-assign choice, never a kind or a template.
+    const addedTab = { type: "addTab", requestId: crypto.randomUUID(), projectId: "beta", name: "Temporary request target", folder: beta.folder, fixedCrewVersion: 1, crewChoices: { coder: { cli: "codex", model: "gpt-6.1-sol", effort: "medium" } }, autoAssign: false };
     const addStart = window.__received.length; window.__socket.send(JSON.stringify(addedTab));
     await waitFor(() => tabById("temporary-request-target") || window.__latestState.projects.find((project) => project.id === "beta")?.tabs.some((tab) => tab.name === "Temporary request target"), "temporary request destination tab");
+    const addedTabNow = window.__latestState.projects.find((project) => project.id === "beta").tabs.find((tab) => tab.name === "Temporary request target");
+    check("a request destination tab is created through the fixed crew, holding the picked coder and no legacy kind or template", Boolean(addedTabNow) && addedTabNow.fixedCrew?.version === 1 && addedTabNow.fixedCrew.preferences.coder?.assignment?.model === "gpt-6.1-sol" && !("kind" in addedTab) && !("template" in addedTab) && addedTab.fixedCrewVersion === 1 && addedTab.autoAssign === false && Object.keys(addedTab.crewChoices).join() === "coder", { sent: addedTab, tab: addedTabNow ?? null });
     const destination = beta.tabs.find((tab) => tab.name === "Temporary request target")?.id ?? window.__latestState.projects.find((project) => project.id === "beta").tabs.find((tab) => tab.name === "Temporary request target").id;
     pickProject("alpha");
     await waitFor(() => window.__latestState.selectedTabId === "alpha-dev", "request source alpha-dev");

@@ -6,5 +6,5 @@ export const testsBrowserMutations = [
   ["guard-browser-cap-armed-by-workload-promise", "test/browser-helpers.ts", "    if (args.capStartsAfter) args.capStartsAfter.then(arm,", "    if (false) args.capStartsAfter.then(arm,"],
   ["guard-browser-chrome-tree-kill", "test/chrome-stop.ts", "[\"/pid\", String(pid), \"/T\", \"/F\"]", "[\"/pid\", String(pid), \"/F\"]"],
   ["guard-browser-chrome-stop-retry", "test/chrome-stop.ts", "attempt <= 2", "attempt <= 1"],
-  ["guard-pack7-r1-unlock-check-name","test/browser-harness/15-pack-three-2b.js","check(\"an open picker, seat card and Settings unlock when","check(\"RENAMED an open picker, seat card and Settings unlock when"],
+  ["guard-pack7-r1-unlock-check-name","test/browser-harness/15-pack-three-2b.js","check(\"an open fixed picker and Settings chip unlock when work ends, locked search sends nothing, focus stays enabled, and an unconfirmed stop stays locked until released\"","check(\"RENAMED an open fixed picker and Settings chip unlock when work ends, locked search sends nothing, focus stays enabled, and an unconfirmed stop stays locked until released\""],
 ];

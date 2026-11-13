@@ -4,7 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import * as usage from "../server/usage.ts";
 import { moduleDataDir, config } from "./round2-setup.ts";
-import { fixtureWorkspaces, loadServer, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
+import { fixtureWorkspaces, loadFixed, startHelper, endRun, fixedCreation, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
 
 test("this file's config module keeps its files in a temp data folder, never in the repo's config/", () => {
@@ -13,24 +13,25 @@ test("this file's config module keeps its files in a temp data folder, never in 
 });
 
 test("hello sends projects -> tabs -> crew and does not create a leader; chat lazily creates one in the tab folder", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
   ws.message({ type: "hello" });
   const state = lastState(ws);
-  assert.equal(state.projects[0].tabs[0].crew.length, 6);
+  assert.equal(Object.keys(state.projects[0].tabs[0].fixedCrew.preferences).length, 18, "every fixed position is carried");
+  assert.equal(state.projects[0].tabs[0].fixedCrew.preferences.leader.assignment.model, "claude-sonnet-5-5[1m]");
   assert.equal(state.projects[0].tabs[0].processState.tabId, "alpha-dev");
   assert.equal(server.leaders.size, 0, "hello must not start any per-tab leader");
   ws.message({ type: "chat", tabId: "alpha-design", text: "Design this" });
   const answered = () => ws.messages.some((message: any) => message.type === "chatMessage" && message.tabId === "alpha-design" && message.role === "assistant");
   await waitFor(() => server.leaders.size === 1 && answered(), "the chat's leader and its assistant message", 30_000);
   assert.equal(server.leaders.size, 1);
-  assert.deepEqual(server.leaderCreates[0], { settings: { model: "claude-opus-5-5[1m]", effort: "high" }, folder: "C:/work/alpha/design", cliPath: null });
+  assert.deepEqual(server.leaderCreates[0], { settings: { model: "claude-sonnet-5-5[1m]", effort: "medium" }, folder: "C:/work/alpha/design", cliPath: null });
   assert.ok(answered());
   assert.equal(lastState(ws).projects[0].tabs[1].chatRevision, 2);
 });
 
 test("a damaged settings file: the first page is told once, and the tabs ask", async () => {
-  const server = await loadServer({ skipHealth: true, preload: (root) => writeFileSync(path.join(root, "settings.json"), "{not json") });
+  const server = await loadFixed({ skipHealth: true, preload: (root) => writeFileSync(path.join(root, "settings.json"), "{not json") });
   const ws = connect(server);
   ws.message({ type: "hello" }); ws.message({ type: "hello" });
   const told = ws.messages.filter((message: any) => message.type === "error" && /damaged/.test(message.message));
@@ -38,13 +39,12 @@ test("a damaged settings file: the first page is told once, and the tabs ask", a
   assert.ok(lastState(ws).projects[0].tabs.every((tab: any) => tab.permissionMode === "ask"), "every tab without a saved mode asks");
 });
 
-test("the startup health check runs once and hello never starts another check or leader", async () => {
-  const server = await loadServer();
+test("a fixed crew start runs no startup health check and hello never starts a check or a leader", async () => {
+  const server = await loadFixed();
   const ws = connect(server);
   ws.message({ type: "hello" }); ws.message({ type: "hello" });
-  await waitFor(() => server.queryCount() >= 1, "the startup health check to run", 30_000);
-  await tick(); // a short settle: a second check or a leader would show by now
-  assert.equal(server.queryCount(), 1);
+  await tick(); // a short settle: a check or a leader would show by now
+  assert.equal(server.queryCount(), 0);
   assert.equal(server.leaders.size, 0);
 });
 
@@ -111,39 +111,37 @@ test("live leader model changes use the SDK handle and scope later usage to the 
   instance.stop();
 });
 
-test("runner call site derives write access from process slot definitions and allows concurrent same-seat runs", async () => {
-  const server = await loadServer({ skipHealth: true });
+test("runner call site derives write access from the fixed roster and refuses a second heavy run while one is reserved", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "reviewer1", prompt: "review" });
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "code" });
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "second coder run" });
-  assert.equal(server.launched.length, 3);
+  const { runId } = await startHelper(server, "alpha-dev", "reviewer1", "review");
+  assert.equal(server.launched.length, 1);
   assert.equal(server.launched[0].run.seatKey, "alpha-dev.reviewer1");
   assert.equal(server.launched[0].run.canWrite, false);
-  assert.equal(server.launched[0].run.cli, "claude");
-  assert.equal(server.launched[1].run.canWrite, true);
-  assert.equal(server.launched[2].run.canWrite, true);
-  assert.notEqual(server.launched[1].run.runId, server.launched[2].run.runId);
-  assert.equal(lastState(ws).projects[0].tabs[0].runs.filter((run: any) => run.status === "working" && run.seatSlotId === "coder").length, 2);
+  assert.equal(server.launched[0].run.cli, "codex");
+  await assert.rejects(startHelper(server, "alpha-dev", "helper", "second"), /previous process tree has not been confirmed ended/);
+  assert.equal(server.launched.length, 1, "the second run never started");
+  assert.equal(lastState(ws).projects[0].tabs[0].runs.filter((run: any) => run.status === "working" && run.seatSlotId === "reviewer1").length, 1);
+  await endRun(server, runId);
+  assert.equal((await startHelper(server, "alpha-dev", "helper", "after the first ended")).runId.length > 0, true, "the next run may reserve once the first tree ended");
+  server.stopLeaderSession("alpha-dev");
 });
 
-test("killRun stops only its run id and emits a real run stop event", async () => {
-  const server = await loadServer({ skipHealth: true });
+test("killRun stops its run id and emits a real run stop event", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "one" });
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "two" });
-  const [first, second] = server.launched.map((entry: any) => entry.run.runId);
+  const { runId: first } = await startHelper(server, "alpha-dev", "helper", "one");
+  assert.equal(server.active.has(first), true);
   ws.message({ type: "killRun", runId: first });
   assert.deepEqual(server.kills, [first]);
-  assert.equal(server.active.has(first), false);
-  assert.equal(server.active.has(second), true);
+  await waitFor(() => !server.active.has(first), "the killed run's process tree is confirmed ended");
   assert.ok(ws.messages.some((message: any) => message.type === "runStop" && message.runId === first));
   assert.ok(ws.messages.some((message: any) => message.type === "killAccepted" && message.runId === first), "the kill is acknowledged with its run id");
-  assert.equal(ws.messages.some((message: any) => message.type === "killAccepted" && message.runId === second), false, "and only that run id");
+  server.stopLeaderSession("alpha-dev");
 });
 
 test("old and new log ids remain valid history queries without requiring a current roster entry", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
   ws.message({ type: "historyList", seatKey: "removed-old-seat" });
   await waitFor(() => ws.messages.some((message: any) => message.type === "historyList"), "the history answer", 30_000);
@@ -155,34 +153,37 @@ test("old and new log ids remain valid history queries without requiring a curre
 });
 
 test("tab ids are globally unique and removal enforces last-tab and busy guards", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
   ws.message({ type: "hello" });
   ws.message({ type: "removeTab", tabId: "beta-dev" });
   assert.match(ws.messages.at(-1).message, /last tab/);
-  ws.message({ type: "addTab", projectId: "beta", tabId: "beta-review", kind: "dev", template: "duo", name: "Review" });
-  ws.message({ type: "addTab", projectId: "alpha", tabId: "beta-review", kind: "dev" });
+  ws.message({ ...fixedCreation(), type: "addTab", projectId: "beta", tabId: "beta-review", name: "Review" });
+  assert.equal(server.getWorkspaces().projects[1].tabs.some((tab: any) => tab.id === "beta-review" && Object.hasOwn(tab, "fixedCrew")), true, "the fixed creation form makes a fixed tab");
+  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", tabId: "beta-review" });
   assert.match(ws.messages.at(-1).message, /invalid or duplicate tab id/);
-  ws.message({ type: "run", tabId: "beta-review", slot: "coder", prompt: "work" });
+  await startHelper(server, "beta-review", "helper", "work");
   ws.message({ type: "removeTab", tabId: "beta-review" });
   assert.match(ws.messages.at(-1).message, /busy/);
+  server.stopLeaderSession("beta-review");
 });
 
 test("removeTab stops no busy worker and succeeds only after it has closed", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
-  ws.message({ type: "addTab", projectId: "beta", tabId: "beta-review", kind: "dev", template: "duo", name: "Review" });
-  ws.message({ type: "run", tabId: "beta-dev", slot: "coder", prompt: "work" });
+  ws.message({ ...fixedCreation(), type: "addTab", projectId: "beta", tabId: "beta-review", name: "Review" });
+  const { runId } = await startHelper(server, "beta-dev", "helper", "work");
   ws.message({ type: "removeTab", tabId: "beta-dev" });
   assert.match(ws.messages.at(-1).message, /busy/);
-  const runId = server.launched[0].run.runId;
+  assert.equal(server.active.has(runId), true, "the busy worker was not stopped by the refusal");
   ws.message({ type: "killRun", runId });
+  await waitFor(() => !server.stateMessage().projects[1].tabs[0].activeWork, "the killed worker's tree ends");
   ws.message({ type: "removeTab", tabId: "beta-dev" });
   assert.equal(lastState(ws).projects.find((project: any) => project.id === "beta").tabs.length, 1);
 });
 
 test("removing the selected tab sends the visible fallback tab's transcript", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
   const chats = path.join(server.testRoot, "chats");
   mkdirSync(chats, { recursive: true });
@@ -201,7 +202,7 @@ test("removing the selected tab sends the visible fallback tab's transcript", as
 });
 
 test("busy leader turns block folder changes and project removal", async () => {
-  const server = await loadServer({ skipHealth: true, hangLeader: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, hangLeader: true }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "active leader" });
   ws.message({ type: "changeFolder", tabId: "alpha-dev", folder: "C:/work/new" });
   assert.match(ws.messages.at(-1).message, /tab is busy/);
@@ -211,15 +212,15 @@ test("busy leader turns block folder changes and project removal", async () => {
 });
 
 test("changeProjectFolder persists only the project default and supplies it to new tabs", async () => {
-  const workspaces = fixtureWorkspaces();
+  const workspaces = fixtureWorkspaces("fixed");
   const originalFolders = workspaces.projects.find((project: any) => project.id === "alpha").tabs.map((tab: any) => tab.folder);
-  const server = await loadServer({ skipHealth: true, workspaces }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true, workspaces }), ws = connect(server);
   ws.message({ type: "changeProjectFolder", projectId: "alpha", folder: "C:/work/alpha-default" });
   const updated = lastState(ws).projects.find((project: any) => project.id === "alpha");
   assert.equal(updated.folder, "C:/work/alpha-default");
   assert.deepEqual(updated.tabs.map((tab: any) => tab.folder), originalFolders);
   assert.equal(server.getWorkspaces().projects.find((project: any) => project.id === "alpha").folder, "C:/work/alpha-default", "the workspace write persisted the default");
-  ws.message({ type: "addTab", projectId: "alpha", tabId: "alpha-default-folder", kind: "dev" });
+  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", tabId: "alpha-default-folder" });
   assert.equal(lastState(ws).projects.find((project: any) => project.id === "alpha").tabs.find((tab: any) => tab.id === "alpha-default-folder").folder, "C:/work/alpha-default");
   ws.message({ type: "changeProjectFolder", projectId: "alpha", folder: " " });
   assert.match(ws.messages.at(-1).message, /folder is required/);
@@ -228,18 +229,18 @@ test("changeProjectFolder persists only the project default and supplies it to n
 });
 
 test("Settings default folder is saved with an id and supplies new projects", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "setDefaultProjectFolder", requestId: "global_folder_save", folder: server.testRoot });
   await waitFor(() => ws.messages.some((message: any) => message.type === "actionResult" && message.requestId === "global_folder_save"), "default folder result");
   assert.equal(server.stateMessage().settings.folders.defaultProjectFolder, server.testRoot);
-  ws.message({ type: "addProject", id: "globaldefault", name: "Uses Settings folder" });
+  ws.message({ ...fixedCreation(), type: "addProject", id: "globaldefault", name: "Uses Settings folder" });
   const project = server.stateMessage().projects.find((item: any) => item.id === "globaldefault");
   assert.equal(project.folder, server.testRoot);
   assert.equal(project.tabs[0].folder, server.testRoot);
 });
 
 test("Settings writes reject an unsafe request id before any action starts", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "installCli", requestId: "../unsafe", cli: "claude", confirm: true });
   const error = ws.messages.at(-1);
   assert.equal(error.type, "error");
@@ -250,7 +251,7 @@ test("Settings writes reject an unsafe request id before any action starts", asy
 });
 
 test("every Settings, permission, and request write rejects an unsafe request id before dispatch", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   const messages = [
     { type: "installCli", cli: "claude", confirm: true },
     { type: "cliLogin", cli: "claude" },
@@ -279,7 +280,7 @@ test("every Settings, permission, and request write rejects an unsafe request id
 });
 
 test("CLI, GitHub, MCP, and plugin action refusals echo their safe request ids and finish failed", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   const messages = [
     { type: "installCli", cli: "claude", confirm: true },
     { type: "cliLogin", cli: "claude" },
@@ -298,7 +299,7 @@ test("CLI, GitHub, MCP, and plugin action refusals echo their safe request ids a
 });
 
 test("a disconnected socket cannot turn a completed Settings write into a failed action", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.send = () => { throw new Error("socket closed during send"); };
   ws.message({ type: "setDefaultProjectFolder", requestId: "folder_disconnect", folder: server.testRoot });
   await waitFor(() => server.stateMessage().requestActions.folder_disconnect?.status === "done", "completed folder write");

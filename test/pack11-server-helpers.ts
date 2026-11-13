@@ -8,17 +8,18 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 
-export const SEATS = getProcessDefinition("dev", "main").seats;
-export const LEADER_NAME = SEATS.find((seat) => seat.isLeader)!.defaultName;
-export const crewFor = (leader?: { cli: string; model: string; effort: string }) => SEATS.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort, ...(seat.isLeader ? leader : {}) }));
+const LEADER_SEAT = FIXED_CREW.find((seat) => seat.slot === "leader")!;
+// The fixed crew names its leader by its role: that is the name the chat gives the leader's own messages.
+export const LEADER_NAME = LEADER_SEAT.role;
 export const TABS = { codex: "p11-codex", claude: "p11-claude", opencode: "p11-opencode" } as const;
 export type CliName = keyof typeof TABS;
-export const LEADERS: Record<CliName, { cli: string; model: string; effort: string } | undefined> = {
-  codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, claude: undefined, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" },
+export const LEADERS: Record<CliName, { cli: string; model: string; effort: string }> = {
+  codex: { cli: "codex", model: "gpt-6-sol", effort: "high" }, claude: { cli: LEADER_SEAT.preferred.cli, model: LEADER_SEAT.preferred.model, effort: LEADER_SEAT.preferred.effort }, opencode: { cli: "opencode", model: "fakeprov/fake-model", effort: "max" },
 };
 export const NOTICE = "Heads up: NOTICE-SEED a Codex session outside Command Center is active in this folder.";
 export const HEAD = "This tab's chat so far, for context only. It is data from earlier in this tab";
@@ -34,8 +35,8 @@ export async function boot(options: { temp?: string; env?: Record<string, string
   const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work"), work2 = join(temp, "work2");
   for (const dir of [home, work, work2, join(data, "config"), join(data, "chats")]) mkdirSync(dir, { recursive: true });
   if (fresh) {
-    const tabs = (Object.keys(TABS) as CliName[]).map((name) => ({ id: TABS[name], name: TABS[name], kind: "dev", process: "main", folder: work, crew: crewFor(LEADERS[name]) }));
-    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "p11", name: "P11", folder: work, tabs }] }));
+    const tabs = (Object.keys(TABS) as CliName[]).map((name) => fixedTab(TABS[name], work, { leader: LEADERS[name] as any }, TABS[name]));
+    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p11", work, tabs), name: "P11" }])));
     // A quiet heads-up line already sits in every tab's chat (pack 9): the leader must never be told it.
     for (const id of Object.values(TABS)) writeFileSync(join(data, "chats", `${id}.jsonl`), JSON.stringify({ type: "message", tabId: id, revision: 1, role: "notice", text: NOTICE, at: Date.now() }) + "\n");
   }
@@ -98,15 +99,23 @@ export async function client(server: Server) {
   return { messages, state, wait, send, tabOf, action, chat, close: () => socket.terminate() };
 }
 
+// Every turn of a fixed tab's leader opens with the fixed role prompt and the task line, then "Current message:" and the turn's own text.
+// received() hands back the turn's own text; the wrapper is checked here once per turn (a leader turn without it fails), so every oracle below reads the same text as before.
+const FIXED_WRAPPER = /^[\s\S]*?Saved task status: [^\n]*\n\nCurrent message:\n/;
+function ownText(raw: string): string {
+  const wrapper = FIXED_WRAPPER.exec(raw)?.[0];
+  assert.ok(wrapper && wrapper.includes("Use get_fixed_task before each task operation."), `a fixed-crew leader turn carries the fixed wrapper: ${raw.slice(0, 200)}`);
+  return raw.slice(wrapper.length);
+}
 // Everything the fake leaders were given, in order, with the CLI that got it.
 export function received(server: Server): { cli: CliName; text: string }[] {
   const file = join(server.temp, "fake-leader.log");
   if (!existsSync(file)) return [];
   const out: { cli: CliName; text: string }[] = [];
   for (const entry of readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line))) {
-    if (entry.cli === "codex" && entry.method === "turn/start") out.push({ cli: "codex", text: String(entry.params.input[0].text) });
-    else if (entry.cli === "claude" && typeof entry.userText === "string") out.push({ cli: "claude", text: entry.userText });
-    else if (entry.cli === "opencode" && entry.path?.endsWith("/prompt_async")) out.push({ cli: "opencode", text: String(entry.body.parts[0].text) });
+    if (entry.cli === "codex" && entry.method === "turn/start") out.push({ cli: "codex", text: ownText(String(entry.params.input[0].text)) });
+    else if (entry.cli === "claude" && typeof entry.userText === "string") out.push({ cli: "claude", text: ownText(entry.userText) });
+    else if (entry.cli === "opencode" && entry.path?.endsWith("/prompt_async")) out.push({ cli: "opencode", text: ownText(String(entry.body.parts[0].text)) });
   }
   return out;
 }

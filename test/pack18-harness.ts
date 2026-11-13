@@ -57,7 +57,7 @@ export async function boot(options: BootOptions): Promise<Server> {
           const exited = new Promise((ok) => child.once("exit", ok));
           child.once("error", () => {});
           try { child.send("shutdown", () => {}); } catch { /* IPC already closed: fall through to kill */ }
-          await Promise.race([exited, sleep(8000)]);
+          await Promise.race([exited, sleep(RUN_END_MS)]); // the server now waits for its workers' final callbacks before it exits
           if (child.exitCode === null && child.signalCode === null) { child.kill(); await Promise.race([exited, sleep(3000)]); }
         }
       } finally { removeWithRetry(temp, 40, 500); }
@@ -113,12 +113,3 @@ export async function client(server: Server) {
 export type Client = Awaited<ReturnType<typeof client>>;
 
 export const workspaceFile = (server: Server): any => JSON.parse(readFileSync(join(server.data, "config", "workspaces.json"), "utf8"));
-export const workspaceBytes = (server: Server): string => readFileSync(join(server.data, "config", "workspaces.json"), "utf8");
-export const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-
-// A tab fixture in the CURRENT shape, built from a template's crew and steps.
-export function tabOf(id: string, folder: string, template: { name: string; crew: any[]; steps: any[]; lookPause?: boolean }, change: (setup: { crew: any[]; steps: any[] }) => void = () => {}) {
-  const setup = clone({ crew: template.crew, steps: template.steps });
-  change(setup);
-  return { id, name: id, kind: "dev", folder, setupName: template.name, crew: setup.crew, lookPause: template.lookPause ?? false, steps: setup.steps };
-}

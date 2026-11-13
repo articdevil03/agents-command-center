@@ -56,12 +56,8 @@ test("final review 7: a stale Check again error or an untagged settingsRefreshed
   assert.equal(h.api.snap().refreshState.status, "failed");
 });
 
-test("final review 8: the Claude model picker says a change made during an answer waits for the answer to end", () => {
-  const h = pageHarness();
-  const claude = h.api.pickerHints({ isLeader: true, cli: "claude" });
-  assert.match(claude, /A model change applies right away, or after the current answer if one is running\./);
-  assert.match(h.api.pickerHints({ isLeader: true, cli: "codex" }), /A model change applies from the next turn./);
-});
+// Block 5 slice 2f2: the old "final review 8" case (the seat-update route's "right away, or after the current answer" and "from the next turn" hints) is retired.
+// A leader's model is a fixed Settings assignment and is locked while that position is busy: proved on the real page in test/fixed-crew-picker.test.ts (FCPICK busy).
 
 function historyBinding(h: any, key: string) {
   const handlers: Record<string, () => void> = {};
@@ -232,8 +228,6 @@ test("pack 3: a stalled worker's desktop notice says what happens next", () => {
   h.api.onMessage(h.state({ runs: [h.run("r1")] }));
   h.api.onMessage({ type: "runStalled", tabId: "t1", seatKey: "t1.coder", runId: "r1", action: "escalate" });
   assert.deepEqual(h.notifications, [{ title: "Sonny is stalled", body: "Check the run before it can continue." }]);
-  h.api.onMessage({ type: "runStalled", tabId: "t1", seatKey: "t1.coder", runId: "r1", action: "relaunch" });
-  assert.equal(h.notifications.at(-1)?.body, "No output for 5 minutes. It is being stopped and started once more.");
 });
 
 test("pack 3: the crew rail starts open when the server has no crewRailOpen pref, and follows it once there is one", () => {
@@ -332,18 +326,11 @@ test("pack 3: the model list always offers the seat's own saved model, even when
   assert.equal(h.api.real.modelRows({ cli: "codex", model: "gpt-6-sol" }, "").match(/data-model="gpt-6-sol"/g)?.length, 1);
 });
 
-test("pack 3: a Claude model with no effort level shows no effort in its line and no effort row in the picker", () => {
+// The picker half of this case (no effort row, the "no effort setting" hint, and the supported control) moved to the real fixed Settings picker: test/fixed-crew-picker.test.ts (FCPICK effort).
+test("pack 3: a Claude model with no effort level shows no effort in its line", () => {
   const h = pageHarness();
   const claudeModels = [{ value: "claude-haiku-4-5", displayName: "Haiku", supportsEffort: false }, { value: "sonnet", displayName: "Sonnet", supportsEffort: true }];
   h.api.onMessage(h.state({}, { modelOptions: { claude: claudeModels.map((model) => model.value) }, claudeModels, effortOptions: { claude: ["low", "high"] } }));
   assert.doesNotMatch(h.api.real.modelLine("claude", "claude-haiku-4-5", "high"), /· high/, "no effort level on the line");
   assert.match(h.api.real.modelLine("claude", "sonnet", "high"), /· high$/, "control: a model with effort shows it");
-  const seat = (model: string) => ({ slot: "coder", name: "Sonny", cli: "claude", model, effort: "high" });
-  const tab = { id: "t1" };
-  h.api.real.drawModelPicker(tab, seat("claude-haiku-4-5"), null, false);
-  assert.match(h.node("pop").innerHTML, /has no effort setting/);
-  assert.doesNotMatch(h.node("pop").innerHTML, /data-effort=/);
-  h.api.real.drawModelPicker(tab, seat("sonnet"), null, false);
-  assert.match(h.node("pop").innerHTML, /data-effort="high"/);
-  assert.doesNotMatch(h.node("pop").innerHTML, /has no effort setting/);
 });

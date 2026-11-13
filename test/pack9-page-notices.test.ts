@@ -93,9 +93,11 @@ test("the dark pop-up sits just above the message box, also when the box grows; 
   await withPage(async ({ ev, waitFor, shot, tabA }) => {
     const rects = () => ev(`(()=>{const r=(s)=>{const b=document.querySelector(s).getBoundingClientRect();return {top:b.top,bottom:b.bottom,left:b.left,right:b.right}};return {toast:r("#toast"),box:r("#cbox"),on:document.querySelector("#toast").classList.contains("on")}})()`);
     const pop = async (text: string) => {
+      await ev(`document.querySelector("#toast").style.bottom="";true`); // a placement left by an earlier pop-up must not satisfy this one
       await ev(`__ccDeliver({type:"chatNotice",tabId:${J(tabA)},message:${J(text)}});true`); // the server's other chatNotice (an old leader that did not stop): any showToast caller would do
-      await waitFor(`document.querySelector("#toast").classList.contains("on")&&document.querySelector("#toast").style.bottom!==""`, "the pop-up");
+      await waitFor(`document.querySelector("#toast").classList.contains("on")`, "the pop-up");
       await delay(300); // the slide-in finishes
+      assert.notEqual(await ev(`document.querySelector("#toast").style.bottom`), "", `the pop-up was placed above the message box for "${text}"`);
       return rects();
     };
     const empty = await pop("tab created");

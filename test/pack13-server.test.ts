@@ -11,14 +11,12 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
 import { WebSocket } from "ws";
-import { getProcessDefinition } from "../server/process.ts";
+import { fixedProject, fixedTab, fixedWorkspaces } from "./fixed-server-fixture.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { attachCrashCatcher } from "./crash-catcher.ts";
 import { sourceText } from "./source-text.ts";
 
 const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
-const MAIN = getProcessDefinition("dev", "main").seats;
-const crew = MAIN.map((seat) => ({ slot: seat.slotId, name: seat.defaultName, cli: seat.cli, model: seat.model, effort: seat.effort }));
 // The exact file the owner approved, written independently of the server's own helper (CRLF, one sentence per line).
 const expected = (name: string) => [`This folder is the ${name} project.`, "Work only on this project, inside this folder.", "Do not read or change files outside this folder unless the user names them.", "Keep this project's notes and progress in this folder.", ""].join("\r\n");
 
@@ -27,7 +25,7 @@ async function boot(): Promise<Server> {
   const temp = mkdtempSync(join(tmpdir(), "cc-pack13-"));
   const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work"), folders = join(temp, "folders");
   for (const dir of [home, work, folders, join(data, "config"), join(data, "chats"), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify({ projects: [{ id: "base", name: "Base", folder: work, tabs: [{ id: "base-dev", name: "Dev", kind: "dev", process: "main", folder: work, crew }] }] }));
+  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([fixedProject("base", work, [fixedTab("base-dev", work)])])));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: Object.fromEntries(["claude", "codex"].map((cli) => [JSON.stringify([cli, "--version"]), { code: 0, stdout: `${cli} 1.0.0`, stderr: "" }])) }));
   const key = randomBytes(32).toString("hex");
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
@@ -80,13 +78,13 @@ const folderIn = (server: Server, name: string): string => { const dir = join(se
 // Creates a project in `folder` and waits for the state that holds it. `extra` is added to the message as is.
 async function addProject(c: Client, folder: string, name: string, extra: Record<string, unknown> = {}): Promise<string> {
   const id = `p13-${++counter}`;
-  c.send({ type: "addProject", id, name, folder, tabFolder: folder, kind: "dev", process: "main", ...extra });
+  c.send({ type: "addProject", requestId: `p13_request_${counter}`, id, name, folder, tabFolder: folder, fixedCrewVersion: 1, crewChoices: {}, autoAssign: false, ...extra });
   await c.wait(() => c.state().projects.find((p: any) => p.id === id), `project ${id} exists`);
   return id;
 }
 async function addTab(c: Client, projectId: string, folder: string, extra: Record<string, unknown> = {}): Promise<string> {
   const known = new Set(c.state().projects.find((p: any) => p.id === projectId).tabs.map((t: any) => t.id));
-  c.send({ type: "addTab", projectId, name: "Second", kind: "dev", process: "main", folder, ...extra });
+  c.send({ type: "addTab", requestId: `p13_request_${++counter}`, projectId, name: "Second", folder, fixedCrewVersion: 1, crewChoices: {}, autoAssign: false, ...extra });
   const tab = await c.wait(() => c.state().projects.find((p: any) => p.id === projectId).tabs.find((t: any) => !known.has(t.id)), "the new tab exists");
   return tab.id;
 }
@@ -100,10 +98,10 @@ const withServer = async (body: (server: Server, c: Client) => Promise<void>) =>
 test("addProject ticked: AGENTS.md holds the exact text with the project's name, and the window that asked is told 'Added AGENTS.md'", async () => {
   await withServer(async (server, c) => {
     const folder = folderIn(server, "swim");
-    await addProject(c, folder, "Swimeroo", { projectOnly: true });
+    await addProject(c, folder, "Example project", { projectOnly: true });
     const reply = await c.wait(() => c.rules()[0], "the rules reply");
     assert.deepEqual([reply.outcome, reply.message], ["added", "Added AGENTS.md"]);
-    assert.equal(readFileSync(join(folder, "AGENTS.md"), "utf8"), expected("Swimeroo"));
+    assert.equal(readFileSync(join(folder, "AGENTS.md"), "utf8"), expected("Example project"));
     assert.deepEqual(readdirSync(folder), ["AGENTS.md"], "no CLAUDE.md or any other file");
   });
 });
@@ -222,7 +220,7 @@ test("sweep: every validateFolderPath site in the server is listed, and 'writes 
   const sites: string[] = [];
   // Each message handler is the function `onXxx(ws, message)` in server/main/messages/ (named after its first message type), ending at its closing brace line.
   const cases = [...source.matchAll(/^function on([A-Z][A-Za-z]*)\(ws: WebSocket, message: any\): void \{/gm)].map((m) => ({ name: m[1][0].toLowerCase() + m[1].slice(1), at: m.index!, end: source.indexOf("\n}\n", m.index!) }));
-  assert.ok(cases.length >= 55, `control: the scan found only ${cases.length} message handlers`);
+  assert.ok(cases.length >= 43, `control: the scan found only ${cases.length} message handlers`);
   for (const call of source.matchAll(/validateFolderPath\((.*?), "((?:tab|project) folder)"\)/g)) {
     const owner = cases.find((c) => c.at < call.index! && call.index! < c.end);
     sites.push(`${owner?.name ?? "(outside every message handler)"}|${call[2]}`);
@@ -237,8 +235,9 @@ test("sweep: every validateFolderPath site in the server is listed, and 'writes 
     if (decision === "writes rules") assert.match(body, /message\.projectOnly === true/, `${name} only writes when projectOnly is true`);
     else assert.match(body, /Deliberately no "Work on this project only"/, `${name} says why it is excluded`);
   }
-  // Seeds that set a folder without a dialog (first-run example project, legacy-file migration) are also decided: no rules file.
+  // Seeds that set a folder without a dialog (the first-run example project) are also decided: no rules file.
   const config = readFileSync("server/config.ts", "utf8");
-  assert.equal(config.match(/tabs: \[defaultTab\(/g)!.length, 2, "config.ts seeds exactly two tab folders (migration, first-run example); a third needs a decision here");
+  const seedCount = (config.match(/tabs: \[defaultTab\(/g) ?? []).length + (config.match(/tabs: \[\{ id: "example-development"/g) ?? []).length;
+  assert.equal(seedCount, 1, `config.ts seeds exactly one tab folder (the first-run example; the legacy-file migration seed was removed); found ${seedCount}, another needs a decision here`);
   assert.ok(!/writeProjectRules|AGENTS\.md/.test(config), "seeds write no rules file");
 });

@@ -34,11 +34,10 @@
     bindWindowButtons();
     $("folderBtn").addEventListener("click", () => { const tab = currentTab(); if (tab) pickFolder((folder) => send({ type: "changeFolder", tabId: tab.id, folder })); });
     $("stopAll").addEventListener("click", stopAll);
-    $("setupsBtn").addEventListener("click", (event) => { const tab = currentTab(); if (tab) togglePopover($("setupPop"), event.currentTarget, () => processMenu(tab, event.currentTarget)); });
+    $("setupsBtn").addEventListener("click", (event) => { const tab = currentTab(); if (tab) openSettings(event.currentTarget, "crew"); });
     $("railBtn").addEventListener("click", () => setRailCollapsed(railWide));
     $("sideBtn").addEventListener("click", () => { setSideOpen(!sideOpen); if (sideOpen && innerWidth < 1280) $("sideClose").focus(); });
     $("sideClose").addEventListener("click", () => { setSideOpen(false); $("sideBtn").focus(); });
-    $("statusBtn").addEventListener("click", () => { stepsOpen = !stepsOpen; const tab = currentTab(); if (tab) renderStatusLine(tab); });
     $("saveBtn").addEventListener("click", () => startSave(currentTab()));
     $("chatMore").addEventListener("click", (event) => togglePopover($("ctxPop"), event.currentTarget, () => chatMenu(event.currentTarget)));
     $("scrim").addEventListener("click", () => closeLayer());
@@ -103,19 +102,6 @@
       if (!send({ type: "sendRequest", requestId, fromTabId: tab.id, toTabId, title, body })) return;
       pendingRequestActions.set(tab.id, requestId);
       renderRequests();
-    });
-    // Picking a kind starts the template that kind begins with; picking a template also sets the kind it belongs to, so the two never disagree.
-    bindRadios($("kindBox"), "[data-kind]", (button) => { tabKind = button.dataset.kind; tabTemplate = defaultTemplate(tabKind)?.id ?? ""; $("tplBox").innerHTML = templateOptions(tabTemplate); fixRadios($("modal")); });
-    bindRadios($("tplBox"), "[data-template]", (button) => {
-      tabTemplate = button.dataset.template;
-      const kind = templates().find((item) => item.id === tabTemplate)?.kind;
-      if (kind && kind !== tabKind) { tabKind = kind; $("kindBox").innerHTML = availableKindOptions(tabKind); fixRadios($("modal")); }
-    });
-    bindRadios($("pKind"), "[data-kind]", (button) => { projectKind = button.dataset.kind; projectTemplate = defaultTemplate(projectKind)?.id ?? ""; $("pTpl").innerHTML = templateOptions(projectTemplate); fixRadios($("projModal")); });
-    bindRadios($("pTpl"), "[data-template]", (button) => {
-      projectTemplate = button.dataset.template;
-      const kind = templates().find((item) => item.id === projectTemplate)?.kind;
-      if (kind && kind !== projectKind) { projectKind = kind; $("pKind").innerHTML = kindSegments(projectKind); fixRadios($("projModal")); }
     });
     $$('[data-close]').forEach((button) => button.addEventListener("click", () => { const layer = button.closest(".modal"); if (layer) setLayer(layer, false, null, true); else closeLayer(); }));
     document.addEventListener("keydown", (event) => heldApprovalKeys.add(event.code || event.key), true);
@@ -344,7 +330,6 @@
     if (!saveClientPref("crewRailOpen", !collapsed)) return;
     railWide = !collapsed;
     $("tip").classList.remove("on");
-    if (!$("setupPop").hidden) setLayer($("setupPop"), false, null, false, false);
     renderCrew();
   }
 

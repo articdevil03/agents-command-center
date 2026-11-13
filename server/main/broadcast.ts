@@ -1,21 +1,25 @@
 import { WebSocket } from "ws";
 import {
-  MODEL_OPTIONS, EFFORT_OPTIONS, OPENCODE_MODEL_SUGGESTIONS, CLAUDE_MODEL_INFO, discoveryInfo, acpKindOf, visibleTemplates, buildClis,
+  MODEL_OPTIONS, EFFORT_OPTIONS, OPENCODE_MODEL_SUGGESTIONS, CLAUDE_MODEL_INFO, discoveryInfo, acpKindOf, buildClis,
 } from "../config.ts";
 import { isRunning } from "../runner.ts";
 import { addUsage, zeroUsage, toUsageSnapshot } from "../usage.ts";
 import {
-  getStepBar, getApprovedCardLine, getLeaderStatusLine, getSeatTaskLine, getWorkingSeats, getRunViews, getRoundFlag, isBusy, rolesForPage,
+  getSeatTaskLine, getWorkingSeats, getRunViews, isBusy,
 } from "../process.ts";
 import { askerOf } from "./approvals.ts";
 import { launchedByOfRun } from "./launch.ts";
 import {
   BACKPRESSURE_LIMIT, EMPTY_CHANGES, EMPTY_NOTES, MAX_RUN_OUTPUT, acpClis, activeLeaderTurns, changesByTab, chatStore, clientPrefs, clients, describeError,
   laggingClients, launchSafety, leaderActivity, leaderJobs, leaderModels, leaderUsage, leaders, notesByTab, pendingApprovals, reportedChatProblems,
-  requestActions, requestsStore, runOutput, runUsage, savedSetups, savingTabs, selectedTabId, settingsService, workspaces,
+  requestActions, requestsStore, runOutput, runUsage, savingTabs, selectedTabId, settingsService, workspaces,
 } from "./state.ts";
-import { acpLeaderOf, clone, effectiveMode, hasAcpLeader, runtimeFor, tabLocation } from "./tabs.ts";
+import { acpLeaderOf, clone, effectiveMode, hasAcpLeader, runtimeFor, runtimeCrew, tabLocation } from "./tabs.ts";
 import { tabHasActiveWork } from "./workspace.ts";
+import { fixedCrewState } from "./fixed-crew.ts";
+import { FIXED_CREW } from "../fixed-crew/roster.ts";
+import { DEFAULTS_VERSION } from "../fixed-crew/role-prompts.ts";
+import { fixedTasks } from "./state.ts";
 
 export function appendRunOutput(runId: string, chunk: string): void {
   const next = (runOutput.get(runId) ?? "") + chunk;
@@ -67,7 +71,7 @@ export function stateMessage(): Record<string, unknown> {
         stalled: runtime.stalledRuns.has(run.id),
         launchedBy: launchedByOfRun(tab.id, run.id),
       }));
-      const crew = tab.crew.map((member) => {
+      const crew = runtimeCrew(tab).map((member) => {
         const engineSeat = state.seats.find((seat) => seat.slotId === member.slot)!;
         const active = engineRuns.filter((run) => run.seatSlotId === member.slot && run.status === "working");
         const status = active.some((run) => run.stalled) ? "stalled" : active.length ? "working" : engineSeat.status;
@@ -83,6 +87,8 @@ export function stateMessage(): Record<string, unknown> {
       }
       return {
         ...tab,
+        ...fixedCrewState(tab),
+        ...(tab.fixedCrew ? { fixedTask: fixedTasks?.summary(tab.id) ?? null } : {}),
         crew,
         permissionMode: effectiveMode(tab.id),
         acpLeader: hasAcpLeader(tab.id) ? { name: acpLeaderOf(tab.id)?.name ?? null, model: leaderModels.get(tab.id) ?? null } : null,
@@ -94,8 +100,7 @@ export function stateMessage(): Record<string, unknown> {
         runs: engineRuns,
         processState: state,
         derived: {
-          stepBar: getStepBar(state), approvedCardLine: getApprovedCardLine(state), leaderStatusLine: getLeaderStatusLine(state),
-          workingSeats: getWorkingSeats(state), runViews: getRunViews(state), roundFlag: getRoundFlag(state), leaderTurnActive: activeLeaderTurns.has(tab.id), busy: isBusy(state) || activeLeaderTurns.has(tab.id) || savingTabs.has(tab.id),
+          workingSeats: getWorkingSeats(state), runViews: getRunViews(state), leaderTurnActive: activeLeaderTurns.has(tab.id), busy: isBusy(state) || activeLeaderTurns.has(tab.id) || savingTabs.has(tab.id),
         },
         // The page asks before the app closes while any tab has this: the same check that refuses changing a busy tab's folder or process.
         activeWork: tabHasActiveWork(tab.id),
@@ -111,11 +116,12 @@ export function stateMessage(): Record<string, unknown> {
   }));
   return {
     type: "state", projects, selectedTabId,
+    fixedCrewDefinitions: FIXED_CREW.map(({ slot, role, canWrite, reviews }) => ({ slot, label: role, canWrite, reviews,
+      group: ["leader", "planner", "researcher", "helper", "secondOpinion"].includes(slot) ? "Planning"
+        : ["coder", "designCoder", "imageMaker", "socialMaker", "videoMaker"].includes(slot) ? "Making" : "Checking" })),
+    crewDefaultsVersion: DEFAULTS_VERSION,
     acpClis: acpClis.map((cli) => ({ ...cli, kind: acpKindOf(cli) })),
     clis: buildClis((cli) => settingsService.state.tools[cli].installed ?? null, acpClis),
-    templates: TEMPLATES_FOR_PAGE,
-    savedSetups: savedSetups.map(({ id, name, kind, crew, lookPause, steps }) => ({ id, name, kind, crew, lookPause, steps })),
-    roles: rolesForPage(),
     modelOptions: MODEL_OPTIONS, effortOptions: EFFORT_OPTIONS, opencodeModels: OPENCODE_MODEL_SUGGESTIONS,
     claudeModels: CLAUDE_MODEL_INFO, discoveryInfo, clientPrefs,
     launchSafety: { blocked: launchSafety.blocked, uncertain: launchSafety.uncertain, released: launchSafety.released, notices: launchSafety.notices },
@@ -127,8 +133,6 @@ export function stateMessage(): Record<string, unknown> {
     globalWork: globalWork(),
   };
 }
-// The templates never change while the app runs: built once for every state message.
-const TEMPLATES_FOR_PAGE = visibleTemplates().map(({ id, name, kind, desc, crew, lookPause, steps }) => ({ id, name, kind, desc, crew, lookPause, steps }));
 // Work that belongs to no tab and would be cut off by closing the app: a running Settings action (an install), an upload in flight,
 // and a process from an earlier session that was never confirmed closed.
 function globalWork(): string[] {

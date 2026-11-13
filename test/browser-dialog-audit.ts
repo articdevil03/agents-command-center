@@ -16,7 +16,7 @@ export async function chromeDialogAudit(args: { port: number; folder: string; wi
   const url = `http://${HOST}:${args.port}/__audit?${query}`;
   mkdirSync(args.profile, { recursive: true });
   const proc = spawn(CHROME, [
-    "--headless=new", "--remote-debugging-port=0", `--window-size=${args.width + 16},1000`,
+    "--headless=new", "--remote-debugging-port=0", `--window-size=${args.width + 16},1000`, "--window-position=1920,0",
     `--user-data-dir=${args.profile}`, "--no-sandbox", "--no-first-run", "--no-default-browser-check",
     "--disable-gpu", "--disable-gpu-sandbox", "--use-gl=swiftshader", "--disable-dev-shm-usage",
     "--disable-background-networking", "--no-proxy-server", "--hide-scrollbars", "about:blank",
@@ -107,7 +107,7 @@ export async function chromeDialogAudit(args: { port: number; folder: string; wi
       { id: "inboxPop", label: "Needs you", opener: "#inboxBtn", open: `(()=>{const e=document.querySelector("#inboxBtn");if(!e)return false;e.click();return true})()` },
       { id: "setModal", label: "Settings", opener: "#setBtn", open: `(()=>{const e=document.querySelector("#setBtn");if(!e)return false;e.click();return true})()` },
       { id: "avModal", label: "Avatar", opener: "#meBtn", open: `(()=>{const e=document.querySelector("#meBtn");if(!e)return false;e.click();return true})()` },
-      { id: "viewer", label: "Screenshots", opener: "#view [data-open-screenshots]", open: `(()=>{const e=document.querySelector("#view [data-open-screenshots]");if(!e)return false;e.click();return true})()` },
+      { id: "viewer", label: "Screenshots", opener: "#view [data-open-shot]", open: `(()=>{const e=document.querySelector("#view [data-open-shot]");if(!e)return false;e.click();return true})()` },
       { id: "modal", label: "Add tab", opener: "#addtab", open: `(()=>{const e=document.querySelector("#addtab");if(!e)return false;e.click();return true})()` },
       { id: "projModal", label: "New project", opener: "#addProj", open: `(()=>{const e=document.querySelector("#addProj");if(!e)return false;e.click();return true})()` },
       { id: "runModal", label: "Run a seat", opener: "#stagehead [data-run-seat]", open: `(()=>{const s=document.querySelector('#crew [data-seat-id="coder"] [data-seat-open]');if(!s)return false;s.click();const e=document.querySelector("#stagehead [data-run-seat]");if(!e)return false;e.click();return true})()` },
@@ -126,9 +126,9 @@ export async function chromeDialogAudit(args: { port: number; folder: string; wi
     assert.equal(uploadResponse.status, 200, `temporary screenshot upload succeeded: ${JSON.stringify(uploaded)}`);
     assert.ok(uploaded.path, `temporary screenshot path was returned: ${JSON.stringify(uploaded)}`);
     const screenshotTabId = "alpha-dev";
-    await evaluate(`(()=>{const state=structuredClone(window.__latestState);state.selectedTabId=${JSON.stringify(screenshotTabId)};const tab=state.projects.flatMap((project)=>project.tabs).find((item)=>item.id===${JSON.stringify(screenshotTabId)});if(!tab)return false;tab.processState.approval={state:"pending"};tab.processState.currentStepIndex=0;tab.derived.stepBar=[{stepId:"look",state:"current",owners:["user"],label:"Your look"}];window.__ccSeed=structuredClone(state);window.__ccDeliver({...state,type:"state"});window.__ccDeliver({type:"chatHistory",tabId:${JSON.stringify(screenshotTabId)},messages:[{id:"dialog-close-shot",role:"user",text:"Screenshot",images:[${JSON.stringify(uploaded.path)}],at:Date.now()}],revision:1,savedRevision:1});return true})()`);
-    await waitForPage(`Boolean(document.querySelector('#view [data-open-screenshots="${screenshotTabId}"]'))`, "screenshot viewer opener");
-    const screenshotOpener = `#view [data-open-screenshots="${screenshotTabId}"]`;
+    await evaluate(`(()=>{const state=structuredClone(window.__latestState);state.selectedTabId=${JSON.stringify(screenshotTabId)};const tab=state.projects.flatMap((project)=>project.tabs).find((item)=>item.id===${JSON.stringify(screenshotTabId)});if(!tab)return false;window.__ccSeed=structuredClone(state);window.__ccDeliver({...state,type:"state"});window.__ccDeliver({type:"chatHistory",tabId:${JSON.stringify(screenshotTabId)},messages:[{id:"dialog-close-shot",role:"user",text:"Screenshot",images:[${JSON.stringify(uploaded.path)}],at:Date.now()}],revision:1,savedRevision:1});return true})()`);
+    await waitForPage(`document.querySelector("#view [data-open-shot]")?.dataset.openShot===${JSON.stringify(uploaded.path)}`, "transcript image opener with the uploaded path");
+    const screenshotOpener = "#view [data-open-shot]";
     const viewerSpec = specs.find((item) => item.id === "viewer")!;
     viewerSpec.opener = screenshotOpener;
     viewerSpec.open = `(()=>{const e=document.querySelector(${JSON.stringify(screenshotOpener)});if(!e)return false;e.click();return true})()`;

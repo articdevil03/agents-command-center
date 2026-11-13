@@ -2,12 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { ChatStore } from "../server/chat-store.ts";
-import { tempWorkspaceFolders, loadServer, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
+import { config } from "./round2-setup.ts";
+import { tempWorkspaceFolders, loadFixed, startHelper, setAssignment, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
 
 const notesOf = (server: any, tabId: string): string | undefined => server.stateMessage().projects.flatMap((project: any) => project.tabs).find((tab: any) => tab.id === tabId)?.notes?.content;
 
 test("a completed leader turn refreshes its tab Changes and Notes snapshot", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "hello" });
   await tick();
   server.detailReads.length = 0;
@@ -20,7 +21,7 @@ test("a completed leader turn refreshes its tab Changes and Notes snapshot", asy
 });
 
 test("selecting a tab refreshes that tab's Changes and Notes snapshot", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "hello" });
   await tick();
   server.detailReads.length = 0;
@@ -33,9 +34,8 @@ test("selecting a tab refreshes that tab's Changes and Notes snapshot", async ()
 });
 
 test("a finished worker refreshes its tab's Changes and Notes snapshot", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "finish and refresh" });
-  const runId = server.launched[0].run.runId;
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  const { runId } = await startHelper(server);
   server.detailReads.length = 0;
   server.noteReads.length = 0;
   server.closeRun(runId, 0);
@@ -43,10 +43,11 @@ test("a finished worker refreshes its tab's Changes and Notes snapshot", async (
   assert.ok(server.noteReads.includes("C:/work/alpha"), "the finished worker handover note is reread");
   await waitFor(() => notesOf(server, "alpha-dev") === "notes of alpha-dev", "the note read for this tab's id reaches its state").catch(() => {});
   assert.equal(notesOf(server, "alpha-dev"), "notes of alpha-dev", "the note was read with this tab's id");
+  server.stopLeaderSession("alpha-dev");
 });
 
 test("the last workspace project cannot be removed", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "removeProject", projectId: "beta" });
   assert.equal(lastState(ws).projects.length, 1);
   ws.message({ type: "removeProject", projectId: "alpha" });
@@ -54,107 +55,106 @@ test("the last workspace project cannot be removed", async () => {
   assert.equal(lastState(ws).projects[0].id, "alpha");
 });
 
-test("run snapshots its tab folder and an idle leader restarts after the folder changes", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  ws.message({ type: "run", tabId: "alpha-design", slot: "designer", prompt: "design work" });
+test("a worker snapshots its tab folder and an idle leader restarts after the folder changes", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  const { runId } = await startHelper(server, "alpha-design", "helper", "design work");
   const run = server.launched[0].run;
+  assert.equal(run.runId, runId);
   assert.equal(run.folder, "C:/work/alpha/design");
   assert.equal(ws.messages.find((message: any) => message.type === "runStart" && message.runId === run.runId).folder, run.folder);
   ws.message({ type: "changeFolder", tabId: "alpha-design", folder: "C:/work/new-design" });
   assert.match(ws.messages.at(-1).message, /tab is busy/);
   server.closeRun(run.runId, 0);
+  await waitFor(() => !server.stateMessage().projects[0].tabs[1].activeWork, "the worker and its process tree end");
   ws.message({ type: "chat", tabId: "alpha-design", text: "start old-folder leader" });
   await tick();
+  await waitFor(() => !server.activeLeaderTurns.has("alpha-design"), "the old-folder answer ends");
   const oldLeader = server.leaders.get("alpha-design");
+  assert.ok(oldLeader, "the idle leader exists");
   ws.message({ type: "changeFolder", tabId: "alpha-design", folder: "C:/work/new-design" });
   assert.equal(oldLeader === server.leaders.get("alpha-design"), false);
   assert.equal(server.leaders.has("alpha-design"), false, "no leader runs in the new folder until the next message (its project hooks never run unasked)");
   ws.message({ type: "chat", tabId: "alpha-design", text: "start new-folder leader" });
   await tick();
   assert.equal(server.leaderCreates.at(-1).folder, "C:/work/new-design");
+  await waitFor(() => !server.activeLeaderTurns.has("alpha-design"), "the new-folder answer ends");
 });
 
-test("seat updates validate the whole request and preserve the prior member after a rejected field", async () => {
-  const server = await loadServer({ skipHealth: true });
+const slotOf = (server: any, slot: string) => server.getWorkspaces().projects[0].tabs[0].fixedCrew.preferences[slot];
+const CODEX_SOL = { cli: "codex", model: "gpt-6.1-sol", effort: "low" };
+
+test("a whole-assignment save validates every field and preserves the saved assignment after a rejected one", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
   ws.message({ type: "hello" });
-  const before = lastState(ws).projects[0].tabs[0].crew.find((seat: any) => seat.slot === "reviewer1");
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "reviewer1", name: "Changed", effort: "wild" });
-  assert.match(ws.messages.at(-1).message, /invalid effort/);
-  const after = lastState(ws).projects[0].tabs[0].crew.find((seat: any) => seat.slot === "reviewer1");
-  assert.equal(after.name, before.name);
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "reviewer1", name: "Changed", effort: "high" });
-  assert.equal(lastState(ws).projects[0].tabs[0].crew.find((seat: any) => seat.slot === "reviewer1").name, "Changed");
+  const before = structuredClone(slotOf(server, "reviewer1"));
+  const refused = await setAssignment(ws, "alpha-dev", "reviewer1", { ...CODEX_SOL, effort: "wild" });
+  assert.equal(refused.type, "error");
+  assert.match(refused.message, /Unknown crew effort/);
+  assert.deepEqual(slotOf(server, "reviewer1"), before, "nothing is saved after the rejected field");
+  const refusedModel = await setAssignment(ws, "alpha-dev", "reviewer1", { ...CODEX_SOL, model: "not-a-model" });
+  assert.match(refusedModel.message, /crew model/);
+  assert.deepEqual(slotOf(server, "reviewer1"), before);
+  const saved = await setAssignment(ws, "alpha-dev", "reviewer1", { ...CODEX_SOL, effort: "high" });
+  assert.equal(saved.type, "actionResult");
+  assert.deepEqual(slotOf(server, "reviewer1"), { assignment: { ...CODEX_SOL, effort: "high" }, source: "user" });
+  assert.equal(lastState(ws).projects[0].tabs[0].fixedCrew.preferences.reviewer1.assignment.effort, "high", "the page's state carries the saved assignment");
 });
 
-// Pack 7: a working crew seat keeps its model, effort and CLI; name and picture still change; the lock ends with the last run.
-test("pack 7: a working crew seat refuses a model, effort or CLI change and accepts it again once its runs end", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  const seatOf = () => server.getWorkspaces().projects[0].tabs[0].crew.find((seat: any) => seat.slot === "coder");
-  const before = { ...seatOf() };
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "working" });
-  const runId = server.launched[0].run.runId;
-  for (const change of [{ model: "gpt-6-sol" }, { effort: before.effort === "high" ? "low" : "high" }, { cli: "claude", model: "claude-opus-5" }]) {
-    const sent = ws.messages.length;
-    ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "coder", ...change });
-    assert.equal(ws.messages.slice(sent).findLast((message: any) => message.type === "error")?.message, `${before.name} is working. Change the model when its runs finish.`, JSON.stringify(change));
-    assert.deepEqual(seatOf(), before, "nothing is saved when the change is refused");
+// Pack 7: a working crew seat keeps its assignment; the lock ends with the last run.
+test("pack 7: a working crew seat refuses an assignment change and accepts it again once its runs end", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  const before = structuredClone(slotOf(server, "helper"));
+  const { runId } = await startHelper(server);
+  const otherModel = config.MODEL_OPTIONS.codex!.find((model) => model !== CODEX_SOL.model)!;
+  const changes = [{ ...CODEX_SOL, model: otherModel }, { ...CODEX_SOL, effort: "high" }, { cli: "claude", model: config.MODEL_OPTIONS.claude![0], effort: "high" }];
+  for (const assignment of changes) {
+    const answer = await setAssignment(ws, "alpha-dev", "helper", assignment);
+    assert.equal(answer.message, "This seat is working. Try again when it finishes", JSON.stringify(assignment));
+    assert.deepEqual(slotOf(server, "helper"), before, "nothing is saved when the change is refused");
   }
-  const sent = ws.messages.length;
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "coder", name: "Renamed", model: before.model });
-  assert.equal(ws.messages.slice(sent).some((message: any) => message.type === "error"), false, "a rename (with an unchanged model) still works: " + JSON.stringify(ws.messages.slice(sent).filter((message: any) => message.type === "error")));
-  assert.equal(seatOf().name, "Renamed");
   server.closeRun(runId, 0);
-  await waitFor(() => !lastState(ws).projects[0].tabs[0].runs.some((run: any) => run.status === "working"), "the run ends");
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "coder", model: "gpt-6-sol" });
-  assert.equal(seatOf().model, "gpt-6-sol", "after the run ends the same change is accepted");
+  await waitFor(() => !lastState(ws).projects[0].tabs[0].runs.some((run: any) => run.status === "working") && !server.stateMessage().projects[0].tabs[0].activeWork, "the run and its process tree end");
+  const accepted = await setAssignment(ws, "alpha-dev", "helper", changes[0]);
+  assert.equal(accepted.type, "actionResult");
+  assert.deepEqual(slotOf(server, "helper").assignment, changes[0], "after the run ends the same change is accepted");
+  server.stopLeaderSession("alpha-dev");
 });
 
 // Pack 7 round 1: a stop that was not confirmed may still be running, so its seat stays locked until the owner releases it.
-test("pack 7: a seat with an unconfirmed process refuses a model change until it is released; an old row with no seat locks nothing", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
-  const seatOf = () => server.getWorkspaces().projects[0].tabs[0].crew.find((seat: any) => seat.slot === "coder");
-  const before = { ...seatOf() };
+test("pack 7: a seat with an unconfirmed process refuses an assignment change until it is released; an old row with no seat locks nothing", async () => {
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
+  const before = structuredClone(slotOf(server, "coder").assignment);
+  const changed = { ...CODEX_SOL, effort: "high" };
   server.launchSafety.uncertain.push({ seatId: "old-seat", pid: 778 });
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "coder", model: "gpt-6-sol" });
-  assert.equal(seatOf().model, "gpt-6-sol", "a legacy row with no seat locks no seat");
+  assert.equal((await setAssignment(ws, "alpha-dev", "coder", changed)).type, "actionResult");
+  assert.deepEqual(slotOf(server, "coder").assignment, changed, "a legacy row with no seat locks no seat");
   server.launchSafety.uncertain.push({ seatId: "alpha-dev.coder", pid: 779 });
-  const sent = ws.messages.length;
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "coder", model: before.model });
-  assert.equal(ws.messages.slice(sent).findLast((message: any) => message.type === "error")?.message, `${before.name} is working. Change the model when its runs finish.`);
-  assert.equal(seatOf().model, "gpt-6-sol", "nothing is saved while the seat has an unconfirmed process");
+  const refused = await setAssignment(ws, "alpha-dev", "coder", before);
+  assert.equal(refused.message, "This seat is working. Try again when it finishes");
+  assert.deepEqual(slotOf(server, "coder").assignment, changed, "nothing is saved while the seat has an unconfirmed process");
   ws.message({ type: "releaseUnconfirmedSeat", seatId: "alpha-dev.coder", confirm: "release may leave a process running and editing files" });
-  ws.message({ type: "updateSeat", tabId: "alpha-dev", slot: "coder", model: before.model });
-  assert.equal(seatOf().model, before.model, "after the release the same change is accepted");
+  assert.equal((await setAssignment(ws, "alpha-dev", "coder", before)).type, "actionResult");
+  assert.deepEqual(slotOf(server, "coder").assignment, before, "after the release the same change is accepted");
 });
 
-test("process changes reject busy tabs and seats blocked after a stop, then rebuild the saved crew once released", async () => {
-  const server = await loadServer({ skipHealth: true });
+test("a seat blocked after a stop refuses a new launch until the owner unblocks it", async () => {
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
-  const oldCrew = structuredClone(server.getWorkspaces().projects[0].tabs[0].crew);
-  const coder = oldCrew.find((seat: any) => seat.slot === "coder");
-  ws.message({ type: "run", tabId: "alpha-dev", slot: "coder", prompt: "working" });
-  ws.message({ type: "useSetup", tabId: "alpha-dev", templateId: "blank" });
-  assert.match(ws.messages.at(-1).message, /busy/);
-  ws.message({ type: "killRun", runId: server.launched[0].run.runId });
-  ws.message({ type: "useSetup", tabId: "alpha-dev", templateId: "blank" });
-  const error = ws.messages.findLast((message: any) => message.type === "error");
-  assert.match(error.message, /cannot be taken out yet/);
-  assert.ok(error.message.includes(coder.name), "the refusal names the coder seat");
-  const unchanged = lastState(ws).projects[0].tabs[0];
-  assert.equal(unchanged.setupName, "The Main Crew");
-  assert.deepEqual(unchanged.crew.map((seat: any) => seat.slot), oldCrew.map((seat: any) => seat.slot));
-  assert.deepEqual(server.getWorkspaces().projects[0].tabs[0].crew, oldCrew, "nothing is saved while the stopped seat is blocked");
-  ws.message({ type: "unblockSeat", seatKey: "alpha-dev.coder", confirm: "allow this seat to launch again" });
+  const { runId } = await startHelper(server);
+  ws.message({ type: "killRun", runId });
+  await waitFor(() => server.blockedSeatKeys.has("alpha-dev.helper") && server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId === null, "the stopped seat is blocked and its process tree confirmed ended");
+  await assert.rejects(startHelper(server), /launch blocked after a prior stop: alpha-dev\.helper/);
+  assert.equal(server.launched.length, 1, "no second run started");
+  ws.message({ type: "unblockSeat", seatKey: "alpha-dev.helper", confirm: "allow this seat to launch again" });
   assert.equal(ws.messages.findLast((message: any) => message.type === "launchBlockCleared")?.cleared, true);
-  ws.message({ type: "useSetup", tabId: "alpha-dev", templateId: "blank" });
-  const tab = lastState(ws).projects[0].tabs[0];
-  assert.equal(tab.setupName, "Start blank");
-  assert.deepEqual(tab.crew.map((seat: any) => seat.slot), ["leader"]);
+  assert.equal(typeof (await startHelper(server)).runId, "string");
+  assert.equal(server.launched.length, 2);
+  server.stopLeaderSession("alpha-dev");
 });
 
 test("chat, clear, and transcript revisions stay scoped to their tab", async () => {
-  const server = await loadServer({ skipHealth: true });
+  const server = await loadFixed({ skipHealth: true });
   const ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "alpha" });
   ws.message({ type: "chat", tabId: "beta-dev", text: "beta" });
@@ -174,8 +174,8 @@ test("chat, clear, and transcript revisions stay scoped to their tab", async () 
 });
 
 test("Clear Undo restores the exact transcript and revisions and stops a fresh leader", async () => {
-  const workspaces = tempWorkspaceFolders();
-  const server = await loadServer({ skipHealth: true, writeHandover: true, workspaces }), ws = connect(server);
+  const workspaces = tempWorkspaceFolders("fixed");
+  const server = await loadFixed({ skipHealth: true, writeHandover: true, workspaces }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "old work" });
   await tick();
   ws.message({ type: "save", tabId: "alpha-dev" });
@@ -209,7 +209,7 @@ test("Clear Undo restores the exact transcript and revisions and stops a fresh l
 test("Clear Undo expires after 10 seconds", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   t.after(() => t.mock.timers.reset());
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "clear", tabId: "alpha-dev" });
   assert.equal(server.pendingClearUndos.has("alpha-dev"), true);
   t.mock.timers.tick(9_999);
@@ -224,7 +224,7 @@ test("Clear Undo expires after 10 seconds", async (t) => {
 });
 
 test("Undo on another tab leaves the cleared tab and its pending snapshot unchanged", async () => {
-  const server = await loadServer({ skipHealth: true }), ws = connect(server);
+  const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   ws.message({ type: "chat", tabId: "alpha-dev", text: "keep this" });
   await tick();
   const before = new ChatStore(path.join(server.testRoot, "chats")).snapshot("alpha-dev");
