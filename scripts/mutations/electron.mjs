@@ -17,10 +17,10 @@ export const electronMutations = [
   // must come forward instead ----
   ["guard-single-instance-lock-call", "electron/main.js", 'const gotLock = app.requestSingleInstanceLock();', 'const gotLock = true;'],
   ["guard-single-instance-refusal", "electron/main.js", 'if (!gotLock) {', 'if (false) {'],
-  ["guard-single-instance-second-instance-wiring","electron/main.js","app.on(\"second-instance\", () => {\n    const win = BrowserWindow.getAllWindows()[0];\n    if (!win) { if (serverStopping) relaunchAfterQuit = true; return; }\n    if (win.isMinimized()) win.restore();\n    win.focus();\n  });",""],
+  ["guard-single-instance-second-instance-wiring","electron/main.js","app.on(\"second-instance\", () => {\n    if (serverStopping) { relaunchAfterQuit = true; return; }\n    const win = BrowserWindow.getAllWindows()[0];\n    if (!win) return;\n    if (win.isMinimized()) win.restore();\n    win.focus();\n  });",""],
   // The close warning's "hold" (run G) restores and focuses the window too, earlier in the file: these two name the second-instance lines exactly.
   ["guard-single-instance-focus-call", "electron/main.js", '    if (win.isMinimized()) win.restore();\n    win.focus();\n  });', '    if (win.isMinimized()) win.restore();\n  });'],
-  ["guard-single-instance-restore-call","electron/main.js","    if (!win) { if (serverStopping) relaunchAfterQuit = true; return; }\n    if (win.isMinimized()) win.restore();\n","    if (!win) { if (serverStopping) relaunchAfterQuit = true; return; }\n"],
+  ["guard-single-instance-restore-call","electron/main.js","    if (!win) return;\n    if (win.isMinimized()) win.restore();\n","    if (!win) return;\n"],
   ["guard-port-parse-regex", "electron/server-process.js", 'const match = /(?:^|\\n)Command Center running at http:\\/\\/[^:\\s]+:(\\d+)\\r?\\n/.exec(text);', 'const match = /:(\\d+)/.exec(text);'],
   ["guard-split-port", "electron/server-process.js", ':(\\d+)\\r?\\n/.exec(text)', ':(\\d+)/.exec(text)'],
   ["guard-startup-buffer", "electron/server-process.js", 'buffered += chunk.toString("utf8");', 'buffered = chunk.toString("utf8");'],

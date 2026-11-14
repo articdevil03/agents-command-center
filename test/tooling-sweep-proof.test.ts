@@ -12,8 +12,8 @@ import { lowerOwnPriority, runTests, SWEEP_PRIORITY } from "../scripts/sweep/run
 import { PAGE_PROOFS } from "./tooling-sweep-proof-page.ts";
 import { BROWSER_PROOFS } from "./tooling-sweep-proof-browser.ts";
 import { SERVER_PROOFS } from "./tooling-sweep-proof-server.ts";
+import { PACK28_PROOFS } from "./tooling-sweep-proof-pack28.ts";
 import { PACK27_PROOFS } from "./tooling-sweep-proof-pack27.ts";
-
 // Explicit safe mappings. Ownership guards select pure cases; run guards select fake process seams.
 const PROOFS: Record<string, [string, string]> = {
   "fcbui-status-blocked": ["test/fixed-crew-bulk-page.test.ts", "^FCBUI "],
@@ -39,6 +39,7 @@ const PROOFS: Record<string, [string, string]> = {
   ...BROWSER_PROOFS,
   ...SERVER_PROOFS,
   ...PACK27_PROOFS,
+  ...PACK28_PROOFS,
   "p18-bridge-per-run": ["test/pack18-orchestrator.test.ts", "^O1 one bridge"],
   "b5-fixed-launcher": ["test/pack18-orchestrator.test.ts", "^O3 "],
   "guard-leader-launch-notifies": ["test/pack18-orchestrator.test.ts", "^O3 "],
@@ -314,7 +315,6 @@ const PROOFS: Record<string, [string, string]> = {
   "guard-sweep-failed-no-map": ["test/tooling-sweep-main.test.ts","^C1 failed controls"],
   "guard-sweep-controls-no-map": ["test/tooling-sweep-main.test.ts","^a control row"],
 };
-
 const root = fileURLToPath(new URL("..", import.meta.url));
 const selection = process.env.CC_SWEEP_PROOF_ROW;
 const lf = (text: string) => text.replaceAll("\r\n", "\n");

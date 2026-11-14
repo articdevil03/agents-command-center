@@ -5,6 +5,7 @@ import { root, smokeReadyFile, smokeStopFile } from "./config.js";
 import { serverProcess, appKey, serverStopping, startServer, stopServer } from "./server-process.js";
 import { MIN_WIDTH, MIN_HEIGHT, readWindowBounds, writeWindowBounds } from "./window-state.js";
 import { classifyNavigation, isAllowedObsidianUrl, wireNavigationPolicy } from "./navigation.js";
+import { showClosingNoticeUntil } from "./closing-notice.js";
 
 const SMOKE_STOP_TIMEOUT_MS = 30_000;
 const BG_COLOR = "#0a0a0c";
@@ -259,8 +260,9 @@ if (!gotLock) {
   // A launch that arrives while this instance is still shutting down loses the lock and quits, so this instance starts the app again once it is gone.
   let relaunchAfterQuit = false;
   app.on("second-instance", () => {
+    if (serverStopping) { relaunchAfterQuit = true; return; }
     const win = BrowserWindow.getAllWindows()[0];
-    if (!win) { if (serverStopping) relaunchAfterQuit = true; return; }
+    if (!win) return;
     if (win.isMinimized()) win.restore();
     win.focus();
   });
@@ -307,13 +309,18 @@ if (!gotLock) {
     app.quit();
   });
   let quitReady = false;
+  let quitPending = false;
   app.on("before-quit", (event) => {
     if (quitReady) return;
     event.preventDefault();
+    if (quitPending) return;
     // File > Quit asks the page like a close does; its "close" closes the window, and window-all-closed comes back here to quit.
     const win = BrowserWindow.getAllWindows()[0];
     if (win && closeNeedsAsking(win)) { askBeforeClose(win); return; }
-    stopServer().then(() => {
+    quitPending = true;
+    const stopped = stopServer();
+    if (!sessionEnding) showClosingNoticeUntil(stopped);
+    stopped.then(() => {
       quitReady = true;
       // A portable build runs from a temp folder that goes away with it: PORTABLE_EXECUTABLE_FILE (set by electron-builder) is the exe to start again.
       if (relaunchAfterQuit) app.relaunch(process.env.PORTABLE_EXECUTABLE_FILE ? { execPath: process.env.PORTABLE_EXECUTABLE_FILE } : undefined);

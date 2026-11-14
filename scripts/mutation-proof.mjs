@@ -13,6 +13,7 @@ import { testsRound2Mutations } from "./mutations/tests-round2.mjs";
 import { testsServerPacksMutations } from "./mutations/tests-server-packs.mjs";
 import { testsToolingMutations } from "./mutations/tests-tooling.mjs";
 import { toolingMutations } from "./mutations/tooling.mjs";
+import { pack28ClosingNoticeMutations } from "./mutations/pack28-closing-notice.mjs";
 import { pack27AdvisorMutations } from "./mutations/pack27-advisor.mjs";
 
 // design/ is the owner's private design workspace and is not part of a shared checkout: its paths are copied (and its catalogue entries swept)
@@ -100,6 +101,7 @@ export const mutations = [
   ...testsToolingMutations,
   ...toolingMutations,
   ...pack27AdvisorMutations,
+  ...pack28ClosingNoticeMutations,
 ];
 
 // Behaviour a mutation exists for but that no test at HEAD would fail on yet. Each entry is [name, file, from, to, why no test]. The sweep does not

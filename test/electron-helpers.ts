@@ -42,22 +42,36 @@ export const { parseServerPort, sanitizeWindowBounds, readWindowBounds, writeWin
 
 // Execute the production wiring with event/IO dependencies, no DOM or Electron runner.
 export let keyCount = 0;
-export function shellHarness(savedBounds = {}, { lockAcquired = true, smokeReadyFile, smokeStopFile, smokeDataDir, inheritedDiscoverySkip = false } = {}) {
+export function shellHarness(savedBounds = {}, { lockAcquired = true, smokeReadyFile, smokeStopFile, smokeDataDir, inheritedDiscoverySkip = false, noticeTesting = false, lifecycle = false, noticeFault = "", pendingNoticeLoad = false } = {}) {
   const timers = new Map();
   const intervals = new Map();
   const files = new Map();
   const userDataPaths = [];
   let userDataPath = "test-data";
+  let quitAccepted = false;
   const order = [];
   const app = Object.assign(new EventEmitter(), {
     getPath: () => userDataPath,
     setPath: (key, value) => { userDataPaths.push([key, value]); if (key === "userData") userDataPath = value; },
     whenReady: () => ({ then: (fn) => { ready = fn; return { catch: (fn) => { startupFailure = fn; } }; } }),
-    quit: () => { quits++; },
+    quit: () => {
+      quits++;
+      if (!lifecycle) return;
+      let prevented = false;
+      app.emit("before-quit", { preventDefault() { prevented = true; } });
+      quitEvents.push(prevented ? "prevented" : "allowed");
+      if (!prevented) {
+        quitAccepted = true;
+        for (const window of BrowserWindowMock.getAllWindows()) window.close();
+      }
+    },
     requestSingleInstanceLock: () => { order.push("lock"); return lockAcquired; },
     relaunch: (options) => { relaunches.push(options); },
   });
   const relaunches = [];
+  const quitEvents = [];
+  const notices = [];
+  let noticeAttempts = 0;
   let windowGone = false;
   let ready;
   let startupFailure;
@@ -81,6 +95,8 @@ export function shellHarness(savedBounds = {}, { lockAcquired = true, smokeReady
   let messageChoice = 0;
   let folderDialogResult = { canceled: false, filePaths: ["C:/Chosen"] };
   const env = { CC_TEST_FORCE_PACKAGED: "1", NODE_TEST_CONTEXT: "child-v8" };
+  if (noticeTesting) delete env.NODE_TEST_CONTEXT;
+  if (smokeStopFile) env.CC_SMOKE_STOP_FILE = smokeStopFile;
   if (inheritedDiscoverySkip) env.CC_SKIP_DISCOVERY = "1";
   if (smokeReadyFile) Object.assign(env, {
     CC_SMOKE_READY_FILE: smokeReadyFile,
@@ -94,7 +110,7 @@ export function shellHarness(savedBounds = {}, { lockAcquired = true, smokeReady
   // close() fires "close", then "closed" unless a "close" listener prevented it, like Electron's; destroy() skips "close".
   const win = Object.assign(new EventEmitter(), {
     webContents: Object.assign(new EventEmitter(), { setWindowOpenHandler: (fn) => { popup = fn; }, send: (channel, ...args) => toPage.push([channel, ...args]), getURL: () => loaded.at(-1) ?? "", reload: () => order.push("reload") }),
-    loadURL: (url) => { loaded.push(url); }, isDestroyed: () => false,
+    loadURL: (url) => { loaded.push(url); }, isDestroyed: () => lifecycle && windowGone,
     isMinimized: () => minimized, restore: () => order.push("restore"), focus: () => order.push("focus"),
     setMenuBarVisibility: (visible) => order.push(`menuBar:${visible}`),
     minimize: () => order.push("minimize"), isMaximized: () => maximized,
@@ -107,10 +123,44 @@ export function shellHarness(savedBounds = {}, { lockAcquired = true, smokeReady
     destroy: () => { order.push("destroy"); win.emit("closed"); },
   });
   let popup;
+  const allClosed = () => { if (lifecycle && !quitAccepted && !BrowserWindowMock.getAllWindows().length) app.emit("window-all-closed"); };
   win.on("closed", () => { windowGone = true; });
-  function BrowserWindowMock(options) { order.push("window"); windowOptions.push(plain(options)); return win; }
-  BrowserWindowMock.getAllWindows = () => (windowOptions.length && !windowGone ? [win] : []);
-  BrowserWindowMock.fromWebContents = (sender) => (sender === win.webContents ? win : null);
+  function BrowserWindowMock(options) {
+    if (options.webPreferences?.preload) { order.push("window"); windowOptions.push(plain(options)); return win; }
+    noticeAttempts++;
+    if (noticeFault === "constructor") throw new Error("notice constructor");
+    let destroyed = false;
+    const calls = [];
+    const notice = Object.assign(new EventEmitter(), {
+      options: plain(options), calls, webContents: new EventEmitter(), url: "",
+      resolveLoad: () => {}, rejectLoad: (_error) => {},
+      isDestroyed: () => destroyed,
+      loadURL: (url) => {
+        notice.url = url;
+        if (noticeFault === "load-sync") throw new Error("notice load");
+        if (noticeFault === "load-reject") return Promise.reject(new Error("notice load"));
+        if (!pendingNoticeLoad) return Promise.resolve();
+        return new Promise((resolve, reject) => { notice.resolveLoad = resolve; notice.rejectLoad = reject; });
+      },
+      showInactive: () => { calls.push("showInactive"); if (noticeFault === "show") throw new Error("notice show"); },
+      focus: () => calls.push("focus"),
+      hide: () => { calls.push("hide"); if (noticeFault === "hide") throw new Error("notice hide"); },
+      destroy: () => {
+        calls.push("destroy");
+        if (["destroy", "hide"].includes(noticeFault)) throw new Error("notice destroy");
+        if (destroyed) return;
+        destroyed = true; notice.emit("closed"); allClosed();
+      },
+      close: () => { calls.push("close"); destroyed = true; notice.emit("closed"); allClosed(); },
+    });
+    notices.push(notice);
+    return notice;
+  }
+  BrowserWindowMock.getAllWindows = () => [...(windowOptions.length && !windowGone ? [win] : []), ...notices.filter((notice) => !notice.isDestroyed())];
+  BrowserWindowMock.fromWebContents = (sender) => BrowserWindowMock.getAllWindows().find((window) => window.webContents === sender) ?? (sender === win.webContents && !lifecycle ? win : null);
+  // Registered before production's closed listener, but invoked after all of them have run.
+  const originalEmit = win.emit.bind(win);
+  win.emit = (event, ...args) => { const result = originalEmit(event, ...args); if (event === "closed") allClosed(); return result; };
   const api = runInNewContext(source.replace(/^import .*;$/gm, "")
     .replace(/const root = .*;/, 'const root = "test-root";').replaceAll("export ", "") +
     ";({ startServer, stopServer, MIN_WIDTH, MIN_HEIGHT, wireNavigationPolicy, getProcess: () => serverProcess })", {
@@ -135,12 +185,12 @@ export function shellHarness(savedBounds = {}, { lockAcquired = true, smokeReady
     createServer: () => Object.assign(new EventEmitter(), {
       listen: (_port, _host, cb) => cb(), address: () => ({ port: 51234 }), close: (cb) => cb(),
     }),
-    setTimeout: (fn, ms) => { const id = {}; timers.set(id, { fn, ms }); return id; },
+    setTimeout: (fn, ms) => { const entry = { fn, ms, unrefed: false }; const id = { unref: () => { entry.unrefed = true; } }; timers.set(id, entry); return id; },
     clearTimeout: (id) => timers.delete(id),
     setInterval: (fn, ms) => { const id = {}; intervals.set(id, { fn, ms }); return id; },
     clearInterval: (id) => intervals.delete(id),
   });
-  return { ...api, app, proc, killer, spawns, sent, timers, intervals, files, userDataPaths, external, win, loaded, windowOptions, order, ipcHandlers, permissionHandlers, dialogCalls, parents, messageBoxes, relaunches, env, menus, toPage,
+  return { ...api, app, proc, killer, spawns, sent, timers, intervals, files, userDataPaths, external, win, loaded, windowOptions, order, ipcHandlers, permissionHandlers, dialogCalls, parents, messageBoxes, relaunches, env, menus, toPage, notices, quitEvents, noticeAttempts: () => noticeAttempts,
     ready: () => ready().catch(startupFailure), quits: () => quits, popup: (url) => popup({ url }),
     setMinimized: (value) => { minimized = value; }, setMaximized: (value) => { maximized = value; }, setMessageChoice: (value) => { messageChoice = value; }, setFolderDialogResult: (value) => { folderDialogResult = value; } };
 }
