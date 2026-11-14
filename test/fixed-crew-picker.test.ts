@@ -75,7 +75,12 @@ test("FCPICK saved advisors: each fixed position shows its own saved advisor in 
     assert.match(String(shown.reviewer1), /^Your choice · [^·]+$/, "a Codex position shows no advisor");
     assert.equal(shown.helper, "No model assigned", "an unassigned position shows no advisor either");
     assert.doesNotMatch(Object.values(shown).join("|"), /claude-fable|\[1m\]/, "no raw advisor id is shown");
-    assert.equal(await ev(`document.querySelectorAll("#setModal [data-settings-advisor],#setModal [data-seat-advisor],#setModal [data-advisor]").length`), 0, "Settings offers no advisor edit control");
+    assert.equal(await ev(`document.querySelectorAll("#setModal [data-settings-advisor],#setModal [data-seat-advisor],#setModal [data-advisor]").length`), 0, "no retired seat-editor or popup advisor controls appear in Settings");
+    assert.deepEqual(await ev(`[...document.querySelectorAll('#setModal [data-fc-advisor]:not([hidden])')].map(el=>[el.dataset.fcAdvisor,el.value])`), [["leader", saved.leader.advisor], ["planner", saved.planner.advisor], ["coder", ""]], "Settings row controls show each capable position's own advisor or Off");
+    await click(ev, '#setModal [data-fc-model="leader"]');
+    assert.equal(await ev(`Boolean(document.querySelector('#pop #mq'))`), true, "model popup FOUND");
+    assert.equal(await ev(`document.querySelectorAll('#pop [data-advisor],#pop [data-fc-advisor],#pop select[aria-label="Advisor"]').length`), 0, "the model popup has no advisor control");
+    await ev(`setLayer(document.querySelector('#pop'),false);true`);
     await click(ev, "#setModal [data-close]");
     await click(ev, "#sideBtn");
     await waitFor(`!document.querySelector("#side").hidden`, "the Details panel");

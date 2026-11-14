@@ -12,6 +12,7 @@ import { lowerOwnPriority, runTests, SWEEP_PRIORITY } from "../scripts/sweep/run
 import { PAGE_PROOFS } from "./tooling-sweep-proof-page.ts";
 import { BROWSER_PROOFS } from "./tooling-sweep-proof-browser.ts";
 import { SERVER_PROOFS } from "./tooling-sweep-proof-server.ts";
+import { PACK27_PROOFS } from "./tooling-sweep-proof-pack27.ts";
 
 // Explicit safe mappings. Ownership guards select pure cases; run guards select fake process seams.
 const PROOFS: Record<string, [string, string]> = {
@@ -37,6 +38,7 @@ const PROOFS: Record<string, [string, string]> = {
   ...PAGE_PROOFS,
   ...BROWSER_PROOFS,
   ...SERVER_PROOFS,
+  ...PACK27_PROOFS,
   "p18-bridge-per-run": ["test/pack18-orchestrator.test.ts", "^O1 one bridge"],
   "b5-fixed-launcher": ["test/pack18-orchestrator.test.ts", "^O3 "],
   "guard-leader-launch-notifies": ["test/pack18-orchestrator.test.ts", "^O3 "],

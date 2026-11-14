@@ -6,6 +6,8 @@
   const FC = (window.CC_FIXED_CREW = window.CC_FIXED_CREW ?? {});
 
   FC.init = (page) => {
+    // The classic page exposes this catalogue globally; older fixed-crew adapters omit it.
+    page.modelOptions ??= window.modelOptions;
     const refresh = () => { if (!page.$("setModal").hidden) page.renderSettings(); };
     const store = FC.createState(page.connected, refresh);
     const view = FC.createView(page, store);
@@ -19,6 +21,13 @@
     }
     // A pick from the shared model menu ({ model, cli? } or { effort }) made into a whole assignment. An advisor stays only on its own CLI.
     function assignmentFrom(fields, current) {
+      if (Object.hasOwn(fields, "advisor")) {
+        if (!current || !page.cliCap(current.cli)?.advisor) return null;
+        const next = { ...current };
+        if (fields.advisor === "") delete next.advisor;
+        else next.advisor = fields.advisor;
+        return next;
+      }
       if (fields.effort) return current ? { ...current, effort: fields.effort } : null;
       const cli = fields.cli ?? current?.cli;
       if (!cli || typeof fields.model !== "string") return null;
@@ -134,6 +143,13 @@
         else if (data.fcToggle) toggleInstructions(tab, data.fcToggle);
         else if (data.fcSave) saveExtra(tab, data.fcSave, false);
         else if (data.fcReset) saveExtra(tab, data.fcReset, true);
+      });
+      root.addEventListener("change", (event) => {
+        const control = event.target.closest?.("[data-fc-advisor]"), tab = page.findTab(root.dataset.fcTab);
+        if (!control || !root.contains(control) || control.disabled || control.hidden || !tab?.fixedCrew || tab.fixedCrew.unavailable) return;
+        const slot = control.dataset.fcAdvisor, current = view.preference(tab, slot).assignment, row = view.row(tab, slot);
+        if (!current?.model || current.cli !== control.dataset.cli || !page.cliCap(current.cli)?.advisor || row.busy || row.saving || row.modelSaving) return;
+        settingsPicker(tab.id, slot).pick({ advisor: control.value });
       });
       root.addEventListener("input", (event) => {
         const area = event.target.closest?.("[data-fc-extra]"), tab = page.findTab(root.dataset.fcTab);

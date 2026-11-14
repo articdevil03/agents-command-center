@@ -264,9 +264,11 @@ test("FCUI extra instructions: built-in text, literal hostile text, broadcasts w
     // Keyboard: Tab and Shift+Tab move, Enter opens the menu, Escape closes the innermost layer and gives focus back, Space opens Instructions.
     const focusKey = `document.activeElement?.dataset.focusKey??document.activeElement?.id`;
     await ev(`document.querySelector("#setModal [data-fc-auto]").focus()`);
+    await press(page, "Tab"); assert.equal(await ev(focusKey), "fc-advisor-leader");
     await press(page, "Tab"); assert.equal(await ev(focusKey), "fc-model-leader");
+    await press(page, "Tab", true); assert.equal(await ev(focusKey), "fc-advisor-leader");
     await press(page, "Tab", true); assert.equal(await ev(focusKey), "fc-auto");
-    await press(page, "Tab"); await press(page, "Enter");
+    await press(page, "Tab"); await press(page, "Tab"); await press(page, "Enter");
     await waitFor(`!document.querySelector("#pop").hidden&&document.activeElement?.id==="mq"`, "Enter opened the leader's model menu");
     await page("Input.insertText", { text: "son" });
     await deliverState(ev, discovered, both);

@@ -223,7 +223,7 @@ An ACP leader sends `initialize` (protocol version 1, no file or terminal capabi
 
 ### Advisor
 
-A position's `advisor` (set with `setCrewAssignment`) is applied to any Claude position: a Claude leader started with the native CLI (the same condition as `--effort`), or a Claude worker run, gets `--advisor <model>` in its arguments (a value that is not a Claude model is refused before anything starts). The advisor is read when the session starts, so a change takes effect on the next leader session (after Stop, Clear, a CLI switch or a restart) or the next run. Codex, OpenCode and `acp:` positions have none (`clis[].advisor` is false).
+A position's `advisor` (set with `setCrewAssignment`) is applied to any Claude position: a Claude leader started with the native CLI (the same condition as `--effort`), or a Claude worker run, gets `--advisor <model>` in its arguments (a value that is not a Claude model is refused before anything starts). Settings > Crew and models offers the Advisor dropdown in each capable assigned position row beside its model button; the model popup has no advisor control. Off omits the `advisor` field and pins the whole assignment as `source: "user"`, so Auto assign keeps it. A saved Leader change applies from the next message, automatically starting a new session; the current session is unchanged until then. Worker changes apply from the next run, and an approved task needs a new plan after its worker assignment changes. Codex, OpenCode and `acp:` positions have none (`clis[].advisor` is false).
 
 ### Limits
 

@@ -1,0 +1,21 @@
+// Every mutation is assigned exactly one complete, anchored top-level title.
+export const PACK27_PROOFS: Record<string, [string, string]> = {
+  "p27-ui-pending-value": ["test/pack27-advisor-page.test.ts", "^P27 advisor select holds the chosen value while saving$"],
+  "p27-ui-capability": ["test/pack27-advisor-page.test.ts", "^P27 advisor control follows capabilities$"],
+  "p27-ui-send": ["test/pack27-advisor-page.test.ts", "^P27 picker saves advisor and Off$"],
+  "p27-ui-lock-display": ["test/pack27-advisor-page.test.ts", "^P27 advisor control guards retained listeners$"],
+  "p27-ui-live-lock": ["test/pack27-advisor-page.test.ts", "^P27 advisor control guards retained listeners$"],
+  "p27-ui-stale-cli": ["test/pack27-advisor-page.test.ts", "^P27 advisor control guards retained listeners$"],
+  "p27-choice-setter": ["test/pack27-advisor-page.test.ts", "^P27 picker saves advisor and Off$"],
+  "p27-off-setter": ["test/pack27-advisor-page.test.ts", "^P27 picker saves advisor and Off$"],
+  "p27-cli-clear": ["test/pack27-advisor-page.test.ts", "^P27 picker saves advisor and Off$"],
+  "p27-route-advisor": ["test/pack27-advisor-server.test.ts", "^P27 saves advisor and Off through the message route$"],
+  "p27-advisor-validation": ["test/pack27-advisor-server.test.ts", "^P27 rejects invalid and busy advisor edits$"],
+  "p27-user-source": ["test/pack27-advisor-server.test.ts", "^P27 Auto assign preserves a user advisor choice$"],
+  "p27-auto-default": ["test/pack27-advisor-server.test.ts", "^P27 Auto assign preserves a user advisor choice$"],
+  "p27-digest-advisor": ["test/pack27-advisor-server.test.ts", "^P27 advisor edits invalidate stale bulk digests$"],
+  "p27-worker-forward": ["test/pack27-advisor-launch.test.ts", "^P27 worker launch carries advisor and Off without changing access$"],
+  "p27-leader-forward": ["test/pack27-advisor-launch.test.ts", "^P27 leader starts the next session with the saved advisor$"],
+  "p27-leader-flag": ["test/pack27-advisor-launch.test.ts", "^P27 leader starts the next session with the saved advisor$"],
+  "p27-leader-restart": ["test/pack27-advisor-launch.test.ts", "^P27 leader starts the next session with the saved advisor$"],
+};

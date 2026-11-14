@@ -13,6 +13,7 @@ import { testsRound2Mutations } from "./mutations/tests-round2.mjs";
 import { testsServerPacksMutations } from "./mutations/tests-server-packs.mjs";
 import { testsToolingMutations } from "./mutations/tests-tooling.mjs";
 import { toolingMutations } from "./mutations/tooling.mjs";
+import { pack27AdvisorMutations } from "./mutations/pack27-advisor.mjs";
 
 // design/ is the owner's private design workspace and is not part of a shared checkout: its paths are copied (and its catalogue entries swept)
 // only when the design folder exists at the repo root. The condition is the folder, never one file inside it, so a missing file still fails loudly.
@@ -98,6 +99,7 @@ export const mutations = [
   ...testsServerPacksMutations,
   ...testsToolingMutations,
   ...toolingMutations,
+  ...pack27AdvisorMutations,
 ];
 
 // Behaviour a mutation exists for but that no test at HEAD would fail on yet. Each entry is [name, file, from, to, why no test]. The sweep does not

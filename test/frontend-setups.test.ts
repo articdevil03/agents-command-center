@@ -28,7 +28,7 @@ test("pack 18 P2: the seat card's Advisor fact follows the CLI's advisor capabil
   assert.equal(advisor(card("oracle")), "✦ Off", "an ACP CLI the server says can advise gets the fact, whatever its name");
   assert.equal(advisor(card("kimi")), null, "an ACP CLI that cannot advise does not");
   for (const slot of ["leader", "planner", "coder", "reviewer1", "oracle", "kimi"]) assert.doesNotMatch(card(slot), /data-seat-advisor|data-seat-model|data-advisor|<button[^>]*class="rowb"/, `${slot}: no model or advisor edit control and no chevron button on the card`);
-  // Settings has no seat rows or advisor controls: a fixed position's saved advisor and the Usage panel are proved on the real page in test/fixed-crew-picker.test.ts (FCPICK saved advisors).
+  // The seat card stays read-only. Settings position rows edit advisors beside the model button (pack27-advisor-page.test.ts); Usage facts are covered by FCPICK saved advisors.
 });
 
 // Block 5 slice 2a: creation is fixed-crew only. The old Our process default and the kind and template controls are gone; the payload and

@@ -18,6 +18,20 @@
 .fc-main .d,.fc-crow .d{display:grid;gap:1px;min-width:0}
 .fc-label{font-weight:600;overflow-wrap:anywhere}
 .fc-source{color:var(--text-3);font-size:12.5px;overflow-wrap:anywhere}
+/* Advisor: a select dressed as the model chip beside it (same height, type, radius, surface), its arrow 10px inside the right edge.
+   It sits right beside the model chip (8px gap, both right-aligned); a narrow card puts it under the chip. The timing note is for
+   screen readers and the tooltip. */
+.fc-group{container:fc-group/inline-size}
+.fc-ctl{display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+.fc-advisor-wrap{position:relative;display:flex;min-width:0;max-width:100%}
+.fc-advisor{appearance:none;field-sizing:content;max-width:190px;min-width:0;padding:6px 27px 6px 10px;border:0;border-radius:9px;background:var(--sf);box-shadow:var(--card);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.fc-advisor:hover:not(:disabled){background:var(--hv-sf)}
+.fc-advisor:disabled{opacity:.6;cursor:default}
+.fc-advisor-chev{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:flex;color:var(--text-3);pointer-events:none}
+.fc-advisor:disabled+.fc-advisor-chev{opacity:.6}
+@container fc-group (max-width:560px){
+  .fc-ctl{flex-direction:column-reverse;align-items:flex-end;gap:6px}
+}
 .fc-model{max-width:min(280px,46vw)}
 .fc-model .fc-logo:empty{display:none}
 .fc-model .fc-logo .lg{border-radius:4px}

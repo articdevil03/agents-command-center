@@ -46,7 +46,11 @@
       info.append(node("b", "fc-label"), node("small", "fc-source"));
       const chip = node("button", "chipb fc-model"); chip.type = "button"; chip.dataset.fcModel = def.slot; chip.dataset.focusKey = `fc-model-${def.slot}`; chip.setAttribute("aria-haspopup", "dialog");
       chip.append(node("span", "fc-logo"), node("span", "fc-model-text"));
-      main.append(info, chip);
+      const controls = node("div", "fc-ctl"), advisorWrap = node("div", "fc-advisor-wrap");
+      const advisor = node("select", "fc-advisor"); advisor.dataset.fcAdvisor = def.slot; advisor.dataset.focusKey = `fc-advisor-${def.slot}`; advisor.setAttribute("aria-label", `${label(def)}: Advisor`);
+      const advisorChev = node("span", "fc-advisor-chev"); advisorChev.innerHTML = page.icons.chev ?? "";
+      advisor.title = def.slot === "leader" ? "Applies from your next message." : "Applies to the next run. If this position is in an approved task, ask the Planner to update the plan.";
+      advisorWrap.append(advisor, advisorChev); controls.append(advisorWrap, chip); main.append(info, controls);
       const notice = node("p", "fc-note fc-notice"), check = node("p", "fc-note fc-check", "Check that you can use this model."), busy = node("p", "fc-note fc-busy", "Working now. Its model and instructions can change when it finishes.");
       const status = node("p", "fc-status"); status.setAttribute("role", "status"); status.dataset.fcModelStatus = def.slot;
       const toggle = node("button", "fc-more"); toggle.type = "button"; toggle.dataset.fcToggle = def.slot; toggle.dataset.focusKey = `fc-toggle-${def.slot}`;
@@ -95,6 +99,19 @@
       chip.querySelector(".fc-logo").innerHTML = assignment ? page.logo(assignment.cli, 13, 0) : "";
       chip.querySelector(".fc-model-text").textContent = modelText(assignment, tab);
       chip.disabled = state.busy || tab.fixedCrew.unavailable === true;
+      const advisor = el.querySelector(".fc-advisor"), advisorWrap = el.querySelector(".fc-advisor-wrap");
+      const capable = Boolean(assignment?.model && page.cliCap(assignment.cli)?.advisor);
+      advisorWrap.hidden = !capable; advisor.hidden = !capable; advisor.disabled = chip.disabled || state.saving || state.modelSaving || !capable;
+      advisor.dataset.cli = assignment?.cli ?? "";
+      if (capable) {
+        const values = [...new Set(page.modelOptions("claude"))];
+        if (assignment.advisor && !values.includes(assignment.advisor)) values.unshift(assignment.advisor);
+        const choices = ["", ...values];
+        if (JSON.stringify([...advisor.options].map((option) => option.value)) !== JSON.stringify(choices)) {
+          advisor.replaceChildren(...choices.map((value) => { const option = node("option", "", value ? `Advisor: ${page.formatModel("claude", value)}` : "Advisor: Off"); option.value = value; return option; }));
+        }
+        if (!state.modelSaving) advisor.value = assignment.advisor ?? "";
+      }
       if (chip.disabled && document.activeElement === chip) el.querySelector(".fc-more").focus({ preventScroll: true });
       chip.setAttribute("aria-label", `${label(def)}: ${assignment ? modelText(assignment, tab) : "No model assigned"}. ${assignment ? "Change" : "Choose a model"}`);
       const independence = def.reviews ? tab.fixedCrew.notices?.[def.slot] : null;
