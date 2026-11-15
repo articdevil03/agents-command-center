@@ -2,8 +2,8 @@
 const REPORT_DIFF = 'else if (!first.equals(candidate)) throw new Error("Worker report blocks differ.");';
 export const pack26FinalMutations = [
   ["p26f-shutdown-worker-wait", "server/index.ts",
-    "await Promise.all([gitDrain, workerDrain, serverClosed]);",
-    "await Promise.all([gitDrain, Promise.resolve(true), serverClosed]);"],
+    "await Promise.all([gitDrain, workerDrain, installerDrain, loginDrain, serverClosed]);",
+    "await Promise.all([gitDrain, Promise.resolve(true), installerDrain, loginDrain, serverClosed]);"],
   ["p26f-runner-pending-finish", "server/runner.ts",
     "const tracked = trackWorker(run.runId);",
     "const tracked = { settle: (_completed: boolean): void => {} };"],
@@ -11,8 +11,8 @@ export const pack26FinalMutations = [
     "} finally { tracked.settle(completed && confirmed); }",
     "} finally { void completed; }"],
   ["p26f-shutdown-worker-unknown", "server/index.ts",
-    "const clean = gitConfirmed && workersConfirmed && closed;",
-    "const clean = gitConfirmed && closed;"],
+    "const clean = gitConfirmed && workersConfirmed && installerConfirmed && loginConfirmed && closed;",
+    "const clean = gitConfirmed && installerConfirmed && loginConfirmed && closed;"],
   ["p26f-shutdown-connected-exit", "server/index.ts",
     "process.exit(clean ? 0 : 1);",
     "process.exit(0);"],

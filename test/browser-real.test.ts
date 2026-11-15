@@ -1,4 +1,5 @@
 import test from "node:test";
+import { modelOutput } from "./opencode-models.setup.ts";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -41,6 +42,7 @@ test("browser harness exercises the real app, server actions, safety shell and r
     [["codex", "--version"], { code: 0, stdout: "codex-cli 0.155.1\n", stderr: "" }],
     [["codex", "login", "status"], { code: 0, stdout: "Not logged in\n", stderr: "" }],
     [["codex", "mcp", "list"], { code: 0, stdout: "No MCP servers configured.\n", stderr: "" }],
+    [["opencode", "models", "--verbose"], { code: 0, stdout: modelOutput("opencode-go/glm-5.2", ["max", "high"]), stderr: "" }],
     [["opencode", "--version"], { code: 0, stdout: "OpenCode 1.2.3\n", stderr: "" }],
     [["opencode", "auth", "list"], { code: 0, stdout: "No providers configured\n", stderr: "" }],
     [["opencode", "mcp", "list"], { code: 0, stdout: "No MCP servers configured.\n", stderr: "" }],

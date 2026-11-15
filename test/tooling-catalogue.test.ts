@@ -7,6 +7,10 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { mutations, controlMutations, pendingMutations, COPIED_PATHS, hasDesignFolder } from "../scripts/mutation-proof.mjs";
 import { tempRoot } from "./temp-root.ts";
+import { pack29OpenCodeInstallMutations, pack29OpenCodeInstallCatchMap } from "../scripts/mutations/pack29-opencode-install.mjs";
+import { pack29OpenCodeKeyMutations, pack29OpenCodeKeyCatchMap } from "../scripts/mutations/pack29-opencode-key.mjs";
+import { pack29OpenCodeUiMutations, pack29OpenCodeUiCatchMap } from "../scripts/mutations/pack29-opencode-ui.mjs";
+import { pack29OpenCodeModelsMutations, pack29OpenCodeModelsCatchMap } from "../scripts/mutations/pack29-opencode-models.mjs";
 
 const root = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -32,6 +36,22 @@ function targetProblems(entries: readonly CatalogueEntry[], read: (file: string)
   }
   return problems;
 }
+
+test("OpenCode model rows are registered, FOUND exactly once and mapped to their catching files", { skip: process.env.CC_MUTATION_PROOF === "1" }, () => {
+  assert.ok(pack29OpenCodeModelsMutations.length >= 30, "control: every model guard family is present");
+  const registered = new Map(mutations.map((entry) => [entry[0], entry]));
+  const map = JSON.parse(readFileSync(join(root, "scripts/mutations/catch-map.json"), "utf8"));
+  for (const entry of pack29OpenCodeModelsMutations) {
+    const name = entry[0], catching = pack29OpenCodeModelsCatchMap[name];
+    assert.match(name, /^p29-opencode-models-/);
+    assert.deepEqual(registered.get(name), entry, name + ": registered");
+    assert.deepEqual(targetProblems([entry]), [], name + ": FOUND exactly once");
+    assert.match(catching, /^test\/opencode-models[\w-]*\.test\.ts$/, name);
+    assert.ok(existsSync(join(root, catching)), name + ": catching test FOUND");
+    assert.equal(map[name], catching, name + ": explicit catch map");
+  }
+  console.log(`OpenCode model guards FOUND=${pack29OpenCodeModelsMutations.length}, all registered and mapped`);
+});
 
 // Intentional source mutations remove their own targets. They must fail a
 // behavior test, not this catalogue check. Baseline/restored runs check all entries.
@@ -88,6 +108,25 @@ test("pending mutations say why no test covers them, and stay out of the swept c
     assert.ok(why && why.length > 20, `${name}: say what test is missing`);
     assert.equal(swept.has(name), false, `${name}: listed as both swept and pending`);
   }
+});
+
+test("OpenCode guard inventory is registered, uniquely FOUND and explicitly mapped to real catching tests", { skip: process.env.CC_MUTATION_PROOF === "1" }, () => {
+  const groups = [pack29OpenCodeInstallMutations, pack29OpenCodeKeyMutations, pack29OpenCodeUiMutations];
+  const hints = { ...pack29OpenCodeInstallCatchMap, ...pack29OpenCodeKeyCatchMap, ...pack29OpenCodeUiCatchMap };
+  const map = JSON.parse(readFileSync(join(root, "scripts/mutations/catch-map.json"), "utf8"));
+  const registered = new Map(mutations.map((entry) => [entry[0], entry]));
+  for (const group of groups) {
+    assert.ok(group.length >= 20, "each guard family inventory must be FOUND");
+    for (const entry of group) {
+      const [name, file] = entry, catching = hints[name];
+      assert.deepEqual(registered.get(name), entry, name + ": registered");
+      assert.deepEqual(targetProblems([entry]), [], name + ": target must be FOUND exactly once in " + file);
+      assert.match(catching ?? "", /^test\/pack29-opencode-[\w-]+\.test\.ts$/, name + ": explicit catching test");
+      assert.ok(existsSync(join(root, catching)), name + ": catching file FOUND " + catching);
+      assert.equal(map[name], catching, name + ": runner catch map agrees with authored hint");
+    }
+  }
+  console.log(`OpenCode mutation targets FOUND=${groups.flat().length}, each exactly once; catching hints=${Object.keys(hints).length}`);
 });
 
 test("the legacy browser-only environment cannot bypass real browser audits", () => {

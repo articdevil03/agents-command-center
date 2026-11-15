@@ -170,18 +170,18 @@ test("a second launch while the first is shutting down starts the app again once
   assert.deepEqual(open.relaunches, [], "a launch that found the window open is not repeated");
 });
 
-test("a missing Node reports its own clear reason at once, and one error page is shown, not two", async () => {
+test("a missing bundled runtime reports its own clear reason at once, and one error page is shown, not two", async () => {
   const h = shellHarness();
   const ready = h.ready();
   await Promise.resolve();
   const loadsBefore = h.loaded.length;
-  h.proc.emit("error", Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" }));
+  h.proc.emit("error", Object.assign(new Error("spawn bundled-runtime ENOENT"), { code: "ENOENT" }));
   await within(ready, "ready");
   assert.equal([...h.timers.values()].some(({ ms }) => ms === READY_TIMEOUT_MS), false, "the readiness timer was cleared by the error");
   assert.equal(h.loaded.length, loadsBefore + 1, "exactly one error page was loaded");
   const page = decodeURIComponent(h.loaded.at(-1));
-  assert.match(page, /spawn node ENOENT/);
-  assert.match(page, /Node\.js 24/);
+  assert.match(page, /spawn bundled-runtime ENOENT/);
+  assert.match(page, /bundled runtime could not start/);
   assert.doesNotMatch(page, /did not report ready/);
   // a server that exits before it is ready also gets exactly one page
   const dead = shellHarness();

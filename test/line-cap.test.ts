@@ -68,9 +68,9 @@ test("a changed 400-line file alone is green", () => {
   assert.match(out, /1 files checked/);
 });
 
-test("images, json, the catalogue folder and design/ are reported as skipped, never checked", () => {
+test("images, json, the catalogue folder, design/ and test/fixtures/ are reported as skipped, never checked", () => {
   const { repo, base } = makeRepo();
-  const skipped = ["public/big.png", "scripts/mutations/page.mjs", "design/mock.html", "data.json"];
+  const skipped = ["public/big.png", "scripts/mutations/page.mjs", "design/mock.html", "data.json", "test/fixtures/capture.txt"];
   write(repo, Object.fromEntries(skipped.map((file) => [file, lines(900)])));
   const { code, out } = run(repo, base);
   assert.equal(code, 0);

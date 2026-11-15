@@ -39,6 +39,8 @@ These run real Git, hooks, processes and `taskkill`, so run them outside a write
 - `CC_FCX_NATIVE_PROCESS=1` (`pack18-integration`, `pack18-rw-launch`): the fixed-task launch on real processes.
 - `CC_P26_FINAL_NATIVE=1` (`pack26-final-shutdown-native`, `pack26-final-codex-native`): a real shutdown that ends a live worker, and a Codex-shaped log through real pipes.
 
+`node scripts/pack29-installer-proof.mjs` needs Windows and electron-builder's cached NSIS tools, with no admin rights. It installs, upgrades and uninstalls only a scratch-named variant, using that variant's registry key, shortcuts, install folder and `%APPDATA%\command-center-p29test`; the real app's data is untouched. `node scripts/export-public.mjs --scan-packaged <resources/app>` reads an extracted or installed payload and requires the owner's nonempty `.leak-patterns.local`. It needs Node, but no NSIS or admin rights. Both the installer build and lifecycle proof run this scan when the list exists.
+
 **Selecting or narrowing a run**
 
 - `CC_SWEEP_PROOF_ROW=<row name>` runs one expensive mutation proof (`C1 scoped mutation proof` in `test/tooling-sweep-proof.test.ts`). Without it that test is skipped.

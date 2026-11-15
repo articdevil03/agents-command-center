@@ -1,3 +1,4 @@
+import "./runtime-env.ts";
 import { createServer } from "node:http";
 import { spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -6,7 +7,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import {
-  readWorkspaces, adoptSavedValues, refreshDiscovery, readClientPrefs, readLaunchSafety, readAcpClis, acpClisPath, defaultWorkspaces,
+  applyOpenCodeModels, readWorkspaces, adoptSavedValues, refreshDiscovery, readClientPrefs, readLaunchSafety, readAcpClis, acpClisPath, defaultWorkspaces,
 } from "./config.ts";
 import { keepBadCopy } from "./safe-file.ts";
 import { isRunning, stopAllRunning } from "./runner.ts";
@@ -86,8 +87,13 @@ setCliSkipFolders(() => workspaces.projects.flatMap((project) => [project.folder
 adoptSavedValues(workspaces);
 // A previous server that crashed may have left agent processes running (its registry file in logs/ names them): end them now, before the server listens (so nothing can launch first). A failed sweep never stops the start.
 // When the cap wins, the server starts and the work finishes in the background; its result is said when it ends.
+let installerOrphansCleared = false;
 try { const swept = await sweepOrphans();
   reportStartupSweep(swept, SWEEP_CAP_MS, console.log, describeError);
+  installerOrphansCleared = swept.finished && !swept.unchecked && swept.checked === swept.killed;
+  if (!swept.finished) void swept.late.then((final) => {
+    installerOrphansCleared = !final.unchecked && final.checked === final.killed;
+  }, () => { installerOrphansCleared = false; });
 }
 catch (err) { console.log(`Orphan sweep failed: ${describeError(err)}`); }
 setSelectedTabId(workspaces.projects[0]?.tabs[0]?.id ?? "");
@@ -102,7 +108,7 @@ setAcpSpawn(process.env.CC_TEST_FAKE_CLI === "1" && process.env.CC_TEST_FAKE_LEA
 setClientPrefs(readClientPrefs());
 const testCliRunner = createTestCliRunner();
 setCliRunner(testCliRunner ?? runCli);
-setSettingsService(new SettingsService({ dataRoot, runCli: cliRunner }));
+setSettingsService(new SettingsService({ onOpenCodeModels: applyOpenCodeModels, dataRoot, runCli: cliRunner, installAdmission: () => installerOrphansCleared }));
 setRequestsStore(new RequestsStore(dataRoot));
 for (const project of workspaces.projects) for (const tab of project.tabs) runtimeFor(tab);
 watchTabFolders();
@@ -167,7 +173,7 @@ server.listen(PORT, HOST, () => {
   // Without Electron nobody handed the page its key: the one line below carries it (the page reads #key= and removes it).
   if (!suppliedAppKey) console.log(`Open http://${HOST}:${port}/#key=${appKey}`);
   if (process.env.CC_SKIP_DISCOVERY !== "1") {
-    void refreshDiscovery(undefined, undefined, undefined, claudeCliPath).then(() => { fixedCrewService.refresh(); broadcast(stateMessage()); }).catch((err) => broadcast({ type: "error", message: describeError(err) }));
+    void refreshDiscovery(undefined, async () => ({ values: [], fallback: true }), undefined, claudeCliPath).then(() => { fixedCrewService.refresh(); broadcast(stateMessage()); }).catch((err) => broadcast({ type: "error", message: describeError(err) }));
     const selected = tabLocation(selectedTabId);
     void settingsService.refreshAll(selected?.tab.folder ?? null);
     if (selected) void refreshTabDetails(selected.tab.id);
@@ -196,6 +202,9 @@ function shutdown(signal: string): Promise<void> {
   if (shutdownWork) return shutdownWork;
   // Admission and cancellation latch synchronously, before ANY shutdown await: a worker approved after this point is never started.
   closeWorkerAdmission();
+  settingsService.installer.close();
+  settingsService.login.close();
+  settingsService.models.close();
   fixedGitOperations.close();
   shutdownWork = drainShutdown(signal);
   return shutdownWork;
@@ -211,11 +220,16 @@ async function drainShutdown(signal: string): Promise<void> {
   const gitDrain = fixedGitOperations.drain();
   // Both drains start now and run in parallel, so their budgets are never added up.
   const workerDrain = drainWorkers();
+  const installerDrain = settingsService.installer.drain();
+  const loginDrain = settingsService.login.drain();
+  await settingsService.models.drain();
   if (!process.connected) {
-    const [gitConfirmed, workersConfirmed] = await Promise.all([gitDrain, workerDrain]);
+    const [gitConfirmed, workersConfirmed, installerConfirmed, loginConfirmed] = await Promise.all([gitDrain, workerDrain, installerDrain, loginDrain]);
     if (!gitConfirmed) console.error("Git shutdown INCOMPLETE: cleanup or finalization remains unknown.");
     if (!workersConfirmed) console.error("Worker shutdown INCOMPLETE: a worker's end was not confirmed and published.");
-    if (!gitConfirmed || !workersConfirmed) { process.exit(1); return; }
+    if (!loginConfirmed) console.error("Sign-in shutdown INCOMPLETE: cleanup remains unknown.");
+    if (!installerConfirmed) console.error("Installer shutdown INCOMPLETE: cleanup remains unknown.");
+    if (!gitConfirmed || !workersConfirmed || !installerConfirmed || !loginConfirmed) { process.exit(1); return; }
     if (signal === "disconnect") spawnSync(windowsTaskkillPath(), ["/pid", String(process.pid), "/T", "/F"], { windowsHide: true });
     process.exit(0);
     return;
@@ -228,18 +242,20 @@ async function drainShutdown(signal: string): Promise<void> {
     closeTimer = setTimeout(() => resolve(false), 7000);
   });
   server.closeAllConnections?.();
-  const [gitConfirmed, workersConfirmed, closed] = await Promise.all([gitDrain, workerDrain, serverClosed]);
+  const [gitConfirmed, workersConfirmed, installerConfirmed, loginConfirmed, closed] = await Promise.all([gitDrain, workerDrain, installerDrain, loginDrain, serverClosed]);
   clearTimeout(closeTimer);
   if (!gitConfirmed) console.error("Git shutdown INCOMPLETE: cleanup or finalization remains unknown.");
   if (!workersConfirmed) console.error("Worker shutdown INCOMPLETE: a worker's end was not confirmed and published.");
-  const clean = gitConfirmed && workersConfirmed && closed;
+  if (!loginConfirmed) console.error("Sign-in shutdown INCOMPLETE: cleanup remains unknown.");
+  if (!installerConfirmed) console.error("Installer shutdown INCOMPLETE: cleanup remains unknown.");
+  const clean = gitConfirmed && workersConfirmed && installerConfirmed && loginConfirmed && closed;
   process.exit(clean ? 0 : 1);
 }
 function requestShutdown(signal: string): void {
   void shutdown(signal).catch(async (error) => {
     // A synchronous Stop/close failure must still wait for owned Git and worker work already started; this is never a second cancellation pass and never a success.
     console.error(`Shutdown INCOMPLETE: ${describeError(error)}`);
-    try { await Promise.all([fixedGitOperations.drain(), drainWorkers()]); } finally { process.exit(1); }
+    try { await Promise.all([settingsService.models.drain(), fixedGitOperations.drain(), drainWorkers(), settingsService.installer.drain(), settingsService.login.drain()]); } finally { process.exit(1); }
   });
 }
 process.on("SIGINT", () => requestShutdown("SIGINT"));

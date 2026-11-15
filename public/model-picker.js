@@ -20,12 +20,19 @@
       const q = query.trim().toLowerCase(), typed = query.trim();
       let total = 0;
       const html = pickerClis(seat).map((cli) => {
+        if (cli === "opencode" && page.cliCaps().find((cap) => cap.id === cli)?.installed !== true) return `<div class="hint">OpenCode 1 is needed. Your saved choice is kept.</div>`;
         const values = page.modelOptions(cli); if (cli === seat.cli && seat.model && !values.includes(seat.model)) values.unshift(seat.model);
         total += values.length;
-        const listed = values.filter((model) => !q || model.toLowerCase().includes(q) || page.formatModel(cli, model, cli === seat.cli ? tab : null).toLowerCase().includes(q));
+        const listed = values.filter((model) => !q || model.toLowerCase().includes(q) || page.openCodeInfo?.(model)?.displayName?.toLowerCase().includes(q) || page.formatModel(cli, model, cli === seat.cli ? tab : null).toLowerCase().includes(q));
         const custom = typed && page.customModelPattern(cli)?.test(typed) && !values.includes(typed);
         if (!listed.length && !custom) return "";
-        return `<div class="grp" data-grp="${esc(cli)}">${page.logo(cli, 12, 0)} ${esc(page.cliLabel(cli))}${cli === seat.cli ? " · this seat" : ""}</div>${listed.map((model) => `<button type="button" class="opt" data-model="${esc(model)}" data-cli="${esc(cli)}" title="${esc(model)}" aria-pressed="${String(cli === seat.cli && model === seat.model)}">${page.logo(cli, 12, 3)}<span class="nm"><span>${esc(page.isAcpCli(cli) ? "CLI default" : page.formatModel(cli, model))}</span>${page.isAcpCli(cli) ? `<small>${esc(`CLI default · ${page.acpShownModel(cli, cli === seat.cli ? tab : null) ?? "model shown after first use"}`)}</small>` : page.modelSupportsEffort(cli, model) ? "" : "<small>No effort setting</small>"}</span>${page.icons.tick}</button>`).join("")}${custom ? `<button type="button" class="opt" data-model="${esc(typed)}" data-cli="${esc(cli)}"><span class="nm"><span>Use ${esc(typed)}</span><small>Not in the list. The server checks it when you save.</small></span></button>` : ""}`;
+        const row = (model) => {
+          const info = cli === "opencode" ? page.openCodeInfo?.(model) : null;
+          const saved = cli === "opencode" && !info;
+          return `<button type="button" class="opt" data-model="${esc(model)}" data-cli="${esc(cli)}" title="${esc(model)}" aria-pressed="${String(cli === seat.cli && model === seat.model)}">${page.logo(cli, 12, 3)}<span class="nm"><span>${esc(info?.displayName ?? (page.isAcpCli(cli) ? "CLI default" : page.formatModel(cli, model)))}</span><small>${esc(cli === "opencode" ? saved ? "Saved choice, not currently reported" : model : page.isAcpCli(cli) ? `CLI default \u00b7 ${page.acpShownModel(cli, cli === seat.cli ? tab : null) ?? "model shown after first use"}` : page.modelSupportsEffort(cli, model) ? "" : "No effort setting")}</small></span>${page.icons.tick}</button>`;
+        };
+        const groups = cli === "opencode" ? [...new Set(listed.map((model) => model.split("/")[0]))] : [null];
+        return groups.map((provider) => `<div class="grp" data-grp="${esc(cli)}">${page.logo(cli, 12, 0)} ${esc(page.cliLabel(cli))}${provider ? " / " + esc(provider) : ""}</div>${listed.filter((model) => !provider || model.split("/")[0] === provider).map(row).join("")}`).join("") + (custom ? `<button type="button" class="opt" data-model="${esc(typed)}" data-cli="${esc(cli)}"><span class="nm"><span>Use ${esc(typed)}</span><small>Not in the list. The server checks it when you save.</small></span></button>` : "");
       }).join("");
       return html || `<div class="nores">${total ? "No match. Type a full id like gpt-6-sol or provider/model to use it." : "No models are available from the server."}</div>`;
     }
@@ -43,11 +50,16 @@
       const pop = $("pop"), locked = adapter.locked(), choose = chooser(adapter);
       const keep = refresh ? { query: $("mq")?.value ?? "", scroll: $("mrows")?.scrollTop ?? 0, key: pop.contains(document.activeElement) ? page.focusKeyOf(document.activeElement) : null, caret: document.activeElement?.id === "mq" ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null } : null;
       pop.setAttribute("aria-label", `Choose model and effort for ${seat.name}`);
-      const efforts = page.effortOptions(seat.cli), hasEffort = Boolean(seat.cli) && page.modelSupportsEffort(seat.cli, seat.model) && efforts.length > 0;
-      const noEffort = seat.cli ? `<div class="hint">${esc(page.formatModel(seat.cli, seat.model, tab))} has no effort setting.</div>` : "";
+      const unavailable = seat.cli === "opencode" && page.cliCaps().find((cap) => cap.id === seat.cli)?.installed !== true;
+      const efforts = unavailable ? [] : page.effortOptions(seat.cli, seat.model), hasEffort = Boolean(seat.cli) && page.modelSupportsEffort(seat.cli, seat.model) && efforts.length > 0;
+      const info = seat.cli === "opencode" ? page.openCodeInfo?.(seat.model) : null;
+      const status = page.openCodeStatus?.();
+      const savedEffort = !unavailable && seat.cli === "opencode" && seat.effort && !efforts.includes(seat.effort);
+      if (savedEffort) efforts.push(seat.effort);
+      const noEffort = seat.cli === "opencode" ? `<div class="hint">${esc(info?.variants ? savedEffort ? "This model reports no effort choices. Your saved choice is kept." : "This model has no effort setting. OpenCode default will be used." : "Effort choices are not currently reported. New choices use OpenCode default.")}</div>` : seat.cli ? `<div class="hint">${esc(page.formatModel(seat.cli, seat.model, tab))} has no effort setting.</div>` : "";
       const clear = adapter.modelOnly ? "" : `<button type="button" class="opt" data-clear-model aria-pressed="${String(!seat.cli)}"><span class="nm"><span>No model</span><small>Leave this position without a model</small></span>${page.icons.tick}</button>`;
       const hints = adapter.hints(seat).map((text) => `<div class="hint">${esc(text)}</div>`).join("");
-      pop.innerHTML = `<div class="msearch"><input class="inp" id="mq" type="search" aria-label="Search models" placeholder="Search models" autocomplete="off"></div>${clear}<div class="mscroll" id="mrows">${modelRows(seat, keep?.query ?? "", tab)}</div>${hasEffort ? `<div class="grp">Effort</div><div class="effort" role="radiogroup" aria-label="Effort">${efforts.map((effort) => `<button type="button" role="radio" aria-checked="${String(seat.effort === effort)}" data-effort="${esc(effort)}">${esc(effort)}</button>`).join("")}</div>` : noEffort}${hints}`;
+      pop.innerHTML = `<div class="msearch"><input class="inp" id="mq" type="search" aria-label="Search models" placeholder="Search models" autocomplete="off"></div>${clear}<button type="button" class="opt" id="refreshModels" data-refresh-models${status?.refreshing ? " disabled" : ""}>${status?.refreshing ? "Refreshing models..." : "Refresh models"}</button>${status?.error ? `<div class="hint" role="status">${esc(status.error)}${status.stale ? " Showing the last available models." : ""}</div>` : ""}${seat.cli === "opencode" && (!info || savedEffort) ? `<div class="hint">Saved choice, not currently reported</div>` : ""}<div class="mscroll" id="mrows">${modelRows(seat, keep?.query ?? "", tab)}</div>${unavailable ? `<div class="hint">OpenCode 1 is needed. Your saved effort is kept.</div>` : hasEffort || (savedEffort && info?.variants == null) ? `<div class="grp">Effort</div><div class="effort" role="radiogroup" aria-label="Effort">${efforts.map((effort) => `<button type="button" role="radio" aria-checked="${String(seat.effort === effort)}" data-effort="${esc(effort)}">${esc(effort || "OpenCode default")}</button>`).join("")}</div>` : noEffort}${hints}`;
       const lockPicker = () => { if (!locked) return; pop.querySelectorAll("[data-model],[data-effort],[data-clear-model]").forEach((button) => { button.disabled = true; button.setAttribute("aria-disabled", "true"); }); };
       if (locked) pop.insertAdjacentHTML("afterbegin", `<div class="hint" data-picker-locked>Locked while working. ${page.lockTip}</div>`);
       lockPicker();
@@ -66,6 +78,7 @@
         choose.pick(fields);
         redraw();
       }));
+      pop.querySelector("[data-refresh-models]")?.addEventListener("click", () => page.refreshModels?.());
       bindModels();
       $("mq").addEventListener("input", () => { $("mrows").innerHTML = modelRows(seat, $("mq").value, tab); bindModels(); lockPicker(); });
       pop.querySelectorAll("[data-effort]").forEach((button) => button.addEventListener("click", () => { choose.pick({ effort: button.dataset.effort }); page.setLayer(pop, false); }));

@@ -82,7 +82,7 @@ export function buildCommand(run: RunnerRun, briefPath: string): string {
   if (!run.runId || !/^[A-Za-z0-9._-]+$/.test(run.runId)) throw new Error("buildCommand: unsafe run id");
   if (!/^[A-Za-z0-9._-]+$/.test(run.seatKey)) throw new Error("buildCommand: unsafe seat key");
   if (!isValidModel(run.cli, run.model)) throw new Error(`buildCommand: refusing invalid model for "${run.seatKey}": ${run.model}`);
-  if (!isValidEffort(run.cli, run.effort)) throw new Error(`buildCommand: refusing invalid effort for "${run.seatKey}": ${run.effort}`);
+  if (!isValidEffort(run.cli, run.effort, run.model)) throw new Error(`buildCommand: refusing invalid effort for "${run.seatKey}": ${run.effort}`);
   if (typeof run.canWrite !== "boolean") throw new Error("buildCommand: slot permission is required");
   if (/[\u0000-\u001f\u007f"]/.test(run.folder)) throw new Error("buildCommand: refusing unsafe folder path");
   if (/[\u0000-\u001f\u007f"]/.test(briefPath)) throw new Error("buildCommand: refusing unsafe brief path");
@@ -101,7 +101,7 @@ export function buildCommand(run: RunnerRun, briefPath: string): string {
       return `codex ${run.webSearch ? "--search " : ""}exec --skip-git-repo-check --model ${run.model} -c model_reasoning_effort=${run.effort} --sandbox ${run.canWrite ? "workspace-write" : "read-only"} ${instruction}`;
     }
     case "opencode":
-      return `opencode run --dir "%${DIR_VAR}%" -m ${run.model} --variant ${run.effort} --auto --print-logs ${instruction}`;
+      return `opencode run --dir "%${DIR_VAR}%" -m ${run.model}${run.effort ? ` --variant ${run.effort}` : ""} --auto --print-logs ${instruction}`;
     // An ACP CLI never gets a shell command (runSeat starts it as a process with an argument list); any other kind never gets a command made up for it.
     default:
       throw new Error(`buildCommand: no command for CLI "${String(run.cli)}" on "${run.seatKey}"`);

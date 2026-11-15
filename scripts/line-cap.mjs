@@ -9,7 +9,7 @@ import { extname, join } from "node:path";
 const CAP = 400;
 const SKIPPED_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".json"]);
 const SKIPPED_FILES = new Set(["public/logos.js"]);
-const SKIPPED_FOLDERS = [["scripts/mutations/", "catalogue data"], ["design/", "private mockups"]];
+const SKIPPED_FOLDERS = [["scripts/mutations/", "catalogue data"], ["design/", "private mockups"], ["test/fixtures/", "captured vendor output"]];
 
 function git(cwd, ...args) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true, maxBuffer: 64 * 1024 * 1024 });

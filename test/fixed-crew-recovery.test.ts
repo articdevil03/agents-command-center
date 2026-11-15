@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, symlinkSync, rmdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -109,4 +109,21 @@ test("FC4 real config startup detects legacy bytes before validation or projects
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /fresh-/); assert.equal(read(root).projects[0].tabs[0].fixedCrew.version, 1);
   assert.equal(readdirSync(join(root, "backups")).length, 1);
+});
+
+
+test("FC4 fixed workspace bypasses unsafe logs while missing workspace refuses them", () => {
+  for (const fixed of [false, true]) for (const kind of ["junction", "file"]) {
+    const root = fixture(), target = scratchDir(), logs = join(root, "logs");
+    const saved = JSON.stringify(config.defaultWorkspaces(root));
+    if (fixed) writeFileSync(join(root, "config/workspaces.json"), saved);
+    if (kind === "junction") symlinkSync(target, logs, "junction");
+    else writeFileSync(logs, "not a directory");
+    try {
+      const result = recovery.recoverWorkspace(root, config.defaultWorkspaces);
+      assert.equal(result.blocked, !fixed, `fixed=${fixed}, logs=${kind}`);
+      assert.equal(result.recovered, false);
+      if (fixed) assert.equal(readFileSync(join(root, "config/workspaces.json"), "utf8"), saved);
+    } finally { if (kind === "junction") rmdirSync(logs); }
+  }
 });

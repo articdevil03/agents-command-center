@@ -53,6 +53,8 @@ export const { usageDeltaFromResult, addUsage, zeroUsage, bankUsage, toUsageSnap
 
 export const { createAgentUsageState, feedClaudeOutput, flushClaudeOutput, scanCodexTokens, flushCodexTokens } = agentUsage;
 
+const opencodeInfo = [{ value: "provider/model-v1", providerID: "provider", modelID: "model-v1", displayName: "Fixture model", variants: ["max"] }];
+config.applyOpenCodeModels(opencodeInfo, { fallback: true });
 const discoveryBaseline = {
   codex: [...config.MODEL_OPTIONS.codex!],
   claudeEffort: [...config.EFFORT_OPTIONS.claude],
@@ -61,6 +63,7 @@ const discoveryBaseline = {
 };
 
 afterEach(async () => {
+  config.applyOpenCodeModels(opencodeInfo, { fallback: true });
   await config.refreshDiscovery(
     async () => ({ values: [...discoveryBaseline.claudeEffort], fallback: true }),
     async () => ({ values: [...discoveryBaseline.opencode], fallback: true }),

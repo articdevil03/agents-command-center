@@ -272,7 +272,7 @@ test("BFIX exact expected-name comparison: a missing, extra, renamed, duplicated
   for (const width of [1600, 1280, 1024]) {
     const full = c2FullNames(width);
     assert.equal(full.length, 2 + c2EarlyNames(width).length + C2_R1_NAMES.length, `the full Pack C case is the collision pair, the early route and R1 at ${width}px`);
-    assert.equal(full.length, 84, `the full Pack C case expects 84 checks at ${width}px`);
+    assert.equal(full.length, 86, `the full Pack C case expects 86 checks at ${width}px`);
     assert.equal(new Set(full).size, full.length, `no duplicate in the full Pack C list at ${width}px`);
     assert.deepEqual(full.slice(0, 2), COLLISION_CHECKS, "the collision pair runs first");
     assert.deepEqual(C2_APPROVAL_CHECKS.filter((name) => !full.includes(name)), [], `the approval list is part of the full case at ${width}px`);

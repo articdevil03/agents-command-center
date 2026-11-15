@@ -41,17 +41,18 @@ test("config startup: interrupted workspace seed leaves no final file; retry com
   // The example workspaces (a string) is cut short.
   assert.throws(() => launch(copy, data, {
     writeFileSync: (file, contents, options) => {
+      if (String(contents).includes('"status":"pending"')) return fs.writeFileSync(file, contents, options);
       fs.writeFileSync(file, contents.slice(0, 1), options);
       assert.equal(fs.existsSync(final), false, "final must stay absent during the write");
       throw failure;
     },
   }), /injected disk full/);
   assert.equal(fs.existsSync(final), false);
-  assert.deepEqual(fs.readdirSync(path.join(data, "config")), [], "the failed publish leaves nothing behind");
+  assert.deepEqual(fs.readdirSync(path.join(data, "config")), ["first-run.json"], "the failed workspace publish leaves only the completed first-run marker");
   const loaded = launch(copy, data);
   assert.equal(fs.existsSync(loaded.workspacesPath), true);
   assert.equal(fs.existsSync(loaded.projectsPath), false, "the bundled projects.json is never seeded");
-  assert.deepEqual(fs.readdirSync(path.join(data, "config")), ["workspaces.json"], "no legacy file is seeded");
+  assert.deepEqual(fs.readdirSync(path.join(data, "config")), ["first-run.json", "workspaces.json"], "no legacy file is seeded");
 });
 
 test("config publish: the temp file is flushed (fsync) after it is written and before it is renamed into place", () => {
@@ -73,7 +74,7 @@ test("config startup: cleanup failure after successful publish never fails the l
   let rmAttempts = 0;
   let loaded!: ReturnType<typeof launch>;
   assert.doesNotThrow(() => { loaded = launch(copy, data, { rmSync: () => { rmAttempts++; throw Object.assign(new Error("injected EBUSY"), { code: "EBUSY" }); } }); });
-  assert.equal(rmAttempts, 1, "the workspaces publish attempts its temporary cleanup");
+  assert.equal(rmAttempts, 2, "the marker and workspaces publications each attempt temporary cleanup");
   assert.equal(fs.existsSync(loaded.workspacesPath), true);
 });
 
@@ -84,6 +85,7 @@ test("config startup: an existing workspaces file wins an atomic publication rac
   let raced = 0;
   launch(copy, data, {
     linkSync: (temporary, final) => {
+      if (path.basename(final) === "first-run.json") return fs.linkSync(temporary, final);
       fs.writeFileSync(final, custom);
       raced++;
       fs.linkSync(temporary, final);
@@ -99,6 +101,7 @@ test("config startup: publication errors and directory collisions propagate and 
     const failure = Object.assign(new Error(`injected ${code}`), { code });
     assert.throws(() => launch(copy, data, {
       linkSync: (_temporary, final) => {
+        if (path.basename(final) === "first-run.json") return fs.linkSync(_temporary, final);
         if (code === "EEXIST") fs.mkdirSync(final);
         throw failure;
       },

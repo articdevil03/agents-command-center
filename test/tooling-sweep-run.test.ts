@@ -303,3 +303,13 @@ test("R1 fake runner passes root only before child exit when abort precedes clos
     } finally { await world.finish(); }
   }
 });
+
+
+test("scoped baseline file list excludes other files at the real runner boundary", async () => {
+  const lane = fakeLane();
+  addFile(lane, "baseline.test.mjs", PASSES);
+  addFile(lane, "excluded.test.mjs", FAILS_ASSERTION);
+  const result = await runTests(options(lane, ["test/baseline.test.mjs"], { earlyStop: false }));
+  assert.equal(result.outcome, "pass");
+  assert.deepEqual(Object.keys(result.fileMs), ["test/baseline.test.mjs"]);
+});

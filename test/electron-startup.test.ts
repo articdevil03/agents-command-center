@@ -17,7 +17,7 @@ test("single instance lock is requested before any window or server is created (
   await within(ready, "ready");
   const lockIndex = h.order.indexOf("lock");
   const windowIndex = h.order.indexOf("window");
-  const spawnIndex = h.order.indexOf("spawn:node");
+  const spawnIndex = h.order.indexOf("spawn:C:/bundled/electron.exe");
   assert.ok(lockIndex !== -1 && windowIndex !== -1 && spawnIndex !== -1, "all three must have happened");
   assert.ok(lockIndex < windowIndex, "lock must be requested before the window is created");
   assert.ok(lockIndex < spawnIndex, "lock must be requested before the server is spawned");
@@ -40,12 +40,12 @@ test("portable smoke mode skips the window, publishes the real server port, and 
   h.proc.stdout.emit("data", Buffer.from("Command Center running at http://127.0.0.1:51234\n"));
   await within(ready, "ready");
   assert.equal(h.files.get("ready.json"), `${JSON.stringify({ port: 51234, serverPid: 1234 })}\n`);
-  const serverEnv = h.spawns.find(([command]) => command === "node")?.[2].env;
+  const serverEnv = h.spawns.find(([command]) => command === "C:/bundled/electron.exe")?.[2].env;
   assert.ok(serverEnv, "smoke mode must spawn a server");
   assert.equal(Object.keys(serverEnv).some((key) => key.startsWith("CC_SMOKE_")), false,
     "CC_SMOKE_* controls must not reach the server");
   assert.equal(serverEnv.CC_SKIP_DISCOVERY, "1", "the server must see the discovery skip at startup");
-  const serverArgs = h.spawns.find(([command]) => command === "node")?.[1];
+  const serverArgs = h.spawns.find(([command]) => command === "C:/bundled/electron.exe")?.[1];
   assert.ok(serverArgs.includes("--eval"), "smoke server must use the bootstrap that clears the discovery flag after module startup");
   assert.match(serverArgs[serverArgs.indexOf("--eval") + 1], /delete process\.env\.CC_SKIP_DISCOVERY/);
   assert.equal(h.quits(), 0, "the app must keep the server alive so the smoke can GET /");
@@ -89,7 +89,7 @@ test("normal launch strips an inherited discovery skip and uses the direct serve
   await Promise.resolve();
   h.proc.stdout.emit("data", Buffer.from("Command Center running at http://127.0.0.1:51234\n"));
   await within(started, "started");
-  const [, args, options] = h.spawns.find(([command]) => command === "node");
+  const [, args, options] = h.spawns.find(([command]) => command === "C:/bundled/electron.exe");
   assert.deepEqual(plain(args), ["test-root/server/index.ts"], "normal launch must use the direct server entry");
   assert.equal(Object.hasOwn(options.env, "CC_SKIP_DISCOVERY"), false);
 });

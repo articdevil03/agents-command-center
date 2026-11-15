@@ -134,6 +134,11 @@ export async function boot(options: Boot) {
   for (const cli of ["claude", ...(options.installed ?? [])]) responses[JSON.stringify([cli, "--version"])] = { code: 0, stdout: `${cli} 1.0.0`, stderr: "" };
   // Exit code 1 is neither "ran" nor "not found": installed stays null (not checked).
   for (const cli of options.unknown ?? []) responses[JSON.stringify([cli, "--version"])] = { code: 1, stdout: "", stderr: "" };
+  const modelIds = ["fakeprov/fake-model", "opencode/glm-5.2"];
+  responses[JSON.stringify(["opencode", "models", "--verbose"])] = { code: 0, stderr: "", stdout: modelIds.map((value) => {
+    const [providerID, id] = value.split("/");
+    return value + "\n" + JSON.stringify({ providerID, id, name: id, variants: { max: {}, high: {} } }, null, 2) + "\n";
+  }).join("") };
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses }));
   const cliLog = join(temp, "fake-cli.log");
   const key = newAppKey();

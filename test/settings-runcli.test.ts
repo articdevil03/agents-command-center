@@ -32,7 +32,7 @@ test("CLI resolution skips a PATH entry inside ANY workspace folder, not only th
     spawned = "";
     const onlyProject = await createCliRunner(fakeSpawn, { PATH: project } as NodeJS.ProcessEnv)("codex", ["--version"], { timeoutMs: 500 });
     assert.equal(spawned, "", "nothing is spawned when the only match is inside a project folder");
-    assert.equal(onlyProject.code, 127);
+    assert.equal(onlyProject.code, -1, "a found but unsafe launcher is unknown, not missing");
   } finally { setCliSkipFolders(() => []); removeWithRetry(base); }
 });
 
@@ -190,7 +190,7 @@ test("runCli distinguishes a missing executable from other launch failures", asy
     return child;
   }) as any;
   assert.deepEqual(await createCliRunner(fakeSpawn, fakeCliEnv("claude").env)("claude", ["--version"], { timeoutMs: 500 }), {
-    code: 127, stdout: "", stderr: "could not start command",
+    code: -1, stdout: "", stderr: "could not start command",
   });
 });
 

@@ -162,7 +162,12 @@ ping -n 40 127.0.0.1 >nul
   } finally { if (pid) await killSeen(tracked.filter((entry) => entry.pid === pid)); common.setProcessTreeForTests(null); await sleep(300); }
 });
 
-test("a tab folder with ( ) & ^ and % in its name, and a drive root, reach OpenCode intact", windowsOnly, async () => {
+test("a tab folder with ( ) & ^ and % in its name, and a drive root, reach OpenCode intact", windowsOnly, async (t) => {
+  const config = await import("../server/config.ts"), previousModels = config.OPENCODE_MODEL_INFO;
+  config.applyOpenCodeModels([{ value: "provider/model-v1", providerID: "provider", modelID: "model-v1", displayName: "Fixture model", variants: ["max"] }], {});
+  t.after(() => config.applyOpenCodeModels(previousModels, {}));
+  assert.equal(config.isValidEffort("opencode", "max", "provider/model-v1"), true);
+  assert.equal(config.isValidEffort("opencode", "high", "provider/model-v1"), false);
   const { bin } = fakeCliDir("", "opencode");
   put(bin, "opencode.cmd", `@echo off\r\n"${process.execPath}" "%~dp0argv.js" %*\r\n`);
   put(bin, "argv.js", `require("node:fs").writeFileSync(require("node:path").join(__dirname, "argv-" + process.env.CC_TEST_TAG + ".json"), JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd() }));`);

@@ -1,6 +1,7 @@
 // Command Center page script, part 4 of 12: the server message handler. Ordered classic scripts (index.html loads public/app/*.js in name order) share one scope.
   "use strict";
   function onMessage(message) {
+    if (message.type === "cliLoginState") { cliLoginUi?.onEvent(message); renderAll(); return; } // private to this page (public/first-run/login.js)
     // A reply only the fixed crew understands (public/fixed-crew/events.js) ends here; its saves and refusals go on through the handling below.
     if (fixedCrewUi?.onMessage(message)) { if (!$("setModal").hidden) renderSettings(); return; }
     // Settings "Check again": the server answers its refreshSettings request with an actionResult, or an error, carrying the page's requestId.
@@ -48,7 +49,7 @@
       $("setBody").querySelectorAll("[data-setting]").forEach((button) => button.setAttribute("aria-checked", String(settingValue(button.dataset.setting))));
       addStateNotices(message);
       newApprovalRequests(previous, message);
-      settleConfirmedActions();
+      settleConfirmedActions(); cliLoginUi?.onState();
       settleFromState();
       // The state carries the step line too, so a page that connected mid-reply shows it.
       for (const { tab } of allTabs()) { if (tab.leaderActivity && tab.derived?.leaderTurnActive) stepByTab.set(tab.id, tab.leaderActivity); else stepByTab.delete(tab.id); }

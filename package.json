@@ -13,6 +13,7 @@
     "app": "electron electron/main.js",
     "test": "node --import ./test/crash-catcher-self.ts --test test/*.test.ts",
     "dist": "node scripts/dist.mjs",
+    "dist:installer": "node scripts/dist-installer.mjs",
     "dist:smoke": "node scripts/packaged-smoke.mjs",
     "dist:proof": "node scripts/packaged-smoke-proof.mjs",
     "export:public": "node scripts/export-public.mjs",
@@ -21,7 +22,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",
     "ws": "^8.18.0",
-    "zod": "^4.5.4"
+    "zod": "^4.5.4",
+    "unzipper": "0.12.5"
   },
   "devDependencies": {
     "electron": "^44.2.0",
@@ -49,6 +51,7 @@
       "!config/client-prefs.json",
       "!config/projects.json",
       "!config/setups.json",
+      "!config/first-run.json",
       "!config/fixed-crew-recovery.json",
       "!config/acp-clis.json",
       "!backups/**",
@@ -66,6 +69,19 @@
     "win": {
       "icon": "build/icon.ico",
       "target": "portable"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Command Center",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false,
+      "artifactName": "Command Center Setup ${version}.exe",
+      "include": "build/installer.nsh"
     },
     "portable": {
       "artifactName": "Command Center.exe"

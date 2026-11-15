@@ -15,13 +15,14 @@ export function knownAuthStatus(cli: CliId, result: CliResult): boolean | null {
     try { const parsed = JSON.parse(result.stdout) as { loggedIn?: unknown }; if (typeof parsed?.loggedIn === "boolean") return parsed.loggedIn; } catch { /* older CLIs print words: matched below */ }
   }
   const lower = text.toLowerCase();
+  if (cli === "opencode") {
+    if (result.code !== 0) return null;
+    const count = lower.match(/\b(\d+)\s+credentials?\b/)?.[1];
+    return count === undefined ? null : Number(count) > 0;
+  }
   if (/not logged in|not authenticated|no credentials|logged out|unauthenticated|no providers configured/.test(lower)) return false;
   if (/logged in|authenticated|signed in|credentials found/.test(lower)) return true;
   // `opencode auth list` ends with "N credentials"; the box-drawing lines around it say nothing.
-  if (cli === "opencode" && result.code === 0) {
-    const count = lower.match(/(\d+)\s+credentials?\b/)?.[1];
-    if (count !== undefined) return Number(count) > 0;
-  }
   return null;
 }
 

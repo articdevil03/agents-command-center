@@ -5,7 +5,7 @@
 //   1. It launches the portable exe itself, waits for Electron's server-ready
 //      handshake, makes one GET / that must return 200, and checks the exe and
 //      its server process have exited.
-//   2. It separately runs server/index.ts under plain node from a copy outside
+//   2. It separately runs server/index.ts under bundled Electron Node from a copy outside
 //      this repository, first on a fresh empty data folder (clean first launch),
 //      then on that seeded folder under the write-containment permission flags.
 //      That catches missing packaged dependencies such as zod without ancestor
@@ -17,6 +17,7 @@
 // Keep all writes inside this run's temp data directory and remove the exact
 // temp workspace in finally, including when allocation or copying fails.
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync,
   rmSync, statSync, writeFileSync,
@@ -25,7 +26,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import assert from "node:assert/strict";
-import { packagedSmokePermissionArgs } from "./packaged-smoke-permissions.mjs";
+import { packagedSmokePermissionArgs, packagedSmokeResolutionGuard } from "./packaged-smoke-permissions.mjs";
 
 const projectRoot = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -134,7 +135,7 @@ async function waitForReadyFile(file, child, getSpawnError, timeoutMs) {
 
 // permission: run under Node's permission model (write containment). Off for a first launch on an empty data folder,
 // because Node disables fsync under --permission and first-launch seeding needs it.
-export async function runIsolatedPackagedServer({ app, outsideRoot, data, spawnProcess = spawn, logger = console, timeoutMs = 15000, stopTimeoutMs = 10000, permission = false }) {
+export async function runIsolatedPackagedServer({ app, exe, outsideRoot, data, spawnProcess = spawn, logger = console, timeoutMs = 15000, stopTimeoutMs = 10000, permission = false }) {
   let child;
   let exited;
   let stdout = "";
@@ -144,7 +145,12 @@ export async function runIsolatedPackagedServer({ app, outsideRoot, data, spawnP
   try {
     const env = { ...process.env, CC_DATA_DIR: data, CC_PORT: "0", CC_SKIP_LEADER_CHECK: "1", CC_SKIP_DISCOVERY: "1" };
     for (const key of ["NODE_OPTIONS", "NODE_PATH", "NODE_TEST_CONTEXT", "CC_TEST_FORCE_PACKAGED"]) delete env[key];
-    child = spawnProcess(process.execPath, [...(permission ? packagedSmokePermissionArgs(data) : []), path.join(app, "server/index.ts")], {
+    assert.ok(typeof exe === "string" && path.isAbsolute(exe), "isolated server needs the original packaged Electron exe");
+    const guard = path.join(outsideRoot, "isolated-resolution-" + randomUUID() + ".mjs");
+    const guardSource = packagedSmokeResolutionGuard(app);
+    writeFileSync(guard, guardSource, { flag: "wx" });
+    env.ELECTRON_RUN_AS_NODE = "1";
+    child = spawnProcess(exe, [...(permission ? packagedSmokePermissionArgs(data) : []), "--import", pathToFileURL(guard).href, path.join(app, "server/index.ts")], {
       // Keep the OS temp directory removable on Windows; module resolution
       // follows the copied entry file, not this working directory.
       cwd: projectRoot, env, windowsHide: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -296,7 +302,8 @@ export async function runPackagedSmoke({
     await stopPortable();
     if (runIsolated) {
       // A fresh data dir: the one above was already seeded by the exe, which would hide a first launch that needs files the copy lacks.
-      await runIsolatedProofs({ app, outsideRoot, spawnProcess, logger, timeoutMs: readyTimeoutMs });
+      const bundledExe = path.join(path.dirname(packedApp), "..", "Command Center.exe");
+      await runIsolatedProofs({ app, exe: bundledExe, outsideRoot, spawnProcess, logger, timeoutMs: readyTimeoutMs });
     }
   } catch (error) {
     failure = new Error(`${error.message}\n${stdout}\n${stderr}${spawnError ? `\n${spawnError.message}` : ""}`);

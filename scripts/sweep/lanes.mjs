@@ -49,11 +49,14 @@ export function removeTree(target, within) {
 
 // ---- lanes: one disposable copy of the tree under test plus a private temp folder ----
 
+// The owner's own saved app state (config/*.json is gitignored; a clean checkout has none) is never copied: the browser tests would rewrite its
+// absolute folders inside the copy and fail their "the workspaces file is untouched" check before any mutation ran.
+const LOCAL_STATE = /^config\/[^/]+\.json$/;
 // Every file under a copied path, read no-follow: a link inside the source throws, so a copy can never reach outside the repo.
 function readTree(root, rel, into) {
   const info = lstatSync(join(root, rel));
   if (info.isSymbolicLink()) throw new Error(`createLane: ${rel} is a link; the sweep never copies through links`);
-  if (info.isDirectory()) { for (const name of readdirSync(join(root, rel))) readTree(root, `${rel}/${name}`, into); } else into.set(forward(rel), readFileSync(join(root, rel)));
+  if (info.isDirectory()) { for (const name of readdirSync(join(root, rel))) readTree(root, `${rel}/${name}`, into); } else if (!LOCAL_STATE.test(forward(rel))) into.set(forward(rel), readFileSync(join(root, rel)));
 }
 
 function writeBytes(path, bytes) {

@@ -47,8 +47,8 @@ function parseCheck(lane, file, text) {
   finally { try { unlinkSync(path); } catch { /* already gone */ } }
 }
 
-const OPTIONS = ["lanes", "slots", "until", "out", "resume"];
-const USAGE = "node scripts/mutation-proof.mjs [name parts, comma separated] [--lanes N] [--slots N] [--until HH:MM] [--out <folder>] [--resume <sweep folder>]";
+const OPTIONS = ["lanes", "slots", "until", "out", "resume", "baseline-files"];
+const USAGE = "node scripts/mutation-proof.mjs [name parts, comma separated] [--lanes N] [--slots N] [--until HH:MM] [--out <folder>] [--resume <sweep folder>] [--baseline-files test/a.test.ts,test/b.test.ts]";
 
 // Bad values are refused here, before the lock. Lanes and slots stay null when not given so a resume can take them from state.json.
 export function parseArgs(argv, defaultOut) {
@@ -73,7 +73,9 @@ ${USAGE}`);
   if (given.until !== undefined && !/^([01]?\d|2[0-3]):[0-5]\d$/.test(given.until)) throw new Error(`--until must look like 22:30 (24 hour local time), got "${given.until}"`);
   const filters = (positional[0] ?? "").split(",").filter(Boolean);
   if (given.resume && filters.length) throw new Error("a resume keeps the filters the sweep started with; give none");
-  return { filters, lanes: count("lanes", 8), slots: count("slots", 64), until: given.until ?? null, out: resolve(given.out ?? defaultOut), resume: given.resume ?? null };
+  const baselineFiles = given["baseline-files"]?.split(",");
+  if (baselineFiles && baselineFiles.some((file) => !/^test\/[\w./-]+\.test\.(?:ts|mjs|js)$/.test(file) || file.split("/").includes(".."))) throw new Error("--baseline-files requires comma-separated test/*.test.ts paths");
+  return { ...(baselineFiles ? { baselineFiles } : {}), filters, lanes: count("lanes", 8), slots: count("slots", 64), until: given.until ?? null, out: resolve(given.out ?? defaultOut), resume: given.resume ?? null };
 }
 
 // The next time the local clock shows HH:MM; a time that is not ahead of now means tomorrow.
@@ -251,7 +253,7 @@ async function runSweep(session) {
   part.endReason = stop.reason ? `stopped: ${stop.reason}` : "finished";
 }
 
-// One quiet whole-suite run on lane 0 with the lane copy untouched. Red twice ends the part.
+// One quiet baseline on lane 0, scoped only when explicitly requested. Red twice ends the part.
 async function baseline(session, ctx, timing, addFlakes, part) {
   const { sweep } = session.deps;
   const lane = session.lanes[0];
@@ -259,7 +261,7 @@ async function baseline(session, ctx, timing, addFlakes, part) {
     const logPath = join(ctx.runsDir, `${ctx.seq()}-baseline.log`);
     await ctx.slots.acquire(ctx.slots.total);
     let result;
-    try { result = await sweep.runTests({ lane, files: null, red: false, earlyStop: false, timeoutMs: BASELINE_TIMEOUT_MS, concurrency: BASELINE_CONCURRENCY, logPath, signal: ctx.signal }); }
+    try { result = await sweep.runTests({ lane, files: session.args.baselineFiles ?? null, red: false, earlyStop: false, timeoutMs: BASELINE_TIMEOUT_MS, concurrency: BASELINE_CONCURRENCY, logPath, signal: ctx.signal }); }
     finally { ctx.slots.release(ctx.slots.total); }
     const { leaked } = sweep.resyncLane(lane);
     if (result.outcome === "aborted") { part.endReason = "stopped: aborted during the baseline"; return false; }

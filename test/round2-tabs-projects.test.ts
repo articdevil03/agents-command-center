@@ -295,6 +295,10 @@ test("CLI, GitHub, MCP, and plugin action refusals echo their safe request ids a
     ws.message({ ...message, requestId });
     await waitFor(() => ws.messages.some((item: any) => item.type === "error" && item.requestId === requestId), `${message.type} refusal`);
     assert.equal(server.stateMessage().requestActions[requestId].status, "failed", `${message.type} state is server-owned`);
+    if (message.type === "ghLogin") {
+      assert.equal(ws.messages.findLast((item: any) => item.type === "error" && item.requestId === requestId).message, "could not open the GitHub login window");
+      assert.equal(server.settingsService.state.github.action?.status, "failed");
+    }
   }
 });
 

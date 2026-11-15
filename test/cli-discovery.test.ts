@@ -7,10 +7,27 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { setCliSkipFolders, spawnTrackedClaude, windowsTaskkillPath } from "../server/leader-common.ts";
-import {
+import { registerHooks } from "node:module";
+import { setEnv } from "./temp-root.ts";
+let defaultSpawns = 0, defaultQueries = 0;
+(globalThis as any).__r1DiscoverySpawn = () => { defaultSpawns++; throw new Error("recorded blocked spawn"); };
+(globalThis as any).__r1DiscoveryQuery = () => { defaultQueries++; throw new Error("recorded blocked query"); };
+const discoveryHooks = registerHooks({ load(url, context, next) {
+  const result = next(url, context);
+  if (!url.endsWith("/server/cli-discovery.ts")) return result;
+  let source = String(result.source);
+  const spawnImport = 'import { spawn } from "node:child_process";', queryImport = 'import { query } from "@anthropic-ai/claude-agent-sdk";';
+  for (const target of [spawnImport, queryImport, 'withResolvedCli(command, env, process.cwd())']) assert.equal(source.split(target).length, 2, target + " FOUND");
+  source = source.replace(spawnImport, 'const spawn = (...args: any[]) => (globalThis as any).__r1DiscoverySpawn(...args);')
+    .replace(queryImport, 'const query = (...args: any[]) => (globalThis as any).__r1DiscoveryQuery(...args);')
+    .replace('withResolvedCli(command, env, process.cwd())', 'command');
+  return { ...result, source };
+} });
+const {
   parseClaudeEffortLevels, parseOpencodeModels, discoverClaudeEffort, discoverOpencodeModels,
   parseSupportedModels, discoverClaudeModels,
-} from "../server/cli-discovery.ts";
+} = await import("../server/cli-discovery.ts");
+discoveryHooks.deregister();
 
 // Captured verbatim from a real `claude --help` run (2026-09-08): the
 // --effort option wraps across two lines before its choices appear.
@@ -285,4 +302,20 @@ test("discoverClaudeModels: the probe's claude.exe is started through the tracke
   assert.equal(seen.pathToClaudeCodeExecutable, "C:/fake/claude.exe");
   assert.equal(Object.hasOwn(seen.env, "CC_APP_KEY"), false, "the probe never sees the app key");
   assert.equal(Object.hasOwn(seen.env, "CC_DATA_DIR"), false, "nor the private data root");
+});
+
+
+test("default discovery refuses fake/test mode before recording spawn and SDK boundaries; injected controls still run", async () => {
+  for (const mode of ["fake", "node-test"]) {
+    const restore = setEnv({ CC_TEST_FAKE_CLI: mode === "fake" ? "1" : undefined, NODE_TEST_CONTEXT: mode === "node-test" ? "child-v8" : undefined });
+    defaultSpawns = 0; defaultQueries = 0;
+    try {
+      assert.equal((await discoverClaudeEffort(["fallback"])).fallback, true);
+      assert.equal((await discoverOpencodeModels(["fallback"])).fallback, true);
+      assert.equal((await discoverClaudeModels([], "C:/inert/claude.exe")).fallback, true);
+      assert.deepEqual([defaultSpawns, defaultQueries], [0, 0], mode + " default boundary counts");
+      assert.equal((await discoverClaudeEffort([], fakeSpawn(REAL_CLAUDE_HELP_EFFORT_BLOCK))).fallback, false);
+      assert.equal((await discoverClaudeModels([], "C:/inert/claude.exe", () => fakeQueryHandle(REAL_SUPPORTED_MODELS))).fallback, false);
+    } finally { restore(); }
+  }
 });

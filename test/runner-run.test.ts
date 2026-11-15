@@ -12,8 +12,10 @@ test("buildCommand maps explicit slot canWrite to Claude, Codex, and OpenCode fl
   const claudeWrite = runner.buildCommand(makeRun({ cli: "claude", model: "claude-opus-5-5[1m]", effort: "medium", canWrite: true }), brief);
   const codexRead = runner.buildCommand(makeRun({ canWrite: false }), brief);
   const codexWrite = runner.buildCommand(makeRun({ canWrite: true }), brief);
-  const openRead = runner.buildCommand(makeRun({ cli: "opencode", model: "opencode/x-preview-f-free", effort: "max", canWrite: false }), brief);
-  const openWrite = runner.buildCommand(makeRun({ cli: "opencode", model: "opencode/x-preview-f-free", effort: "max", canWrite: true }), brief);
+  assert.equal(config.isValidEffort("opencode", "max", "provider/model-v1"), true);
+  assert.equal(config.isValidEffort("opencode", "high", "provider/model-v1"), false);
+  const openRead = runner.buildCommand(makeRun({ cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: false }), brief);
+  const openWrite = runner.buildCommand(makeRun({ cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: true }), brief);
   assert.match(claudeRead, /--permission-mode plan .*--disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit/);
   assert.match(claudeWrite, /--permission-mode acceptEdits/);
   assert.doesNotMatch(claudeWrite, /--disallowedTools/);
@@ -119,7 +121,7 @@ test("spawn strips private data-root variables and read-only OpenCode deny confi
   try {
     let spawnOptions: any;
     const fake = ((command: string, options: unknown) => { spawnOptions = options; return proc; }) as unknown as typeof import("node:child_process").spawn;
-    const run = makeRun({ cli: "opencode", model: "opencode/x-preview-f-free", effort: "max", canWrite: false });
+    const run = makeRun({ cli: "opencode", model: "provider/model-v1", effort: "max", canWrite: false });
     runner.runSeat(run, "read this", captureCallbacks().callbacks, fake);
     assert.equal(Object.hasOwn(spawnOptions.env, "CC_DATA_DIR"), false);
     assert.equal(Object.hasOwn(spawnOptions.env, "CC_TEST_FORCE_PACKAGED"), false);

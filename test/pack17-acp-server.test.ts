@@ -17,17 +17,20 @@ import { sleep, SECRET, LEADER_SLOT, WORKER, WORKER_SLOT, CLAUDE_LEADER, ACP_DEF
 const TAB_COUNT = 12;
 const tabId = (n: number) => `p17-${n}`;
 type Server = { port: number; key: string; temp: string; data: string; work: string; child: ChildProcess; log: () => string; stop: () => Promise<void> };
-async function boot(): Promise<Server> {
+async function boot(firstRun = false): Promise<Server> {
   const temp = mkdtempSync(join(tmpdir(), "cc-pack17s-"));
   const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "work"), bin = join(temp, "bin");
-  for (const dir of [home, work, bin, join(data, "config"), join(data, "chats"), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
+  for (const dir of [home, work, bin, join(data, "config"), ...(firstRun ? [] : [join(data, "chats")]), join(data, "scratch")]) mkdirSync(dir, { recursive: true });
   writeFileSync(join(bin, "fake-acp.cmd"), "@echo off\r\n"); // found on PATH (outside every project folder); the test spawn runs the fake agent in its place
   writeFileSync(join(work, "evilacp.cmd"), "@echo off\r\n"); // a program planted INSIDE the tab folder, which is on PATH
   // Fixed saved tabs: every tab starts on the Claude leader (the roster's own pick); two start on an ACP leader (one planted inside the tab folder, one that is not in the list).
   const tab = (id: string, leader: { cli: string; model: string; effort: string } = CLAUDE_LEADER) => fixedTab(id, work, { leader: leader as any }, id);
   const tabs = [...Array.from({ length: TAB_COUNT }, (_, index) => tab(tabId(index + 1))), tab("p17-evil", { cli: "acp:evil", ...ACP_DEFAULT }), tab("p17-ghost", { cli: "acp:ghost", ...ACP_DEFAULT })];
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p17", work, tabs), name: "P17" }])));
-  writeFileSync(join(data, "config", "acp-clis.json"), JSON.stringify({ clis: [{ id: "evil", name: "Evil", program: "evilacp", args: [] }] }));
+  if (firstRun) writeFileSync(join(data, "config", "first-run.json"), JSON.stringify({ version: 1, status: "pending", createdAt: "2026-01-01T00:00:00.000Z" }));
+  else {
+    writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([{ ...fixedProject("p17", work, tabs), name: "P17" }])));
+    writeFileSync(join(data, "config", "acp-clis.json"), JSON.stringify({ clis: [{ id: "evil", name: "Evil", program: "evilacp", args: [] }] }));
+  }
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: Object.fromEntries(["claude", "codex"].map((cli) => [JSON.stringify([cli, "--version"]), { code: 0, stdout: `${cli} 1.0.0`, stderr: "" }])) }));
   const key = randomBytes(32).toString("hex");
   const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
@@ -115,13 +118,36 @@ async function useAcp(c: Client, id: string, scenario: string): Promise<string> 
   return kind;
 }
 
+test("p29 first-run Add and Start launch nothing; first chat answers and calls the fixed bridge", async () => {
+  const server = await boot(true); const c = await client(server);
+  try {
+    assert.equal(c.state().firstRun.required, true);
+    assert.deepEqual(await c.request({ type: "addAcpCli", name: "Fake crew", command: "fake-acp --scenario=crew" }), { ok: true });
+    assert.deepEqual(await c.request({ type: "completeFirstRun", name: "First", folder: server.work, cli: "acp:fake-crew", acpConsent: true }), { ok: true });
+    assert.equal(fakeLog(server).filter((row) => row.started).length, 0, "wizard must spawn no process");
+    assert.equal(c.state().firstRun.required, false);
+    const tab = c.state().projects[0].tabs[0];
+    assert.deepEqual(leaderOf(tab), { cli: "acp:fake-crew", ...ACP_DEFAULT });
+    assert.equal(tab.permissionMode, "bypass");
+    await c.chat(tab.id, "who is in the crew?");
+    await c.finished(tab.id, 1, "first wizard leader chat");
+    assert.equal(c.errors(tab.id).length, 0);
+    assert.match(c.answers(tab.id).at(-1)!.text, /^crew ok: 200$/);
+    const row = fakeLog(server).find((entry) => entry.bridgeTools);
+    assert.ok(row, "first chat used the bridge");
+    assert.deepEqual([...row.bridgeTools].sort(), ["accept_planner_report", "begin_planning", "finish_fixed_task", "get_fixed_task", "get_task_archive", "list_task_archives", "reconcile_task_execution", "request_task_action", "verify_task_evidence"]);
+    assert.deepEqual(Object.keys(JSON.parse(row.bridgeTask)).sort(), ["executions", "task"]);
+    assert.equal(fakeLog(server).filter((row) => row.started && row.cli === "acp").length, 1);
+  } finally { c.close(); await server.stop(); }
+});
+
 test("D1: Settings adds a CLI by its start command; nothing that needs a shell is saved; it cannot be removed while the fixed crew uses it", async () => {
   const server = await boot(); const c = await client(server);
   try {
     assert.deepEqual(c.state().acpClis.map((cli: any) => cli.id), ["evil"], "the saved list is loaded at start");
     assert.deepEqual(await c.request({ type: "addAcpCli", name: "Fake basic", command: "fake-acp --scenario=basic" }), { ok: true });
     const added = c.state().acpClis.find((cli: any) => cli.id === "fake-basic");
-    assert.deepEqual(added, { id: "fake-basic", name: "Fake basic", program: "fake-acp", args: ["--scenario=basic"], kind: "acp:fake-basic" });
+    assert.deepEqual(added, { id: "fake-basic", name: "Fake basic", program: "fake-acp", args: ["--scenario=basic"], kind: "acp:fake-basic", leaderEligible: true });
     assert.deepEqual(JSON.parse(readFileSync(join(server.data, "config", "acp-clis.json"), "utf8")).clis.map((cli: any) => cli.id), ["evil", "fake-basic"]);
     const before = readFileSync(join(server.data, "config", "acp-clis.json"), "utf8");
     for (const command of ["fake-acp && calc", "fake-acp | more", 'fake-acp "x y"', "..\\fake-acp", "C:\\tools\\fake-acp --acp", "fake-acp %PATH%"]) {

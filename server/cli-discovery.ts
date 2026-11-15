@@ -75,6 +75,7 @@ type SpawnFn = typeof spawn;
 // string ourselves is exactly the safe pattern Node's own warning asks for.
 // The real CLI path is resolved only for the real spawn: an injected fake gets the bare command, so tests never depend on what is installed.
 function runCaptured(cmd: string, args: string[], spawnFn: SpawnFn): Promise<string | null> {
+  if (spawnFn === spawn && (process.env.CC_TEST_FAKE_CLI === "1" || process.env.NODE_TEST_CONTEXT !== undefined)) return Promise.resolve(null);
   return new Promise((resolvePromise) => {
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
@@ -180,6 +181,7 @@ export async function discoverClaudeModels(
   cliPath: string | null,
   queryFn: QueryFn = query
 ): Promise<DiscoveredClaudeModels> {
+  if (queryFn === query && (process.env.CC_TEST_FAKE_CLI === "1" || process.env.NODE_TEST_CONTEXT !== undefined)) return { values: [...fallback], fallback: true };
   if (!cliPath) return { values: [...fallback], fallback: true };
   // Same refusal as the leaders: a CLI inside a tab or project folder is never started.
   const folder = cliSkipFolders().find((f) => isInsideFolder(cliPath, f));

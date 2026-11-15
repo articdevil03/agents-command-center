@@ -1,3 +1,6 @@
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
+import { stripElectronNodeEnv } from "../runtime-env.ts";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { windowsTaskkillPath } from "./cli-path.ts";
 import { killProcessTree, tracker, watchProcessTree } from "./process-tree.ts";
@@ -41,7 +44,17 @@ export function trackLeaderChild(child: ChildProcess, watch = false, onSweepFail
 }
 // The SDK starts claude.exe itself and, on abort, kills only that one process: start it here instead so its whole tree is tracked and killed.
 export function spawnTrackedClaude(options: { command: string; args: string[]; cwd?: string; env: Record<string, string | undefined>; signal: AbortSignal }, onUnconfirmedKill?: () => void): ChildProcess {
-  const child = spawn(options.command, options.args, { cwd: options.cwd, env: options.env as NodeJS.ProcessEnv, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+  let { command, args } = options;
+  const env = stripElectronNodeEnv({ ...options.env });
+  if (command === "node" && process.versions.electron) {
+    command = process.execPath;
+    // Preserve argv[1] and every CLI argument while clearing Node mode before CLI imports.
+    const script = pathToFileURL(resolve(options.cwd ?? process.cwd(), args[0])).href;
+    const bootstrap = 'for (const key of Object.keys(process.env)) { if (key.toLowerCase() === "electron_run_as_node") delete process.env[key]; } await import(' + JSON.stringify(script) + ');';
+    args = ["--input-type=module", "--eval", bootstrap, ...args];
+    env.ELECTRON_RUN_AS_NODE = "1";
+  }
+  const child = spawn(command, args, { cwd: options.cwd, env, stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
   trackLeaderChild(child, true, onUnconfirmedKill);
   const stop = (): void => killProcessTree(child, onUnconfirmedKill);
   if (options.signal.aborted) stop(); else options.signal.addEventListener("abort", stop, { once: true });

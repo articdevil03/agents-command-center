@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setCliSkipFolders } from "../server/leader-common.ts";
 import { createCliRunner, parseGitHubAuthStatus, parseMcpCommand, parseMcpList, parsePluginList, SettingsService, type RunCli } from "../server/settings.ts";
+import { installFixture } from "./pack29-opencode-install.setup.ts";
+import { managedCli } from "../server/settings/opencode/paths.ts";
+import { keyFixture, begin, until } from "./pack29-opencode-key.setup.ts";
 import { fakeCliDirs, LOGIN_START, PKGS, harness } from "./settings-helpers.ts";
 
 test("Settings inventory uses injected CLI results and only the temporary HOME and USERPROFILE", async () => {
@@ -21,13 +24,15 @@ test("Settings inventory uses injected CLI results and only the temporary HOME a
     writeFileSync(join(h.project, "AGENTS.md"), "project codex");
     writeFileSync(join(h.home, ".gemini", "GEMINI.md"), "global gemini");
     writeFileSync(join(h.project, "GEMINI.md"), "project gemini");
-    const service = h.service();
+    const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, refreshPath: async () => {},
+      runCli: (bin, args, options) => bin === "opencode" && args.join(" ") === "auth list"
+        ? Promise.resolve({ code: 0, stdout: "0 credentials", stderr: "" }) : h.runner(bin, args, options) });
     await service.refreshAll(h.project);
     const state = service.snapshot();
-    assert.deepEqual(state.tools.claude, { installed: true, version: "1.2.3", signedIn: true });
-    assert.deepEqual(state.tools.codex, { installed: true, version: "1.2.3", signedIn: false });
-    assert.equal(state.tools.opencode.signedIn, false);
-    assert.deepEqual(state.tools.gemini, { installed: false, version: null, signedIn: null });
+    assert.deepEqual(state.tools.claude, { installed: true, version: "1.2.3", signedIn: true, supportedVersion: true });
+    assert.deepEqual(state.tools.codex, { installed: true, version: "1.2.3", signedIn: false, supportedVersion: true });
+    assert.deepEqual(state.tools.opencode, { installed: true, version: "1.2.3", signedIn: false, supportedVersion: true, credentialSource: "none" });
+    assert.deepEqual(state.tools.gemini, { installed: false, version: null, signedIn: null, supportedVersion: null });
     assert.deepEqual(state.skills.claude.skills, ["imagegen"]);
     assert.deepEqual(state.skills.codex.skills, ["openai-docs"]);
     assert.deepEqual(state.skills.opencode.skills, ["web-search"]);
@@ -51,18 +56,31 @@ test("Settings inventory uses injected CLI results and only the temporary HOME a
   } finally { h.close(); }
 });
 
-test("installCli requires confirmation, uses each fixed package, and refuses an installed CLI", async () => {
+test("installCli requires confirmation, uses each fixed recipe, and refuses an installed CLI", async (t) => {
   const h = harness([]);
   try {
     const service = h.service();
-    for (const cli of ["claude", "codex", "opencode", "gemini"] as const) {
+    for (const cli of ["claude", "codex", "gemini"] as const) {
       await service.installCli(cli, `install_${cli}`, true);
-      assert.ok(h.calls.some((call) => call.bin === "npm" && JSON.stringify(call.args) === JSON.stringify(["install", "-g", PKGS[cli]])), `${cli} used its fixed package`);
+      assert.ok(h.calls.some((call) => cli === "claude" || cli === "codex" ? /powershell.exe$/i.test(call.bin) && call.args.at(-1)?.includes(cli === "claude" ? "claude.ai" : "chatgpt.com") : call.args.includes(PKGS[cli]) && call.args.includes("--registry=https://registry.npmjs.org")), `${cli} used its fixed catalog recipe`);
       assert.equal(service.state.tools[cli].action?.requestId, `install_${cli}`);
       assert.equal(service.state.tools[cli].action?.status, "done");
     }
+    const fx = await installFixture(t);
+    try {
+      await assert.rejects(fx.service.installCli({ ...fx.request, confirm: false }), /confirmation is required/);
+      assert.deepEqual(fx.requests, [], "unconfirmed OpenCode install performs no download");
+      await fx.service.installCli(fx.request);
+      assert.deepEqual(fx.requests, ["/releases?per_page=100&page=1", "/asset"]);
+      assert.ok(managedCli(fx.env));
+      assert.equal(fx.service.state.tools.opencode.action?.status, "done");
+      assert.equal(fx.calls.some((call) => call.args.includes("install")), false, "verified OpenCode download never uses npm");
+      const requests = [...fx.requests];
+      await assert.rejects(fx.service.installCli({ ...fx.request, requestId: "already-installed" }), /already installed/);
+      assert.deepEqual(fx.requests, requests);
+    } finally { await fx.close(); }
     const before = h.calls.filter((call) => call.bin === "npm").length;
-    await assert.rejects(service.installCli("claude", "install_no", false), /already installed/);
+    await assert.rejects(service.installCli("claude", "install_no", true), /already installed/);
     assert.equal(h.calls.filter((call) => call.bin === "npm").length, before, "present CLI never reaches npm");
     assert.equal(service.state.tools.claude.action?.status, "failed");
     const missing = harness([]);
@@ -74,13 +92,13 @@ test("installCli requires confirmation, uses each fixed package, and refuses an 
     const uncertain = harness();
     try {
       const calls: string[][] = [];
-      const service = new SettingsService({
+      const service = new SettingsService({ refreshPath: async () => {},
         dataRoot: uncertain.dataRoot,
         env: uncertain.env,
         runCli: async (bin, args) => { calls.push([bin, ...args]); return { code: -1, stdout: "", stderr: "could not start command" }; },
       });
       await assert.rejects(service.installCli("claude", "install_unknown", true), /installation status is unknown/);
-      await assert.rejects(service.loginCli("claude", "login_unknown", uncertain.project), /installation status is unknown/);
+      await assert.rejects(service.loginCli("claude", "login_unknown", uncertain.project), /confirm the installation/);
       assert.equal(service.state.tools.claude.action?.status, "failed");
       assert.equal(calls.some((call) => call[0] === "npm"), false, "unknown is never treated as missing");
     } finally { uncertain.close(); }
@@ -97,69 +115,44 @@ test("a late CLI action cannot replace the latest server-owned action state", as
         versionCalls++;
         return versionCalls === 1 ? { code: 127, stdout: "", stderr: "missing" } : { code: 0, stdout: "claude 1.2.3", stderr: "" };
       }
-      if (bin === "npm") return new Promise((resolve) => { releaseInstall = resolve; });
+      if (/powershell.exe$/i.test(bin)) return new Promise((resolve) => { releaseInstall = resolve; });
       return { code: 1, stdout: "", stderr: "unavailable" };
     };
-    const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, runCli: runner });
+    const service = new SettingsService({ refreshPath: async () => {}, dataRoot: h.dataRoot, env: h.env, runCli: runner });
     const first = service.installCli("claude", "install_first", true);
     while (!releaseInstall) await new Promise((resolve) => setTimeout(resolve, 0));
-    await assert.rejects(service.installCli("claude", "install_latest", true), /already installed/);
-    assert.deepEqual(service.state.tools.claude.action, { requestId: "install_latest", status: "failed", message: "CLI is already installed" });
-    releaseInstall({ code: 0, stdout: "added", stderr: "" });
+    await assert.rejects(service.installCli("claude", "install_latest", true), /still active/);
+    assert.equal(service.state.tools.claude.action?.requestId, "install_first");
+    releaseInstall({ code: 0, stdout: "added", stderr: "", cleanupConfirmed: true } as any);
     await first;
-    assert.deepEqual(service.state.tools.claude.action, { requestId: "install_latest", status: "failed", message: "CLI is already installed" });
+    assert.equal(service.state.tools.claude.action?.requestId, "install_first");
+    assert.equal(service.state.tools.claude.action?.status, "done");
   } finally { h.close(); }
 });
 
-test("cliLogin opens every CLI's login in a new console, then rereads its own status command until it says signed in", async () => {
+test("legacy CLI rows use managed login and verified status; OpenCode opens its private key panel", async (t) => {
   const h = harness();
   try {
+    h.signedIn.claude = false;
     const service = h.service();
-    const expected = {
-      claude: { login: ["auth", "login"], status: ["auth", "status"] },
-      codex: { login: ["login"], status: ["login", "status"] },
-      opencode: { login: ["auth", "login"], status: ["auth", "list"] },
-    } as const;
-    for (const cli of ["claude", "codex", "opencode"] as const) {
-      const requestId = `login_${cli}`;
-      const statusReadsBefore = h.calls.filter((call) => call.bin === cli && JSON.stringify(call.args) === JSON.stringify(expected[cli].status)).length;
-      await service.loginCli(cli, requestId, h.project);
-      const opened = h.calls.findLast((call) => call.bin === "cmd");
-      assert.deepEqual(opened?.args, [...LOGIN_START, ...expected[cli].login], "the window starts the program named by the variable, quoted for cmd");
-      assert.equal(opened?.env?.CC_LOGIN_PROGRAM, join(h.env.PATH!, `${cli}.exe`), "the variable holds the resolved program, not a bare name");
-      assert.equal(opened?.verbatimArgs, true, "cmd gets the quotes as written");
-      assert.equal(h.calls.filter((call) => call.bin === cli && JSON.stringify(call.args) === JSON.stringify(expected[cli].status)).length, statusReadsBefore + 1,
-        "the status is read once before the window opens (installed check), not again at the instant the window opens");
-      assert.equal(service.state.tools[cli].action?.requestId, requestId);
+    for (const cli of ["claude", "codex"] as const) {
+      await service.loginCli(cli, `login_${cli}`, h.project);
+      assert.ok(h.calls.some((call) => call.bin.endsWith(`${cli}.exe`) && call.args.includes(cli === "claude" ? "login" : "--device-auth")), cli);
+      assert.equal(service.state.tools[cli].signedIn, true, cli);
+      assert.equal(service.state.tools[cli].action?.kind, "login");
       assert.equal(service.state.tools[cli].action?.status, "done");
-      const end = Date.now() + 3000;
-      while (service.state.tools[cli].signedIn !== true && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.equal(service.state.tools[cli].signedIn, true, `${cli}: the later re-read picks up the sign-in`);
-      assert.deepEqual(h.calls.findLast((call) => call.bin === cli && JSON.stringify(call.args) === JSON.stringify(expected[cli].status))?.args, expected[cli].status);
     }
-  } finally { h.close(); }
-});
-
-test("login re-read: it keeps asking every interval, tells the page each time, and stops once signed in", async () => {
-  const h = harness();
-  try {
-    let reads = 0, changes = 0;
-    const runner: RunCli = async (bin, args) => {
-      if (bin === "codex" && args[0] === "--version") return { code: 0, stdout: "codex 1.2.3", stderr: "" };
-      if (bin === "codex" && args[0] === "login" && args[1] === "status") { reads++; return reads >= 4 ? { code: 0, stdout: "Logged in using ChatGPT", stderr: "" } : { code: 1, stdout: "Not logged in", stderr: "" }; }
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, runCli: runner, onChange: () => { changes++; }, loginRecheckMs: 10 });
-    await service.loginCli("codex", "login_poll", h.project);
-    assert.equal(reads, 1, "only the installed check read it; the window has only just opened");
-    const end = Date.now() + 3000;
-    while (service.state.tools.codex.signedIn !== true && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(service.state.tools.codex.signedIn, true);
-    const readsAtSignIn = reads;
-    assert.ok(readsAtSignIn >= 4, `it asked more than once: ${readsAtSignIn}`);
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    assert.equal(reads, readsAtSignIn, "no more reads after it said signed in");
-    assert.ok(changes >= 4, `the page was told after each re-read: ${changes}`);
+    assert.equal(h.calls.some((call) => call.args.includes("start")), false);
+    await assert.rejects(service.loginCli("opencode", "unchecked", h.project), /confirm the installation/);
+    const fx = await keyFixture(t);
+    try {
+      const pending = fx.service.cliLogin(begin(), fx.send), stopped = assert.rejects(pending, /stopped/);
+      await until(() => fx.events.at(-1)?.phase === "waitingKey");
+      assert.equal(fx.service.state.catalogTools.opencode.action?.phase, "waitingKey");
+      assert.equal(fx.spawns.length, 0, "key panel waits without a vendor login process");
+      await fx.service.cliLogin({ type: "cancelCliLogin", requestId: "cancel", cli: "opencode", loginRequestId: "key-start" }, fx.send);
+      await stopped;
+    } finally { await fx.close(); }
   } finally { h.close(); }
 });
 
@@ -168,11 +161,11 @@ test("Gemini stays install-only with unknown sign-in and no auth or MCP calls", 
   try {
     const service = h.service();
     await service.refreshAll(h.project);
-    assert.deepEqual(service.state.tools.gemini, { installed: true, version: "1.2.3", signedIn: null });
+    assert.deepEqual(service.state.tools.gemini, { installed: true, version: "1.2.3", signedIn: null, supportedVersion: true });
     const geminiCalls = h.calls.filter((call) => call.bin === "gemini").map((call) => call.args);
     assert.deepEqual(geminiCalls, [["--version"]], "Gemini runs its read-only version command only");
     const before = h.calls.length;
-    await assert.rejects(service.loginCli("gemini", "gemini_login", h.project), /unknown and sign-in is unavailable/);
+    await assert.rejects(service.loginCli("gemini", "gemini_login", h.project), /no verified sign-in flow/);
     assert.equal(service.state.tools.gemini.action?.requestId, "gemini_login", "the sign-in refusal is recorded against its request id");
     assert.equal(service.state.tools.gemini.action?.status, "failed");
     await assert.rejects(service.addMcp("gemini", "gemini_mcp", "tool", "https://mcp.example"), /MCP changes are unavailable/);
@@ -189,12 +182,14 @@ test("round 1 fix 14: the login window starts the CLI the status check would use
   writeFileSync(join(planted, "claude.exe"), ""); writeFileSync(join(real, "claude.exe"), "");
   setCliSkipFolders(() => [planted]);
   try {
+    h.signedIn.claude = false;
     h.env.PATH = `${planted};${real}`;
     await h.service().loginCli("claude", "login_planted", h.project);
-    assert.equal(h.calls.findLast((call) => call.bin === "cmd")?.env?.CC_LOGIN_PROGRAM, join(real, "claude.exe"), "the copy inside the workspace folder is skipped");
+    assert.equal(h.calls.findLast((call) => call.bin.endsWith("claude.exe"))?.bin, join(real, "claude.exe"), "the copy inside the workspace folder is skipped");
     h.calls.length = 0;
+    h.signedIn.claude = false;
     h.env.PATH = planted;
-    await assert.rejects(h.service().loginCli("claude", "login_only_planted", h.project), /found only inside a project folder/);
+    await assert.rejects(h.service().loginCli("claude", "login_only_planted", h.project), /Could not start sign-in/);
     assert.equal(h.calls.some((call) => call.bin === "cmd"), false, "nothing is launched when the only copy is the planted one");
   } finally { setCliSkipFolders(() => []); h.close(); }
 });
@@ -205,13 +200,14 @@ test("round 2 fix 4: a login path with spaces, (x86), & and ^ reaches the launch
     for (const name of ["Program Files (x86)", "A&B", "a ^ b & (c)"]) {
       const dir = join(h.root, name, "bin"); mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, "claude.exe"), "");
+      h.signedIn.claude = false;
       h.env.PATH = dir;
       h.calls.length = 0;
       await h.service().loginCli("claude", "login_odd_path", h.project);
-      const opened = h.calls.findLast((call) => call.bin === "cmd");
-      assert.deepEqual(opened?.args, [...LOGIN_START, "auth", "login"], name);
-      assert.equal(opened?.env?.CC_LOGIN_PROGRAM, join(dir, "claude.exe"), name);
-      assert.equal(opened?.verbatimArgs, true, name);
+      const opened = h.calls.findLast((call) => call.bin.endsWith("claude.exe"));
+      assert.deepEqual(opened?.args, ["auth", "login"], name);
+      assert.equal(opened?.bin, join(dir, "claude.exe"), name);
+      assert.equal(opened?.verbatimArgs, false, name);
     }
   } finally { h.close(); }
 });
@@ -242,13 +238,42 @@ test("ghLogin opens web auth and stores only the connected flag and account name
   const h = harness([]);
   try {
     h.setGithub(false);
-    const service = h.service();
+    let launches = 0;
+    const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, runCli: h.runner, loginRecheckMs: 10,
+      launchGitHub: async () => { launches++; h.setGithub(true); return true; } });
     await service.loginGitHub("github_login");
-    assert.deepEqual(h.calls.find((call) => call.bin === "cmd")?.args, ["/c", "start", "", "gh", "auth", "login", "--web"]);
+    assert.equal(launches, 1);
+    assert.equal(h.calls.some((call) => call.bin === "cmd"), false);
     const end = Date.now() + 3000;
     while (service.state.github.connected !== true && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(service.state.github, { connected: true, account: "octocat", action: { requestId: "github_login", status: "done", message: "Done" } });
     assert.doesNotMatch(JSON.stringify(service.snapshot()), /ghp_SHOULD_NEVER_LEAK|Token:/);
+  } finally { h.close(); }
+});
+
+test("sign-in re-read (GitHub connect): it keeps asking every interval, tells the page each time, and stops once signed in", async () => {
+  const h = harness([]);
+  try {
+    let reads = 0, changes = 0;
+    const runner: RunCli = async (bin, args) => {
+      if (bin === "gh" && args.join(" ") === "auth status") {
+        reads++;
+        return reads >= 4 ? { code: 0, stdout: "Logged in to github.com account octocat", stderr: "" } : { code: 1, stdout: "You are not logged in to any GitHub hosts", stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, runCli: runner, onChange: () => { changes++; }, loginRecheckMs: 10, launchGitHub: async () => true });
+    await service.loginGitHub("github_poll");
+    assert.equal(reads, 0, "the window has only just opened: nothing has re-read the status yet");
+    const end = Date.now() + 3000;
+    while (service.state.github.connected !== true && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(service.state.github.connected, true);
+    const readsAtSignIn = reads;
+    assert.ok(readsAtSignIn >= 4, `it asked more than once: ${readsAtSignIn}`);
+    const changesAtSignIn = changes;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    assert.equal(reads, readsAtSignIn, "no more reads after it said signed in");
+    assert.ok(changesAtSignIn >= 4, `the page was told after each re-read: ${changesAtSignIn}`);
   } finally { h.close(); }
 });
 
@@ -282,7 +307,7 @@ test("sign-in status reads the real output formats: claude JSON, codex words, op
         const row = { ...outputs, ...patch }[`${bin} ${args.join(" ")}`];
         return row ? { stderr: "", ...row } : { code: 0, stdout: "", stderr: "" };
       };
-      const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, runCli: runner });
+      const service = new SettingsService({ refreshPath: async () => {}, dataRoot: h.dataRoot, env: h.env, runCli: runner });
       await service.refreshAll(null);
       return service.state.tools;
     };

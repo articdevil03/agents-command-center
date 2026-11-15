@@ -165,6 +165,7 @@ function registerServerShutdownHandlers(proc, calls, t) {
   runInNewContext(shutdownSource, {
     process: proc, console: { log() {}, error() {} },
     describeError: error => String(error),
+    settingsService: { models: { close: () => calls.push("models:close"), drain: async () => { calls.push("models:drain"); } }, installer: { close() {}, drain: async () => true }, login: { close: () => calls.push("login:close"), drain: async () => { calls.push("login:drain"); return true; } } },
     fixedGitOperations: { close: () => calls.push("git:close"), drain: () => { calls.push("git:drain"); return drain; } },
     closeWorkerAdmission: () => calls.push("worker:close"), drainWorkers: () => { calls.push("worker:drain"); return Promise.resolve(true); },
     clearTimeout() {}, clearInterval: (timer) => calls.push(`${timer.name} timer`),
@@ -191,7 +192,8 @@ test("server signal shutdown stops tab leaders and workers, closes every connect
     const proc = Object.assign(new EventEmitter(), { connected: true, send() {}, exit: (code) => calls.push(`exit:${code}`) });
     const shutdown = registerServerShutdownHandlers(proc, calls, t);
     proc.emit(event);
-    assert.deepEqual(calls, ["worker:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
+    await new Promise(done => setImmediate(done));
+    assert.deepEqual(calls, ["worker:close", "login:close", "models:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain", "login:drain", "models:drain", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
     assert.deepEqual(shutdown.timeouts, [7000]);
     shutdown.closeHttp();
     assert.equal(calls.some(call => String(call).startsWith("exit:")), false, "HTTP completion waits for Git drain");
@@ -215,7 +217,8 @@ test("Electron's real shutdown message drives the server IPC handler", async t =
   electron.proc.emit("message", "unrelated IPC");
   assert.deepEqual(calls, [], "non-shutdown IPC does nothing");
   electron.proc.emit("message", electron.sent[0]);
-  assert.deepEqual(calls, ["worker:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
+  await new Promise(done => setImmediate(done));
+  assert.deepEqual(calls, ["worker:close", "login:close", "models:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain", "login:drain", "models:drain", "websocket:a", "websocket:b", "websocket server", "http server", "http connections"]);
   assert.deepEqual(server.timeouts, [7000]);
   server.releaseDrain(); await Promise.resolve();
   assert.notEqual(calls.at(-1), "exit:0", "Git completion still waits for HTTP");
@@ -241,7 +244,7 @@ test("server disconnect handler and startup parent-loss check stop the process t
     assert.equal(calls.some(call => typeof call === "object"), false, "taskkill waits for drain");
     shutdown.releaseDrain(); await shutdown.ended;
     assert.deepEqual(plain(calls), [
-      "worker:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain",
+      "worker:close", "login:close", "models:close", "git:close", "stall timer", "backpressure timer", "own windows ended", "folder watchers closed", "leader:alpha", "leader:beta", "workers", "git:drain", "worker:drain", "login:drain", "models:drain",
       { command: SYSTEM32_TASKKILL, args: ["/pid", "4321", "/T", "/F"], options: { windowsHide: true } },
       "exit:0",
     ]);
@@ -256,6 +259,8 @@ test("server shutdown is idempotent and unknown Git drain refuses successful exi
   proc.emit("SIGTERM"); proc.emit("SIGINT"); proc.emit("message", "shutdown");
   assert.equal(calls.filter(call => call === "git:close").length, 1);
   assert.equal(calls.filter(call => call === "git:drain").length, 1);
+  assert.equal(calls.filter(call => call === "models:close").length, 1);
+  assert.equal(calls.filter(call => call === "models:drain").length, 1);
   assert.equal(calls.some(call => typeof call === "object"), false, "no taskkill before unconfirmed drain");
   shutdown.closeHttp(); shutdown.releaseDrain(false); await within(shutdown.ended, "disconnected unknown drain");
   assert.equal(calls.includes("exit:0"), false);

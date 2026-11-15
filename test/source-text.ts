@@ -31,12 +31,13 @@ export function styleSource(root = repoRoot): string {
   return pageStyles(root).filter((path) => path.startsWith("public/styles/")).map((path) => lf(join(root, path))).join("");
 }
 
-// A server file plus every .ts file in its folder (server/<d>.ts -> server/<d>/), the folder sorted by path.
+// A server file plus every .ts or .js file in its folder (server/<d>.ts -> server/<d>/), the folder sorted by path. A .js part exists only where the
+// Electron main process imports it without a TypeScript loader (server/settings/cli-login-policy.js).
 function serverJoined(root: string, file: string, folder: string): string {
   const files = existsSync(join(root, file)) ? [join(root, file)] : [];
   const dir = join(root, folder);
   if (existsSync(dir)) {
-    const nested = (at: string): string[] => readdirSync(at).flatMap((name) => (statSync(join(at, name)).isDirectory() ? nested(join(at, name)) : name.endsWith(".ts") ? [join(at, name)] : []));
+    const nested = (at: string): string[] => readdirSync(at).flatMap((name) => (statSync(join(at, name)).isDirectory() ? nested(join(at, name)) : /\.(ts|js)$/.test(name) ? [join(at, name)] : []));
     files.push(...nested(dir).sort());
   }
   return files.length ? files.map(lf).join("") : lf(join(root, file));
@@ -91,7 +92,7 @@ function logicalEntry(file: string, root: string): string {
   if (file.split("/").length === 2) return file;
   if (top === "public" && folder === "app") return "public/app.js";
   if (top === "server" && folder === "main") return "server/index.ts";
-  if ((top === "server" || top === "public") && folder === "fixed-crew" && file.split("/").length === 3) return file;
+  if ((top === "server" || top === "public") && ["fixed-crew", "first-run"].includes(folder) && file.split("/").length === 3) return file;
   if (top === "server" && existsSync(join(root, `server/${folder}.ts`))) return `server/${folder}.ts`;
   throw new Error(`${file} sits in a folder that is not a split part of any source file`);
 }

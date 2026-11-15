@@ -21,7 +21,7 @@ export function killProcessTree(child: ChildProcess, onUnconfirmed?: () => void)
   if (process.platform !== "win32") { plainKill(); return; }
   const forced = process.env.CC_TEST_FAKE_CLI === "1" ? process.env.CC_TEST_KILLER_EXIT : undefined;
   const killer = forced !== undefined
-    ? spawn(process.execPath, ["-e", `process.exit(${Number(forced) || 0})`], { windowsHide: true, stdio: "ignore" })
+    ? spawn(process.execPath, ["-e", `process.exit(${Number(forced) || 0})`], { windowsHide: true, stdio: "ignore", env: { ...process.env, ...(process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}) } })
     : spawn(windowsTaskkillPath(), ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
   killer.on("error", plainKill);
   killer.on("exit", (code) => {

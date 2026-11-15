@@ -1,3 +1,4 @@
+import { goCredentialSecrets } from "./settings/opencode/credentials.ts";
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -59,7 +60,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
   let child: ReturnType<LeaderSpawn> | null = null;
 
   // The bridge token and the server password must never reach chat errors (they are stored in the chat log).
-  const secrets = [password, deps.bridge.token, Buffer.from(`opencode:${password}`).toString("base64")];
+  const secrets = [password, auth, deps.bridge.token, Buffer.from(`opencode:${password}`).toString("base64"), ...goCredentialSecrets(process.env)];
   const redact = (text: string): string => secrets.reduce((out, secret) => (secret ? out.split(secret).join("[hidden]") : out), text);
   const { emitDelta, flushTail, flushSafeTail } = createSecretStream(secrets, cb);
 
@@ -322,7 +323,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
         parts.push({ type: "file", mime, filename: path.split(/[\\/]/).pop(), url: `data:${mime};base64,${readFileSync(path).toString("base64")}` });
       } catch { parts.push({ type: "text", text: `[image failed to load: ${path}]` }); }
     }
-    return api("POST", `/session/${sessionId}/prompt_async`, { model: splitOpencodeModel(model), variant: seat.effort, parts });
+    return api("POST", `/session/${sessionId}/prompt_async`, { model: splitOpencodeModel(model), ...(seat.effort ? { variant: seat.effort } : {}), parts });
   }
 
   function startTurn(text: string, images: string[]): Promise<void> {

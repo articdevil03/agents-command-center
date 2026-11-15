@@ -6,16 +6,24 @@
     const geminiRow = geminiInstall.closest("[data-tool-row]");
     const geminiUnknown = text("[data-tool-subtitle]", geminiRow) === "Not installed." && !geminiRow.querySelector('[data-tool-status="connected"]');
     const installedHasNoInstall = !document.querySelector('#s-tools [data-setting-action="install-cli"][data-cli="claude"]');
-    const toolTargets = ['#s-tools [data-tool-row][data-cli="gemini"]', '#s-tools [data-tool-row][data-cli="gemini"] .tool-row-action', '#s-tools [data-tool-row][data-cli="gemini"] [data-setting-action="install-cli"]', '#s-tools [data-tool-row][data-cli="gemini"] .cmd code', '#s-tools [data-tool-row][data-cli="gemini"] [data-copy]'];
+    const toolTargets = ['#s-tools [data-tool-row][data-cli="gemini"]', '#s-tools [data-tool-row][data-cli="gemini"] .tool-row-action', '#s-tools [data-tool-row][data-cli="gemini"] [data-setting-action="install-cli"]', '#s-tools [data-tool-row][data-cli="gemini"] .cmd code', '#s-tools [data-tool-row][data-cli="gemini"] [data-copy-address]'];
     const missingToolTargets = toolTargets.filter((selector) => !document.querySelector(selector));
     const geminiToolRow = requireElement('#s-tools [data-tool-row][data-cli="gemini"]');
     const geminiAction = requireElement('#s-tools [data-tool-row][data-cli="gemini"] [data-setting-action="install-cli"]');
-    const geminiCommand = text('#s-tools [data-tool-row][data-cli="gemini"] .cmd code');
-    const geminiCopy = requireElement('#s-tools [data-tool-row][data-cli="gemini"] [data-copy]');
+    const geminiGuide = text('#s-tools [data-tool-row][data-cli="gemini"] .cmd code');
+    const geminiCopy = requireElement('#s-tools [data-tool-row][data-cli="gemini"] [data-copy-address]');
     const installRightColumn = geminiAction.closest("[data-tool-row-action]") === geminiToolRow.querySelector("[data-tool-row-action]") && geminiAction.classList.contains("primary");
-    const geminiCommandExact = geminiCommand === "npm install -g @google/gemini-cli" && geminiCopy.dataset.copy === geminiCommand;
+    const geminiGuideExact = geminiGuide === "https://geminicli.com/docs/get-started/installation/" && geminiCopy.dataset.copyAddress === geminiGuide;
     check(`Pack C AI tool target list finds every right-column install detail at ${innerWidth}px`, missingToolTargets.length === 0, { found: toolTargets.filter((selector) => document.querySelector(selector)), missing: missingToolTargets, cli: "gemini" });
-    check(`Pack C Gemini Install stays right-aligned with its real npm argv at ${innerWidth}px`, installRightColumn && geminiCommandExact && text("[data-tool-subtitle]", geminiToolRow) === "Not installed.", { matchedRow: geminiToolRow.dataset.cli, rightAction: installRightColumn, actionText: geminiAction.textContent.trim(), primary: geminiAction.classList.contains("primary"), command: geminiCommand, copyValue: geminiCopy.dataset.copy, subtitle: text("[data-tool-subtitle]", geminiToolRow) });
+    check(`Pack C Gemini Install stays right-aligned with its official fallback guide at ${innerWidth}px`, installRightColumn && geminiGuideExact && !geminiToolRow.querySelector("details").open && !geminiToolRow.querySelector(".cmd code").checkVisibility() && text("[data-tool-subtitle]", geminiToolRow) === "Not installed.", { matchedRow: geminiToolRow.dataset.cli, rightAction: installRightColumn, actionText: geminiAction.textContent.trim(), primary: geminiAction.classList.contains("primary"), command: geminiGuide, copyValue: geminiCopy.dataset.copyAddress, subtitle: text("[data-tool-subtitle]", geminiToolRow) });
+    geminiToolRow.querySelector("summary").click();
+    const copied = [], clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (address) => copied.push(address) } });
+    try {
+      geminiCopy.click(); await settleMicrotasks();
+      check(`Gemini fallback opens the official guide and copies its address at ${innerWidth}px`, geminiToolRow.querySelector("details").open && geminiCopy.checkVisibility() && copied.join() === geminiGuide && $("toast").textContent === "Address copied" && Boolean(document.querySelector("#s-tools [data-settings-refresh]")), { geminiGuide, copied });
+      check(`Gemini fallback has no shell instructions or install-command copy control at ${innerWidth}px`, !geminiToolRow.querySelector("[data-copy]") && !/powershell|npm install|curl |winget|open.{0,12}terminal/i.test(geminiToolRow.querySelector("details").textContent), { guideText: geminiToolRow.querySelector("details").textContent });
+    } finally { if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard); else delete navigator.clipboard; }
     window.__ccConfirmResult = false;
     let before = window.__sent.length; geminiInstall.click(); confirmIfAsked();
     const installDeniedSendsNothing = !window.__sent.slice(before).some((item) => item.type === "installCli") && window.__ccConfirms.at(-1)?.includes("Gemini");
@@ -23,6 +31,9 @@
     check(`Gemini stays install-only, unknown sign-in stays unknown, and unconfirmed Install sends nothing at ${innerWidth}px`, geminiUnknown && installedHasNoInstall && installDeniedSendsNothing && !document.querySelector('#s-tools [data-setting-action="login-cli"][data-cli="gemini"]'), { geminiUnknown, installedHasNoInstall, installDeniedSendsNothing, geminiInstructionText: "~/.gemini/GEMINI.md and project GEMINI.md" });
     const geminiInstallMessage = await settingsAction({ name: `Gemini Install at ${innerWidth}px`, section: "tools", selector: '#s-tools [data-setting-action="install-cli"][data-cli="gemini"]', type: "installCli", fields: { cli: "gemini", confirm: true } });
     const geminiMessageGood = geminiInstallMessage?.requestId && geminiInstallMessage.confirm === true;
+    // Pack 29 W5: Settings offers Sign in only for a tool the server marks managed (state.cliCatalog[].signIn.managed); this fake state says
+    // so for Claude Code, as the server's sign-in policy does.
+    { const next = structuredClone(window.__latestState); for (const entry of next.cliCatalog ?? []) if (entry.id === "claude") entry.signIn = { ...(entry.signIn ?? {}), managed: true, unsupportedMessage: null }; deliver(next); }
     openSettingsSection("tools");
     const loginMessage = await settingsAction({ name: `CLI login at ${innerWidth}px`, section: "tools", selector: '#s-tools [data-setting-action="login-cli"][data-cli="claude"]', type: "cliLogin", fields: { cli: "claude" } });
 
@@ -44,7 +55,9 @@
     const geminiInstructions = geminiCard.includes("GEMINI.md") && geminiCard.includes("(global)") && geminiCard.includes("(project)");
     const geminiNoMcpControls = !document.querySelector('#s-skills [data-mcp-form="gemini"]') && !document.querySelector('#s-skills [data-setting-action="mcp-remove"][data-cli="gemini"]') && !document.querySelector('#s-skills [data-setting-action="login-cli"][data-cli="gemini"]');
     const opencodeNoRemove = !document.querySelector('#s-skills [data-setting-action="mcp-remove"][data-cli="opencode"]');
-    const noPlaceholderCommands = [...document.querySelectorAll("#s-tools [data-cli] .cmd")].every((node) => /^npm install -g @[A-Za-z0-9/@._-]+$/.test(text("code", node)) && node.querySelector("[data-copy]")?.dataset.copy === text("code", node));
+    // Every fallback shows its official guide address without shell instructions.
+    const shownGuides = [...document.querySelectorAll("#s-tools [data-cli] .cmd")];
+    const officialGuidesOnly = shownGuides.length > 0 && shownGuides.every((node) => { const entry = (window.__latestState?.cliCatalog ?? []).find((item) => item.id === node.closest("[data-cli]").dataset.cli); const guide = window.CC_FIRST_RUN_HELP?.tools?.[entry?.id]?.page ?? entry?.sources?.[0]; return Boolean(guide) && text("code", node) === guide && node.querySelector("[data-copy-address]")?.dataset.copyAddress === guide && !node.closest("details").querySelector("[data-copy]") && !/powershell|npm install|curl |winget|open.{0,12}terminal/i.test(node.closest("details").textContent); });
     let mcpForm = requireElement('#s-skills [data-mcp-form="claude"]');
     if (mcpForm.hidden) requireElement('#s-skills [data-settings-add="mcp-claude"]').click();
     mcpForm = requireElement('#s-skills [data-mcp-form="claude"]');
@@ -76,7 +89,7 @@
     const pluginRemoveDenied = confirmIfAsked() && !window.__sent.slice(before).some((item) => item.type === "pluginUninstall");
     window.__ccConfirmResult = true;
     const pluginRemoveMessage = await settingsAction({ name: `Plugin remove at ${innerWidth}px`, section: "skills", selector: '#s-skills [data-setting-action="plugin-remove"][data-name="sample-plugin"]', type: "pluginUninstall", fields: { name: "sample-plugin", confirm: true } });
-    check(`Skills and MCP controls respect Gemini/OpenCode limits and validate names and endpoints at ${innerWidth}px`, geminiInstructions && geminiNoMcpControls && opencodeNoRemove && noPlaceholderCommands && invalidMcpBlocked && nonHttpsMcpBlocked && credentialMcpBlocked && shellMetaMcpBlocked && mcpRemoveDenied && pluginRemoveDenied && Boolean(geminiMessageGood && loginMessage?.requestId && githubMessage?.requestId && vaultMessage?.requestId && defaultFolderMessage?.requestId && mcpMessage?.requestId && mcpRemoveMessage?.confirm === true && pluginInstallMessage?.requestId && pluginRemoveMessage?.confirm === true), { geminiInstructions, geminiNoMcpControls, opencodeNoRemove, noPlaceholderCommands, invalidMcpBlocked, nonHttpsMcpBlocked, credentialMcpBlocked, shellMetaMcpBlocked, mcpRemoveDenied, pluginRemoveDenied, ids: [geminiInstallMessage?.requestId, loginMessage?.requestId, githubMessage?.requestId, vaultMessage?.requestId, defaultFolderMessage?.requestId, mcpMessage?.requestId, mcpRemoveMessage?.requestId, pluginInstallMessage?.requestId, pluginRemoveMessage?.requestId] });
+    check(`Skills and MCP controls respect Gemini/OpenCode limits and validate names and endpoints at ${innerWidth}px`, geminiInstructions && geminiNoMcpControls && opencodeNoRemove && officialGuidesOnly && invalidMcpBlocked && nonHttpsMcpBlocked && credentialMcpBlocked && shellMetaMcpBlocked && mcpRemoveDenied && pluginRemoveDenied && Boolean(geminiMessageGood && loginMessage?.requestId && githubMessage?.requestId && vaultMessage?.requestId && defaultFolderMessage?.requestId && mcpMessage?.requestId && mcpRemoveMessage?.confirm === true && pluginInstallMessage?.requestId && pluginRemoveMessage?.confirm === true), { geminiInstructions, geminiNoMcpControls, opencodeNoRemove, officialGuidesOnly, invalidMcpBlocked, nonHttpsMcpBlocked, credentialMcpBlocked, shellMetaMcpBlocked, mcpRemoveDenied, pluginRemoveDenied, ids: [geminiInstallMessage?.requestId, loginMessage?.requestId, githubMessage?.requestId, vaultMessage?.requestId, defaultFolderMessage?.requestId, mcpMessage?.requestId, mcpRemoveMessage?.requestId, pluginInstallMessage?.requestId, pluginRemoveMessage?.requestId] });
   };
   const checkObsidianOpen = async () => {
     openSettingsSection("vault");

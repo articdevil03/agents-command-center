@@ -1,57 +1,59 @@
+// --scan-packaged <dir>: reads every file and name, including binaries and node_modules.
+// Private patterns apply everywhere except checksum-reviewed dependencies. Built-ins skip top-level node_modules/.
+// Refuses private config/list entries at any depth, top-level data folders, links, and fewer than 50 files.
+// Prints total and node_modules file/byte counts. Never copies or runs git in this mode.
 // Builds the shareable copy: `npm run export:public -- <targetDir>` copies the committed files into a new folder, scans every one for the
 // owner's personal words (a local list, never exported) plus generic personal-data checks, and only on a clean scan makes a fresh
 // single-commit repo there. Any hit prints file:line and stops with nothing written and no git run.
 //   --working-tree  proof only: copies and scans the working tree (tracked + new, not ignored) instead of HEAD, and runs no git in the target.
 // Test-only env: CC_EXPORT_SOURCE (repo to export, default this one), CC_EXPORT_PATTERNS (pattern file, default <repo>/.leak-patterns.local).
+// CC_EXPORT_REVIEWED selects a synthetic reviewed allowlist for packaged-scan tests only.
 import { execFileSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { PATTERN_FILE_NAME, loadPatterns, scanFiles, packagedFiles } from "./export-public/scan.mjs";
 
 const AUTHOR = "Agents Command Center contributors";
 const EMAIL = "noreply@users.noreply.github.com";
-const PATTERN_FILE_NAME = ".leak-patterns.local";
 // Never exported: the design workspace, the private word list, and internal-only files (each named, with its reason).
 const EXCLUDE_PREFIXES = ["design/", "backups/", "tasks/", "executions/", "execution-logs/"];
 const EXCLUDE_FILES = new Set([
   PATTERN_FILE_NAME,
-  "config/setups.json", "config/fixed-crew-recovery.json", "config/acp-clis.json",
+  "config/first-run.json", "config/setups.json", "config/fixed-crew-recovery.json", "config/acp-clis.json",
   ".packC-map.md", // an internal pack state map, only meaningful to the build process that wrote it
 ]);
-const PROFILE_OK = /^(example|runner|user|username|test|tester|x|public|default|me|you|name|yourname|someone)$/i;
-const PROFILE_TOKEN = /^(?:%[A-Za-z_]+%|\$env:[A-Za-z_]+|\$\{[^}]*\})$/i; // %USERNAME%, $env:USERNAME, ${...}, nothing looser
-const EMAIL_OK = /@(?:users\.noreply\.github\.com|noreply\.github\.com|(?:[a-z0-9-]+\.)*example(?:\.(?:com|org|net))?)$/i;
-
-// npm's own upstream deprecation text for glob@7 names this address; exempt only that exact address, only in the lockfile, only inside a "deprecated" value.
-const LOCKFILE_DEPRECATION_EMAIL = ["i", "izs.me"].join("@"); // built from parts: this file must not hold the address itself
-function lockfileDeprecation(label, text, found) {
-  if (label !== "package-lock.json" || found[0] !== LOCKFILE_DEPRECATION_EMAIL) return false;
-  return /^\s*"deprecated":/.test(text.slice(text.lastIndexOf("\n", found.index) + 1, found.index));
-}
-
 const fail = (code, message) => { console.error(message); process.exit(code); };
 
 const args = process.argv.slice(2);
 const workingTree = args.includes("--working-tree");
+const packaged = args.includes("--scan-packaged");
 const positional = args.filter((arg) => !arg.startsWith("--"));
-if (positional.length !== 1 || args.some((arg) => arg.startsWith("--") && arg !== "--working-tree")) fail(2, "usage: node scripts/export-public.mjs <targetDir> [--working-tree]");
+if ((workingTree && packaged) || positional.length !== 1 || args.some((arg) => arg.startsWith("--") && arg !== "--working-tree" && arg !== "--scan-packaged")) fail(2, "usage: node scripts/export-public.mjs <targetDir> [--working-tree]");
 const sourceRoot = resolve(process.env.CC_EXPORT_SOURCE ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
 const patternFile = resolve(process.env.CC_EXPORT_PATTERNS ?? join(sourceRoot, PATTERN_FILE_NAME));
 const target = resolve(positional[0]);
+if (process.env.CC_EXPORT_REVIEWED !== undefined && !existsSync(process.env.CC_EXPORT_REVIEWED)) fail(2, `CC_EXPORT_REVIEWED file is missing: ${process.env.CC_EXPORT_REVIEWED}`);
 
 const git = (cwd, gitArgs, options = {}) => execFileSync("git", gitArgs, { cwd, maxBuffer: 1 << 30, windowsHide: true, ...options });
 const list = (gitArgs) => git(sourceRoot, gitArgs).toString("utf8").split("\0").filter(Boolean);
 
 // ---- the word list: never exports unscanned ----
-if (!existsSync(patternFile)) fail(2, `refusing to export: the pattern file is missing (${basename(patternFile)}); nothing is exported unscanned`);
-const patterns = [];
-readFileSync(patternFile, "utf8").split(/\r?\n/).forEach((line, index) => {
-  const text = line.trim();
-  if (!text || text.startsWith("#")) return;
-  try { patterns.push({ line: index + 1, regex: new RegExp(text, "i") }); }
-  catch { fail(2, `refusing to export: pattern file line ${index + 1} is not a valid regular expression`); }
-});
-if (patterns.length === 0) fail(2, "refusing to export: the pattern file has no patterns; nothing is exported unscanned");
+let patterns;
+try { patterns = loadPatterns(patternFile); }
+catch (error) { fail(error.exitCode ?? 2, error.message); }
+if (packaged) {
+  try {
+    const payload = packagedFiles(target);
+    const hits = scanFiles(payload, patterns, { packaged: true, reviewedFile: process.env.CC_EXPORT_REVIEWED });
+    const modules = payload.filter((file) => file.path.startsWith("node_modules/"));
+    const bytes = (files) => files.reduce((n, file) => n + file.bytes.length, 0);
+    console.log(`packaged scan: ${payload.length} files, ${bytes(payload)} bytes; node_modules: ${modules.length} files, ${bytes(modules)} bytes`);
+    if (hits.size) { console.error([...hits].join("\n")); fail(1, `packaged scan stopped: ${hits.size} hit(s); nothing was written`); }
+    console.log("packaged scan clean: 0 hits");
+    process.exit(0);
+  } catch (error) { fail(error.exitCode ?? 2, error.message); }
+}
 
 // ---- the target: new or empty, outside the repo, not a link ----
 function existingAncestor(path) { let dir = path; while (!existsSync(dir)) dir = dirname(dir); return dir; }
@@ -87,36 +89,7 @@ if (workingTree) {
 }
 
 // ---- the scan: every byte and every name; a hit stops everything ----
-const hits = new Set(); // a set: the byte pass and the text pass may report the same place
-function scanText(label, text, lineOf) {
-  for (const { line, regex } of patterns) {
-    const found = regex.exec(text);
-    if (found) hits.add(`${label}${lineOf(found.index)}: pattern #${line} matched "${found[0].slice(0, 80)}"`);
-  }
-  for (const found of text.matchAll(/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g)) {
-    // Only GitHub's own noreply domains and the reserved example domains are not personal data.
-    if (!EMAIL_OK.test(found[0]) && !lockfileDeprecation(label, text, found)) hits.add(`${label}${lineOf(found.index)}: built-in email address "${found[0].slice(0, 80)}"`);
-  }
-  // The whole folder name (spaces included) up to the next separator or closing quote; only a complete placeholder or token is exempt.
-  for (const found of text.matchAll(/(?:[A-Za-z]:|\/[a-z])[\\/]+Users[\\/]+([^\\/\r\n"'`<>|*?;,)]+)/gi)) {
-    const name = found[1].trim();
-    if (!PROFILE_OK.test(name) && !PROFILE_TOKEN.test(name)) hits.add(`${label}${lineOf(found.index)}: built-in Windows user-profile path "${found[0].slice(0, 80)}"`);
-  }
-}
-for (const { path, bytes } of files) {
-  scanText(`${path}`, path, () => " (file name)");
-  // latin1 keeps one char per byte, so a binary file is scanned byte for byte and the line number counts real newlines.
-  const text = bytes.toString("latin1");
-  const lineOf = (index) => `:${text.slice(0, index).split("\n").length}`;
-  scanText(path, text, lineOf);
-  const utf8 = bytes.toString("utf8");
-  if (utf8 !== text) scanText(path, utf8, (index) => `:${utf8.slice(0, index).split("\n").length}`);
-  // UTF-16 holds a NUL beside every ASCII letter, so the byte pass cannot see a word in it: decode both byte orders too.
-  if (bytes.includes(0)) {
-    const even = bytes.subarray(0, bytes.length - (bytes.length % 2));
-    for (const wide of [even.toString("utf16le"), Buffer.from(even).swap16().toString("utf16le")]) scanText(path, wide, (index) => `:${wide.slice(0, index).split("\n").length}`);
-  }
-}
+const hits = scanFiles(files, patterns);
 if (hits.size > 0) {
   console.error([...hits].join("\n"));
   fail(1, `export stopped: ${hits.size} hit(s) in ${files.length} files; nothing was written`);

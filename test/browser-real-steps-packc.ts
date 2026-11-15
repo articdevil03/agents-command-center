@@ -33,6 +33,9 @@ const REAL_SETTINGS_NAMES = (width: number): string[] => [
   `real Settings nav finds all eight sections at ${width}px`,
   `real Gemini remains install-only with server instruction inventory at ${width}px`,
   `Gemini install shows real server status for its fresh id at ${width}px`,
+  // Pack 29 W5: while the real server marks Claude Code unmanaged (block S1 not landed), the check is the no-Sign-in rule; once the server
+  // marks it managed, 07-pack-c-settings.js runs the real sign-in action again and this name goes back to its "shows real server status" form.
+  `managed sign-in fails closed without a vendor process at ${width}px`,
   `Claude sign-in shows real server status for its fresh id at ${width}px`,
   `GitHub connect shows real server status for its fresh id at ${width}px`,
   `Notes vault refusal shows real server status for its fresh id at ${width}px`,

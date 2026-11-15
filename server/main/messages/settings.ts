@@ -1,8 +1,10 @@
 import { WebSocket } from "ws";
+import { refreshProcessPath } from "../../leader-common/path-refresh.ts";
 import { writeAcpClis, validateAcpCli, parseAcpStartCommand, acpKindOf, ACP_MAX_CLIS } from "../../config.ts";
 import { resolveCliOrThrow, type LeaderHandle } from "../../leader-common.ts";
 import { readChatRequestId } from "../../chat-store.ts";
 import { ModeBusyError } from "../../settings.ts";
+import { validateInstallRequest } from "../../settings/cli-install.ts";
 import { broadcast, sendError, stateMessage } from "../broadcast.ts";
 import { stopLeaderSession } from "../leader-session.ts";
 import type { MessageHandler } from "./types.ts";
@@ -16,6 +18,7 @@ function onRefreshSettings(ws: WebSocket, message: any): void {
   const folder = tabLocation(selectedTabId)?.tab.folder ?? null;
   const requestId = readChatRequestId(message.requestId);
   const refresh = async () => {
+    await refreshProcessPath();
     await settingsService.refreshAll(folder);
     try { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "settingsRefreshed" })); } catch { /* a closed socket cannot change the outcome */ }
   };
@@ -27,15 +30,12 @@ function onRefreshSettings(ws: WebSocket, message: any): void {
 function onInstallCli(ws: WebSocket, message: any): void {
   const requestId = requiredRequestId(message.requestId);
   const cli = message.cli;
-  runAsyncAction(ws, message.type, requestId, () => settingsService.installCli(readCliId(cli), requestId, message.confirm), { cli });
+  runAsyncAction(ws, message.type, requestId, () => { validateInstallRequest(message); return settingsService.installCli(message); }, { cli });
   return;
 }
-function onCliLogin(ws: WebSocket, message: any): void {
+function onCancelCliInstall(ws: WebSocket, message: any): void {
   const requestId = requiredRequestId(message.requestId);
-  const cli = message.cli;
-  const folder = tabLocation(selectedTabId)?.tab.folder ?? null;
-  runAsyncAction(ws, message.type, requestId, () => settingsService.loginCli(readCliId(cli), requestId, folder), { cli });
-  return;
+  runAsyncAction(ws, message.type, requestId, () => { validateInstallRequest(message, true); return settingsService.cancelCliInstall(message); }, { cli: message.cli });
 }
 function onGhLogin(ws: WebSocket, message: any): void {
   const requestId = requiredRequestId(message.requestId);
@@ -152,8 +152,9 @@ function onSetPermissionMode(ws: WebSocket, message: any): void {
 export function settingsMessages(): Array<[string, MessageHandler]> {
   return [
     ["refreshSettings", onRefreshSettings],
+    ["refreshOpenCodeModels", (ws, message) => { runAsyncAction(ws, message.type, requiredRequestId(message.requestId), () => settingsService.models.refresh()); }],
     ["installCli", onInstallCli],
-    ["cliLogin", onCliLogin],
+    ["cancelCliInstall", onCancelCliInstall],
     ["ghLogin", onGhLogin],
     ["setNotesVault", onSetNotesVault],
     ["setDefaultProjectFolder", onSetDefaultProjectFolder],

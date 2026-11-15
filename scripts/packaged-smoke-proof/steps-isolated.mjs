@@ -5,7 +5,12 @@ import { packagedSmokePermissionArgs } from "../packaged-smoke-permissions.mjs";
 import { runIsolatedPackagedServer, runIsolatedProofs } from "../packaged-smoke.mjs";
 import { tempOnly, packedAppSource } from "./context.mjs";
 import { makeTemp, removeOwnedTemp, deadPid } from "./fixtures.mjs";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+
+const exe = tempOnly
+  ? fileURLToPath(new URL("../../node_modules/electron/dist/electron.exe", import.meta.url))
+  : join(packedAppSource, "../..", "Command Center.exe");
 
 // 4m. The isolated-server run must report why readiness failed even when the server then refuses to stop.
 {
@@ -16,7 +21,7 @@ import assert from "node:assert/strict";
     Object.assign(stuck, { pid: deadPid(), exitCode: null, signalCode: null, connected: false, stdout: new EventEmitter(), stderr: new EventEmitter() });
     let message = "";
     try {
-      await runIsolatedPackagedServer({ app: dir, outsideRoot: dir, data: dir, spawnProcess: () => stuck, logger: { log() {} }, timeoutMs: 100, stopTimeoutMs: 100 });
+      await runIsolatedPackagedServer({ app: dir, exe, outsideRoot: dir, data: dir, spawnProcess: () => stuck, logger: { log() {} }, timeoutMs: 100, stopTimeoutMs: 100 });
     } catch (error) { message = error.message; }
     assert.match(message, /isolated server readiness timeout/, "the readiness failure must survive");
     assert.match(message, /did not close after shutdown and process-tree stop/, "the stop failure is reported too");
@@ -51,7 +56,7 @@ import assert from "node:assert/strict";
       return child;
     };
     const lines = [];
-    await runIsolatedProofs({ app: dir, outsideRoot: dir, spawnProcess, logger: { log: (line) => lines.push(line) }, timeoutMs: 1000, stopTimeoutMs: 1000 });
+    await runIsolatedProofs({ app: dir, exe, outsideRoot: dir, spawnProcess, logger: { log: (line) => lines.push(line) }, timeoutMs: 1000, stopTimeoutMs: 1000 });
     assert.deepEqual(runs.map((r) => r.permission), [false, true], "first launch without the permission flags, then with them");
     assert.deepEqual(runs.map((r) => r.seededBefore), [false, true], "the permission run happens only on an already seeded folder");
     assert.equal(runs[1].write, `--allow-fs-write=${folder}`, "write containment is scoped to the same folder");
@@ -76,7 +81,7 @@ if (!tempOnly) {
     rmSync(zod, { recursive: true });
     let missingZod;
     try {
-      await runIsolatedPackagedServer({ app, outsideRoot: dir, data, logger: { log() {} } });
+      await runIsolatedPackagedServer({ app, exe, outsideRoot: dir, data, logger: { log() {} } });
     } catch (error) {
       missingZod = error;
     }
@@ -90,7 +95,7 @@ if (!tempOnly) {
     const greenData = join(dir, "green-data");
     cpSync(packedAppSource, greenApp, { recursive: true });
     mkdirSync(greenData);
-    await runIsolatedPackagedServer({ app: greenApp, outsideRoot: dir, data: greenData, logger: { log() {} } });
+    await runIsolatedPackagedServer({ app: greenApp, exe, outsideRoot: dir, data: greenData, logger: { log() {} } });
     console.log("PACKAGED SERVER GREEN: copied app reached ready using only its own files");
   } finally {
     removeOwnedTemp(dir);
@@ -105,18 +110,18 @@ if (!tempOnly) {
     const data = join(dir, "data");
     mkdirSync(data);
     const forbidden = join(dir, "should-not-write.txt");
-    const bad = spawnSync(process.execPath, [
+    const bad = spawnSync(exe, [
       ...packagedSmokePermissionArgs(data), "-e", 'require("node:fs").writeFileSync(process.argv[1], "nope")', forbidden,
-    ], { encoding: "utf8", timeout: 10000 });
+    ], { encoding: "utf8", timeout: 10000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
     assert.notEqual(bad.status, 0, "write outside the data dir must be denied");
     assert.match(bad.stderr, /ERR_ACCESS_DENIED/);
     assert.equal(existsSync(forbidden), false);
     console.log(`WRITE OUTSIDE DATA RED: exit ${bad.status}, ${bad.stderr.split("\n")[0]}`);
 
     const allowed = join(data, "ok.txt");
-    const good = spawnSync(process.execPath, [
+    const good = spawnSync(exe, [
       ...packagedSmokePermissionArgs(data), "-e", 'require("node:fs").writeFileSync(process.argv[1], "ok")', allowed,
-    ], { encoding: "utf8", timeout: 10000 });
+    ], { encoding: "utf8", timeout: 10000, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" } });
     assert.equal(good.status, 0, good.stderr);
     assert.equal(readFileSync(allowed, "utf8"), "ok");
     console.log("WRITE INSIDE DATA GREEN: exit 0");

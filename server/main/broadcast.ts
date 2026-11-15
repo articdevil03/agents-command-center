@@ -1,6 +1,9 @@
+import { cliAvailability } from "../settings/cli-availability.ts";
 import { WebSocket } from "ws";
+import { catalogFacts, catalogLeaderLabel, catalogLeaderEligible, eligibleAcpClis } from "../settings/catalog-acp.ts";
+import { catalogMetadata } from "../settings/cli-catalog-validation.ts";
 import {
-  MODEL_OPTIONS, EFFORT_OPTIONS, OPENCODE_MODEL_SUGGESTIONS, CLAUDE_MODEL_INFO, discoveryInfo, acpKindOf, buildClis,
+  MODEL_OPTIONS, EFFORT_OPTIONS, OPENCODE_MODEL_INFO, OPENCODE_MODEL_SUGGESTIONS, CLAUDE_MODEL_INFO, discoveryInfo, acpKindOf, buildClis,
 } from "../config.ts";
 import { isRunning } from "../runner.ts";
 import { addUsage, zeroUsage, toUsageSnapshot } from "../usage.ts";
@@ -19,6 +22,7 @@ import { tabHasActiveWork } from "./workspace.ts";
 import { fixedCrewState } from "./fixed-crew.ts";
 import { FIXED_CREW } from "../fixed-crew/roster.ts";
 import { DEFAULTS_VERSION } from "../fixed-crew/role-prompts.ts";
+import { firstRunRequired } from "../first-run/state.ts";
 import { fixedTasks } from "./state.ts";
 
 export function appendRunOutput(runId: string, chunk: string): void {
@@ -116,17 +120,19 @@ export function stateMessage(): Record<string, unknown> {
   }));
   return {
     type: "state", projects, selectedTabId,
+    firstRun: { required: firstRunRequired(workspaces) },
     fixedCrewDefinitions: FIXED_CREW.map(({ slot, role, canWrite, reviews }) => ({ slot, label: role, canWrite, reviews,
       group: ["leader", "planner", "researcher", "helper", "secondOpinion"].includes(slot) ? "Planning"
         : ["coder", "designCoder", "imageMaker", "socialMaker", "videoMaker"].includes(slot) ? "Making" : "Checking" })),
     crewDefaultsVersion: DEFAULTS_VERSION,
-    acpClis: acpClis.map((cli) => ({ ...cli, kind: acpKindOf(cli) })),
-    clis: buildClis((cli) => settingsService.state.tools[cli].installed ?? null, acpClis),
-    modelOptions: MODEL_OPTIONS, effortOptions: EFFORT_OPTIONS, opencodeModels: OPENCODE_MODEL_SUGGESTIONS,
+    cliCatalog: catalogMetadata(),
+    acpClis: acpClis.map((cli) => ({ ...cli, ...catalogLeaderLabel(cli), kind: acpKindOf(cli), leaderEligible: catalogLeaderEligible(cli, settingsService.state.catalogTools) })),
+    clis: buildClis((cli) => cliAvailability(cli, settingsService.state), eligibleAcpClis(acpClis, settingsService.state)),
+    modelOptions: MODEL_OPTIONS, effortOptions: EFFORT_OPTIONS, opencodeModels: OPENCODE_MODEL_SUGGESTIONS, opencodeModelInfo: OPENCODE_MODEL_INFO,
     claudeModels: CLAUDE_MODEL_INFO, discoveryInfo, clientPrefs,
     launchSafety: { blocked: launchSafety.blocked, uncertain: launchSafety.uncertain, released: launchSafety.released, notices: launchSafety.notices },
     releasedProcesses: launchSafety.released.map(({ seatId, pid }) => ({ seatId, pid })),
-    settings: settingsService.snapshot(),
+    settings: { ...settingsService.snapshot(), catalogTools: catalogFacts(settingsService.state, acpClis) },
     requests: requestsStore.list().map((request) => request.status === "pending" && !tabLocation(request.toTabId) ? { ...request, status: "destinationRemoved" } : request),
     pendingRequestCounts: Object.fromEntries(workspaces.projects.flatMap((project) => project.tabs.map((tab) => [tab.id, requestsStore.pendingCount(tab.id)]))),
     requestActions: { ...requestActions },
@@ -137,6 +143,9 @@ export function stateMessage(): Record<string, unknown> {
 // and a process from an earlier session that was never confirmed closed.
 function globalWork(): string[] {
   const work: string[] = [];
+  if (settingsService.models.busy) work.push("models are being refreshed");
+  if (settingsService.login.busy) work.push("a sign-in may still be running");
+  if (settingsService.installer.busy) work.push("an installation may still be running");
   if (Object.values(requestActions).some((item) => item.status === "running")) work.push("a Settings action is running");
   if (Object.values(settingsService.state.uploads).some((item) => item.status === "running")) work.push("an upload is running");
   if (launchSafety.uncertain.some((row) => !row.seatId.includes("."))) work.push("a process from an earlier session may still be running");

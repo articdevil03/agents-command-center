@@ -1,0 +1,185 @@
+/* First-run setup wizard (Pack 29): shown once after install. Only the app's own tokens, so light and dark both come from them. */
+body.first-run #first{place-items:stretch;padding:0;overflow:hidden}
+/* The project strip points at the example project behind this screen: it steps aside until setup is done. The bar and window buttons stay. */
+body.first-run :is(#ptabs,#pmore,#addProj){visibility:hidden}
+/* The step area scrolls on its own if it ever must; the footer with Back and Next is never scrolled away. */
+.frun{display:grid;grid-template-rows:minmax(0,1fr) auto;height:100%;min-height:0;min-width:0}
+.frun-stage{overflow:auto;min-height:0;min-width:0;padding:clamp(28px,8vh,80px) 40px 28px}
+.frun-step{width:100%;max-width:600px;margin:0 auto;display:grid;gap:16px;align-content:start;min-width:0}
+.frun-step h2{margin:0;font-size:22px;font-weight:600;line-height:1.25;letter-spacing:-.01em}
+/* Headings take focus only by script, on a step change, so screen readers start reading there; they are not controls. */
+.frun-step h2:focus{outline:none}
+.frun-note{margin:0;color:var(--text-2);font-size:13.5px;max-width:62ch}
+.frun-h{display:flex;align-items:center;gap:10px;min-width:0}
+.frun-h .btn{margin-left:auto}
+
+/* Welcome */
+.frun-hero{display:grid;gap:12px;justify-items:start;margin-bottom:10px}
+.frun-hero .mark{width:52px;height:52px;margin-bottom:4px}
+.frun-step[data-step="welcome"] h2{font-size:28px;line-height:1.2;letter-spacing:-.02em}
+.frun-lede{margin:0;font-size:15.5px;line-height:1.55;color:var(--text-2);max-width:52ch}
+.frun-parts{list-style:none;margin:0;padding:0;display:grid}
+.frun-parts li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:1px 14px;align-items:center;padding:11px 0;border-top:1px solid var(--line)}
+.frun-parts li:last-child{border-bottom:1px solid var(--line)}
+.frun-pn{grid-row:span 2;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:600;color:var(--text-2);box-shadow:inset 0 0 0 1.5px var(--line-3)}
+.frun-parts b{font-weight:600;font-size:14px}
+.frun-parts small{grid-column:2;color:var(--text-3);font-size:12.5px}
+
+/* Project folder */
+.frun-pathrow{display:flex;gap:10px;align-items:center;min-width:0;padding:6px 6px 6px 12px;border-radius:12px;background:var(--sf2);box-shadow:var(--field)}
+.frun-pathrow .path{flex:1;white-space:normal;overflow-wrap:anywhere;color:var(--text)}
+.frun-pathrow .path[data-none="true"]{font-family:var(--sans);font-size:13px;color:var(--text-3)}
+.frun-step .onlybox{margin-top:2px}
+
+/* AI tools: what was found on this computer */
+.frun-tools .crow{grid-template-columns:28px minmax(0,1fr) auto}
+.frun-tools .tool-row-action{flex-wrap:nowrap}
+.frun-chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 9px;border-radius:7px;font-size:12px;font-weight:600;white-space:nowrap;background:var(--tb);color:var(--text-2)}
+.frun-chip[data-state="ready"]{background:var(--t-green);color:var(--working-text)}
+.frun-chip[data-state="signin"]{background:var(--t-orange);color:var(--warn-text)}
+.frun-chip[data-state="unknown"],.frun-chip[data-state="nosignin"]{color:var(--text-3)}
+.frun-chip .spin{width:10px;height:10px;border-width:1.5px}
+.frun-help{grid-column:1/-1;display:grid;gap:10px;padding:14px 16px;border-radius:12px;background:var(--sf2);font-size:13px;line-height:1.45;color:var(--text-2);min-width:0}
+.frun-help p{margin:0;max-width:66ch}
+.frun-help .frun-req{color:var(--text);font-weight:500;margin-top:-4px}
+/* How to install: numbered steps; the numbers are counters so a screen reader reads them with the step. */
+.frun-howto{list-style:none;margin:2px 0 0;padding:0;display:grid;gap:10px;counter-reset:frun-step;min-width:0}
+.frun-howto li{display:grid;grid-template-columns:22px minmax(0,1fr);column-gap:10px;align-items:start;counter-increment:frun-step;color:var(--text);min-width:0}
+.frun-howto li::before{content:counter(frun-step);grid-row:1;width:22px;height:22px;margin-top:-1.5px;border-radius:50%;display:grid;place-items:center;font-size:11.5px;font-weight:600;color:var(--text-2);box-shadow:inset 0 0 0 1.5px var(--line-3)}
+/* The setup guide address: a plain line with the address as selectable text (one click selects it all). */
+.frun-help .frun-hint{color:var(--text-2)}
+.frun-url{display:flex;gap:8px;align-items:center;min-width:0}
+.frun-url-l{font-size:12.5px;color:var(--text-3);white-space:nowrap}
+.frun-url code{flex:1;min-width:0;font-family:var(--mono);font-size:12px;color:var(--text);background:var(--sf);box-shadow:var(--field);border-radius:8px;padding:6px 9px;user-select:all;overflow-wrap:anywhere}
+.frun-sum{margin:0;font-size:13px;color:var(--text-2)}
+.frun-leader{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
+.frun-leader legend{padding:0;margin-bottom:4px}
+.frun-opts{display:flex;flex-wrap:wrap;gap:8px}
+.frun-opt{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px 0 10px;border-radius:10px;background:var(--sf);box-shadow:var(--card);font-size:13.5px;font-weight:500;cursor:pointer;transition:box-shadow .15s}
+.frun-opt input{margin:0;width:15px;height:15px;accent-color:var(--text)}
+.frun-opt:has(input:checked){box-shadow:0 0 0 1.5px var(--text)}
+.frun-leader small{color:var(--text-3);font-size:12.5px;max-width:62ch}
+/* An added tool has no brand logo: its letter mark gets a small tile (choice and Ready summary), so it never reads as a stray letter. */
+.frun-opt .lg:not(:has(svg)),.frun-lead .lg:not(:has(svg)){border-radius:5px;background:var(--tb);font-size:10.5px;font-weight:700;color:var(--text-2)}
+.frun-opt .frun-tag{font-size:11.5px;font-weight:600;color:var(--warn-text);max-width:none}
+
+/* Other AI tools: the provider guide, the added tools' rows, the Full access tick and the Add form */
+.frun-guide{display:flex;align-items:center;gap:8px;min-width:0;margin-top:-6px}
+.frun-guide-l{font-size:12.5px;color:var(--text-3);white-space:nowrap}
+.frun-guide code{flex:1;min-width:0;font-family:var(--mono);font-size:12px;color:var(--text);background:var(--sf2);box-shadow:var(--field);border-radius:8px;padding:5px 9px;user-select:all;overflow-wrap:anywhere}
+.frun-tools:empty{display:none}
+.frun-tools+.frun-tools>.crow:first-child{border-top:1px solid var(--line)}
+.frun-chip[data-state="added"]{background:var(--t-blue);color:var(--text)}
+.frun-consent{display:grid;grid-template-columns:auto minmax(0,1fr);gap:10px;align-items:start;padding:11px 14px;border-radius:12px;background:var(--t-orange);color:var(--text);font-size:13px;line-height:1.45;cursor:pointer}
+.frun-consent input{margin:2px 0 0;width:15px;height:15px;accent-color:var(--warn-text)}
+.frun-consent[hidden]{display:none}
+.frun-more{display:inline-flex;align-items:center;gap:7px;justify-self:start;padding:4px 2px;color:var(--text-2);font-size:13.5px;font-weight:500}
+.frun-more:hover{color:var(--text)}
+.frun-more svg{transition:transform .15s}
+.frun-more[aria-expanded="true"] svg{transform:rotate(90deg)}
+.frun-other{display:grid;gap:8px;min-width:0}
+.frun-otherbody{display:grid;gap:10px;padding:14px 16px;border-radius:12px;background:var(--sf2);min-width:0}
+.frun-otherbody[hidden]{display:none}
+.frun-otherbody .field input{background:var(--sf)}
+.frun-addrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr) auto;gap:10px;align-items:end;min-width:0}
+.frun-addrow .btn{padding:9px 16px}
+.frun-addrow .btn[aria-disabled="true"]{opacity:.6;cursor:default}
+.frun-hint{margin:0;font-size:12.5px;color:var(--text-3);max-width:66ch}
+.frun-addmsg{margin:0;font-size:13px;color:var(--text-2);overflow-wrap:anywhere}
+/* Kept in the page while empty (a live region that appears late can go unannounced); it only gives back the grid gap. */
+.frun-addmsg:empty{margin-top:-10px}
+.frun-addmsg.bad{color:var(--danger-text)}
+.frun-full{color:var(--warn-text);font-size:13px;font-weight:500}
+
+/* The catalog (Pack 29 B3): search, the two groups, Install with its consent line, progress, Install by hand, the models via OpenCode */
+.frun-sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.frun-search{position:relative;display:flex;align-items:center;min-width:0}
+.frun-search svg{position:absolute;left:12px;color:var(--text-3);pointer-events:none}
+.frun-search input{width:100%;min-width:0;padding:9px 12px 9px 34px;border:0;border-radius:10px;background:var(--sf2);box-shadow:var(--field);color:var(--text);font:inherit;font-size:13.5px;outline:none}
+.frun-search input:focus{background:var(--sf);box-shadow:0 0 0 1px var(--accent),0 0 0 4px var(--focus-glow)}
+.frun-nomatch{margin:0;font-size:13px;color:var(--text-2)}
+.frun-nomatch:empty{display:none}
+.frun-group-box{display:grid;gap:8px;min-width:0}
+.frun-group-box[hidden]{display:none}
+.frun-gh3{margin:4px 0 0;font-size:12.5px;font-weight:600;letter-spacing:.01em;color:var(--text-2)}
+.frun-tools .crow{padding:10px 14px}
+.frun-tools .lg:not(:has(svg)){border-radius:6px;background:var(--tb);font-size:11px;font-weight:700;color:var(--text-2)}
+.frun-tools .d small.bad{color:var(--danger-text)}
+.frun-tools .d .frun-consent-line{color:var(--text-2);margin-top:3px}
+.frun-tool>.frun-byhand{grid-column:2/-1;justify-self:start;margin-top:-6px;padding:2px 2px;font-size:12.5px}
+.frun-tools .btn[aria-disabled="true"]{opacity:.6;cursor:default}
+.frun-chip[data-state="installing"]{background:var(--t-blue);color:var(--text)}
+.frun-chip[data-state="installed"]{background:var(--tb);color:var(--text)}
+.frun-chip[data-state="unavailable"]{color:var(--text-3)}
+/* No percent is ever known: one sliding band says "working" without pretending how far along. */
+.frun-bar,.cli-login-bar{display:block;position:relative;height:4px;margin-top:7px;border-radius:2px;background:var(--line-3);overflow:hidden;max-width:320px}
+.frun-bar i,.cli-login-bar i{position:absolute;top:0;bottom:0;left:0;width:35%;border-radius:2px;background:var(--text-2);animation:frun-slide 1.4s cubic-bezier(.65,0,.35,1) infinite}
+@keyframes frun-slide{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
+.frun-pfoot{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--line);font-size:12.5px;color:var(--text-2);min-width:0}
+.frun-pfoot p{margin:0;flex:1;min-width:0;max-width:62ch}
+.frun-pfoot .btn{flex:none}
+
+/* Signing in (Pack 29 W5, login.js): the panel under a tool row, the same in the wizard and in Settings. No terminal, only the browser. */
+.cli-login-slot{display:contents}
+.cli-login{grid-column:1/-1;display:grid;gap:10px;padding:12px 14px;border-radius:12px;background:var(--sf2);font-size:13px;line-height:1.45;color:var(--text);min-width:0}
+.cli-login[hidden],.cli-login [hidden]{display:none!important}
+.cli-login-status{margin:0;font-weight:500;overflow-wrap:anywhere}
+.cli-login-status.bad{color:var(--danger-text)}
+.cli-login .cli-login-bar{margin-top:-4px}
+.cli-login-browser{display:grid;gap:10px;min-width:0}
+.cli-login-btns{display:flex;flex-wrap:wrap;gap:8px}
+.cli-login-l{font-size:12.5px;color:var(--text-3)}
+.cli-login-url{display:grid;gap:4px;min-width:0}
+.cli-login-addr{min-width:0;font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--text-2);background:var(--sf);box-shadow:var(--field);border-radius:8px;padding:6px 9px;user-select:all;overflow-wrap:anywhere}
+.cli-login-code{display:flex;flex-wrap:wrap;align-items:center;gap:6px 12px;min-width:0}
+.cli-login-big{font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:.08em;line-height:1.3;padding:3px 12px;border-radius:9px;background:var(--sf);box-shadow:var(--field);user-select:all;overflow-wrap:anywhere;min-width:0}
+.cli-login-paste{display:grid;gap:6px;min-width:0}
+.cli-login-pasterow{display:flex;gap:8px;min-width:0}
+.cli-login-pasterow input{flex:1;min-width:0;padding:7px 10px;border:0;border-radius:9px;background:var(--sf);box-shadow:var(--field);color:var(--text);font:inherit;outline:none}
+.cli-login-pasterow input:focus{box-shadow:0 0 0 1px var(--accent),0 0 0 4px var(--focus-glow)}
+.cli-login-pasterow input:disabled{opacity:.55}
+.cli-login-hint{font-size:12.5px;color:var(--danger-text)}
+.cli-login-hint:empty{display:none}
+.cli-login-replace{display:grid;gap:8px;justify-items:start}
+.cli-login-replace p{margin:0;color:var(--text-2)}
+.cli-login-acts{display:flex;justify-content:flex-end;gap:8px}
+.cli-login .btn[aria-disabled="true"]{opacity:.6;cursor:default}
+.frun-tools .d .frun-signin-note,.tool-row .d [data-tool-signin-note]{color:var(--text-2);margin-top:2px}
+.frun-chip[data-state="signingin"]{background:var(--t-blue);color:var(--text)}
+.frun-chip[data-state="untested"]{background:var(--t-orange);color:var(--warn-text)}
+.frun-chip[data-state="tested"]{background:var(--t-green);color:var(--working-text)}
+.frun-opt .frun-untested{color:var(--text-2)}
+.frun-leader .frun-untested-note{color:var(--warn-text)}
+
+/* Ready: the summary of what Start sends */
+.frun-group{display:grid;gap:10px;padding:14px 16px;min-width:0}
+.frun-group+.frun-group{border-top:1px solid var(--line)}
+.frun-gh{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.frun-dl{margin:0;display:grid;grid-template-columns:max-content minmax(0,1fr);gap:7px 20px;font-size:13.5px}
+.frun-dl>div{display:contents}
+.frun-dl dt{color:var(--text-3)}
+.frun-dl dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.frun-dl dd.path{font-family:var(--mono);font-size:12.5px;white-space:normal}
+.frun-lead{display:inline-flex;align-items:center;gap:9px;font-size:14px}
+.frun-lead b{font-weight:600}
+.frun-none{color:var(--danger-text);font-size:13.5px}
+.frun-status{margin:0;font-size:13px;color:var(--text-2);min-width:0;overflow-wrap:anywhere}
+.frun-status.bad{color:var(--danger-text)}
+
+/* Footer: Skip, where you are, why Next is off, Back and Next */
+.frun-foot{display:flex;align-items:center;gap:10px 16px;padding:12px 16px 12px 22px;border-top:1px solid var(--line);min-width:0}
+.frun-progress{display:flex;align-items:center;gap:12px;min-width:0;margin-left:12px}
+.frun-marks{display:flex;gap:5px;list-style:none;margin:0;padding:0}
+.frun-marks .bar{display:block;width:20px;height:4px;border-radius:2px;background:var(--line-3)}
+.frun-marks [data-done="true"] .bar{background:var(--text-3)}
+.frun-marks [aria-current="step"] .bar{background:var(--text);width:30px}
+.frun-count{margin:0;font-size:12.5px;color:var(--text-2);white-space:nowrap}
+.frun-why{margin:0 0 0 auto;flex:0 1 300px;min-width:0;text-align:right;font-size:12.5px;line-height:1.35;color:var(--text-3)}
+.frun-why.bad{color:var(--danger-text)}
+.frun-foot .btn{padding:9px 16px}
+.frun-foot .btn.primary{padding:9px 20px}
+.frun-link{color:var(--text-2);font-weight:500;font-size:12.5px;text-decoration:underline;text-underline-offset:2px;white-space:nowrap}
+.frun-link:hover:not(:disabled){color:var(--text)}
+.frun-link:disabled{opacity:.5}
+@media (max-height:720px),(max-width:1040px){.frun-stage{padding:20px 32px 14px}.frun-step{gap:12px}.frun-hero{gap:9px;margin-bottom:4px}.frun-hero .mark{width:44px;height:44px}.frun-parts li{padding:8px 0}}
+@media (prefers-reduced-motion:reduce){.frun-opt,.frun-more svg{transition:none}.frun-bar i,.cli-login-bar i{animation:none;width:100%;opacity:.45}}

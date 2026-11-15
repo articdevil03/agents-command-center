@@ -5,6 +5,7 @@ import { approvalMessages } from "./approvals.ts";
 import { chatMessages } from "./chat.ts";
 import { processMessages } from "./process.ts";
 import { projectMessages } from "./projects.ts";
+import { cliLoginMessages } from "./cli-login.ts";
 import { settingsMessages } from "./settings.ts";
 import { setupMessages } from "./setups-runs.ts";
 import type { MessageHandler } from "./types.ts";
@@ -12,12 +13,14 @@ import { describeError } from "../state.ts";
 import { assertFixedCrewMessageAllowed } from "../fixed-crew.ts";
 import { fixedCrewMessages } from "./fixed-crew.ts";
 import { fixedTaskMessages } from "./fixed-tasks.ts";
+import { firstRunMessages } from "../../first-run/messages.ts";
+import { catalogMessages } from "../catalog-tools.ts";
 
 // The handlers by message type. Built on first use: a module cycle must not make the groups read each other while they load.
 // A Map, never a plain object: the type comes from the page, and "constructor" or "toString" must not find a function on Object.prototype.
 let handlers: Map<string, MessageHandler> | undefined;
 function messageHandlers(): Map<string, MessageHandler> {
-  handlers ??= new Map([...approvalMessages(), ...settingsMessages(), ...projectMessages(), ...setupMessages(), ...chatMessages(), ...processMessages(), ...fixedCrewMessages(), ...fixedTaskMessages()]);
+  handlers ??= new Map([...approvalMessages(), ...settingsMessages(), ...cliLoginMessages(), ...projectMessages(), ...setupMessages(), ...chatMessages(), ...processMessages(), ...fixedCrewMessages(), ...fixedTaskMessages(), ...firstRunMessages(), ...catalogMessages()]);
   return handlers;
 }
 export function handleMessage(ws: WebSocket, raw: string): void {

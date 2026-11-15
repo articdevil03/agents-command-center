@@ -69,6 +69,12 @@ function readRecord(path: string): RecoveryRecord | null {
   if (new Set(record.entries.map((entry) => entry.path)).size !== record.entries.length) throw new Error("Duplicate recovery entries.");
   return record;
 }
+function hasLogEntries(root: string): boolean {
+  const logs = join(root, "logs");
+  noLinks(logs);
+  try { return readdirSync(logs).length > 0; }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+}
 export function recoverWorkspace(root: string, defaults: (folder: string) => Workspaces, uuid: () => string = randomUUID): RecoveryState {
   const workspace = join(root, "config", "workspaces.json"), marker = join(root, "config", "fixed-crew-recovery.json");
   try {
@@ -79,9 +85,9 @@ export function recoverWorkspace(root: string, defaults: (folder: string) => Wor
       return { blocked: false, recovered: true, archive: join(root, "backups", record.archive) };
     }
     const current = optionalBytes(workspace), format = workspaceFormat(current);
-    const priorData = ["config/projects.json", "config/setups.json", "config/launch-safety.json", "requests.json", "chats", "logs", "tasks", "executions", "avatars"]
-      .some((path) => existsSync(join(root, path)));
-    if (!record && (format === "fixed" || format === "missing" && !priorData)) return { blocked: false, recovered: false };
+    const priorData = () => ["config/projects.json", "config/setups.json", "config/launch-safety.json", "requests.json", "chats", "tasks", "executions", "avatars"]
+      .some((path) => existsSync(join(root, path))) || hasLogEntries(root);
+    if (!record && (format === "fixed" || format === "missing" && !priorData())) return { blocked: false, recovered: false };
     if (!record) {
       const entries = backupInventory(root);
       const fresh = defaults(join(root, "example-project"));

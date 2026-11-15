@@ -33,7 +33,7 @@ export function fixedWorkspaces(projects: WorkspaceProject[] = [fixedProject("al
 // config.ts and the modules it publishes through, evaluated in ONE context so a test can override a file-system boundary
 // (writeFileSync, renameSync, linkSync ...) and reach the real write. The fixed-crew modules come first: config.ts seeds at load.
 const SOURCES = ["safe-file", "config-files", "config-acp", "config-prefs",
-  "fixed-crew/roster", "fixed-crew/assignment", "fixed-crew/recovery-backup", "fixed-crew/recovery", "fixed-crew/preferences", "config"];
+  "fixed-crew/roster", "fixed-crew/assignment", "fixed-crew/recovery-backup", "fixed-crew/recovery", "fixed-crew/preferences", "first-run/state", "config"];
 
 export function launchConfig(copy: string, data: string, overrides = {}): any {
   const source = SOURCES.map((name) => stripTypeScriptTypes(fs.readFileSync(`server/${name}.ts`, "utf8"))

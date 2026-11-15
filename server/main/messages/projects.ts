@@ -4,6 +4,7 @@ import { isTabSlug } from "../../chat-store.ts";
 import { broadcast, stateMessage } from "../broadcast.ts";
 import { stopLeaderSession } from "../leader-session.ts";
 import type { MessageHandler } from "./types.ts";
+import type { Workspaces } from "../../config.ts";
 import { chatStore, requestsStore, selectedTabId, setSelectedTabId, settingsService, tabs, workspaces } from "../state.ts";
 import { tabLocation } from "../tabs.ts";
 import { fixedTab, validateFixedCreationMessage } from "../fixed-crew.ts";
@@ -32,6 +33,11 @@ function onResolveRequest(ws: WebSocket, message: any): void {
 }
 function onAddProject(ws: WebSocket, message: any): void {
   validateFixedCreationMessage(message); requiredRequestId(message.requestId);
+  createProject(ws, message);
+}
+export function createProject(ws: WebSocket, message: any, options: {
+  prepareDraft?: (draft: Workspaces) => void; afterSave?: () => void;
+} = {}): void {
   const id = message.id;
   if (!isTabSlug(id) || workspaces.projects.some((project) => project.id.toLowerCase() === id.toLowerCase())) throw new Error(`invalid or duplicate project id: ${String(id)}`);
   const folder = validateFolderPath(typeof message.folder === "string" && message.folder.trim() ? message.folder.trim() : settingsService.state.folders.defaultProjectFolder, "project folder");
@@ -41,7 +47,13 @@ function onAddProject(ws: WebSocket, message: any): void {
   const tab = fixedTab(tabId, "Development", tabFolder, message);
   const draft = saveWorkspaceDraft();
   draft.projects.push({ id, name: message.name.trim(), folder, tabs: [tab] });
-  syncWorkspace(draft); setSelectedTabId(tabId); broadcast(stateMessage()); void refreshTabDetails(tabId);
+  options.prepareDraft?.(draft);
+  syncWorkspace(draft);
+  try { options.afterSave?.(); }
+  catch {
+    ws.send(JSON.stringify({ type: "error", message: "Your project was saved, but setup could not be saved as finished. It will finish itself the next time the app starts." }));
+  }
+  setSelectedTabId(tabId); broadcast(stateMessage()); void refreshTabDetails(tabId);
   // After the save: a rules file that cannot be written is reported, never a reason to undo the project.
   if (message.projectOnly === true) ws.send(JSON.stringify({ type: "projectRules", tabId, ...writeProjectRules(tabFolder, message.name.trim()) }));
   return;

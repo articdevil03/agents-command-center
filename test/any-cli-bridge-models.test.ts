@@ -249,10 +249,13 @@ test("saved values: a write and a user pick need a safe shape AND the list/CLI c
     const trip = (cli, model, effort, advisor) => { try { config.writeWorkspaces(make({ cli, model, effort }, advisor), tmpPath); config.readWorkspaces(tmpPath); } catch (e) { trips.push(cli + " " + model + " " + effort + " -> " + e.message); } };
     for (const m of config.MODEL_OPTIONS.claude) trip("claude", m, "high", m);
     for (const m of config.MODEL_OPTIONS.codex) trip("codex", m, "high");
-    for (const m of config.OPENCODE_MODEL_SUGGESTIONS) trip("opencode", m, "max");
+    for (const m of config.OPENCODE_MODEL_SUGGESTIONS) trip("opencode", m, "");
     for (const e of config.EFFORT_OPTIONS.claude) trip("claude", "sonnet", e);
     for (const e of config.EFFORT_OPTIONS.codex) trip("codex", "gpt-6-sol", e);
-    for (const e of config.EFFORT_OPTIONS.opencode) trip("opencode", "okprov/ok-model", e);
+    config.applyOpenCodeModels([{ value: "okprov/ok-model", providerID: "okprov", modelID: "ok-model", displayName: "Control", variants: ["thinking"] }], {});
+    out.modelEfforts = config.modelEfforts("opencode", "okprov/ok-model");
+    for (const e of out.modelEfforts) trip("opencode", "okprov/ok-model", e);
+    out.borrowed = config.isValidEffort("opencode", "thinking", "other/model");
     out.trips = trips;
   `);
   assert.deepEqual(out.picks, [false, false, false, false, false], "user picks with an unsafe shape are refused");
@@ -262,6 +265,8 @@ test("saved values: a write and a user pick need a safe shape AND the list/CLI c
   const unsafe = ["has space", "a".repeat(101), "-flag", "a/../b", "bad eff", "-x", "-vendor/model", "vendor/../model", "gpt-bad one", "opencode/gpt-bad one"];
   for (const list of [out.claudeListed, out.claudeInfo, out.claudeEfforts, out.opencode, out.codex]) for (const bad of unsafe) assert.ok(!list.includes(bad), `${JSON.stringify(bad.slice(0, 20))} must not be offered`);
   assert.ok(out.claudeListed.includes("claude-x[1m]") && out.claudeEfforts.includes("high") && out.opencode.includes("okprov/ok-model") && out.codex.includes("gpt-fine"), "control: the safe discovered values are offered");
+  assert.deepEqual(out.modelEfforts, ["", "thinking"], "control: model variants are non-empty");
+  assert.equal(out.borrowed, false, "another model does not inherit the reported variant");
   assert.deepEqual(out.trips, [], "every offered value saves and loads");
 });
 

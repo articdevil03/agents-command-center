@@ -1,3 +1,4 @@
+import { assertCliAvailable } from "../settings/cli-availability.ts";
 import { randomUUID } from "node:crypto";
 import { requireAssignment, assignmentCompany, independenceNotice } from "../fixed-crew/assignment.ts";
 import { fixedCrewOf, isFixedTab } from "../fixed-crew/runtime.ts";
@@ -11,7 +12,7 @@ import { composeCrewRolePrompt } from "../fixed-crew/role-prompts.ts";
 import { reportInstructions } from "../fixed-crew/task-reports.ts";
 import type { Actor, Event } from "../fixed-crew/task-transitions.ts";
 import type { Task } from "../fixed-crew/task-types.ts";
-import { dataRoot, fixedTasks, leaderInstances, leaders, runRecords, workspaces, runContexts, savingTabs, pendingApprovals } from "./state.ts";
+import { settingsService, dataRoot, fixedTasks, leaderInstances, leaders, runRecords, workspaces, runContexts, savingTabs, pendingApprovals } from "./state.ts";
 import { tabLocation } from "./tabs.ts";
 import { assertTaskRecoveryReady, assertWorkspaceRecoveryReady } from "../fixed-crew/recovery.ts";
 
@@ -35,6 +36,7 @@ export function requireFixedAssignment(tabId: string, slot: FixedSlot) {
   const fixed = fixedCrewOf(tab);
   try {
     const assignment = requireAssignment(fixed.preferences[slot]);
+    assertCliAvailable(assignment.cli, settingsService.state);
     return assignment;
   } catch (error) {
     if (fixed.preferences[slot]?.assignment === null) throw new Error(`${FIXED_CREW.find((s) => s.slot === slot)?.role ?? slot} has no model. Choose one in Settings before continuing.`);

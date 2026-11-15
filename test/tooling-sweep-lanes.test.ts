@@ -52,6 +52,15 @@ test("createLane copies only the named paths, records hashes, and keeps the lane
   removeLane(lane);
 });
 
+test("createLane leaves the owner's own config/*.json out of the copy but keeps the rest of config", () => {
+  const root = fakeRepo();
+  for (const [path, text] of [["config/workspaces.json", "{}"], ["config/first-run.json", "{}"], ["config/.gitkeep", ""]]) { mkdirSync(join(root, "config"), { recursive: true }); writeFileSync(join(root, path), text); }
+  const lane = createLane(root, ["a", "config"], 3);
+  assert.deepEqual([...lane.pristine.keys()].filter((file) => file.startsWith("config/")), ["config/.gitkeep"], "control: .gitkeep is copied, saved state is not");
+  assert.equal(existsSync(join(lane.dir, "config/workspaces.json")), false);
+  removeLane(lane);
+});
+
 test("createLane refuses a link inside the source and leaves no half-made lane behind", { skip: process.platform !== "win32" }, () => {
   const root = fakeRepo();
   const outside = mkdtempSync(join(scratch, "outside-"));

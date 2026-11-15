@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "package": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.1.77",
+      "path": "node_modules/@anthropic-ai/claude-agent-sdk/cli.js",
+      "sha256": "400fff7bc4a6bd2a947b77c606f83bcb48f49e0e3a6ef53c294c8972607b5c62",
+      "reason": "Short private words match inside a base64 blob and the product's spinner-word list."
+    },
+    {
+      "package": "@anthropic-ai/claude-agent-sdk",
+      "version": "0.1.77",
+      "path": "node_modules/@anthropic-ai/claude-agent-sdk/resvg.wasm",
+      "sha256": "22bf6e9f9a100d972da0411a69c5ba504367fc1fa87b3b64e3f35e53926d2d70",
+      "reason": "A short private word matches inside an embedded Spanish word list."
+    },
+    {
+      "package": "@img/sharp-win32-x64",
+      "version": "0.33.5",
+      "path": "node_modules/@img/sharp-win32-x64/lib/libvips-42.dll",
+      "sha256": "92076cb17f3b11bb864dd103b4d8f5fb7580fc63c13a417b58f51dfa50ac7751",
+      "reason": "A private pattern matches incidental bytes of a compiled binary."
+    },
+    {
+      "package": "@img/sharp-win32-x64",
+      "version": "0.33.5",
+      "path": "node_modules/@img/sharp-win32-x64/lib/sharp-win32-x64.node",
+      "sha256": "fe184de118aa33421af89c43c93131a3a80027413e98b466ca56cb773c617e92",
+      "reason": "A private pattern matches incidental bytes of a compiled binary."
+    }
+  ]
+}

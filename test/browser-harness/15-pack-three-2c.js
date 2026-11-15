@@ -86,30 +86,32 @@
         && busy.label === "Reading…" && busy.disabled && !after.button && /fuller log, still capped by the server/.test(after.meta) && after.log === "the fuller log, still capped", { offered, asked, busy, after });
     });
 
-    // The Copy button beside an install command in Settings > AI tools.
+    // The Copy address button beside an official setup guide in Settings > AI tools.
     await part("Copy button", async () => {
       const missingGemini = structuredClone(window.__ccSeed);
       missingGemini.settings.tools = { ...missingGemini.settings.tools, gemini: { installed: false, version: null, signedIn: null } };
       window.__ccSeed = missingGemini; deliverSeed();
       $("setBtn").click(); requireElement('#setNav [data-settings-section="tools"]').click();
-      const button = requireElement("#setBody [data-copy]"), command = button.dataset.copy;
+      const button = requireElement('#setBody [data-cli="gemini"] [data-copy-address]'), address = button.dataset.copyAddress;
+      button.closest("details").querySelector("summary").click();
+      check("the fallback opens an official guide with Check again and no shell instructions or command copy", button.checkVisibility() && text("code", button.closest(".cmd")) === address && Boolean(document.querySelector("#s-tools [data-settings-refresh]")) && !document.querySelector("#s-tools [data-copy]") && !/powershell|npm install|curl |winget|open.{0,12}terminal/i.test(button.closest("details").textContent), { address, guide: button.closest("details").textContent });
       const written = []; let refuse = false, copied = true, execCalls = 0;
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value) => { if (refuse) throw new Error("clipboard refused"); written.push(value); } } });
       document.execCommand = (name) => { execCalls++; return name === "copy" && copied; };
       try {
         button.click();
-        await waitFor(() => $("toast").textContent === "Command copied" && written.length === 1, "the command is copied");
+        await waitFor(() => $("toast").textContent === "Address copied" && written.length === 1, "the official address is copied");
         const ok = { written: [...written], toast: $("toast").textContent };
         refuse = true; copied = true; $("toast").textContent = "";
-        requireElement("#setBody [data-copy]").click();
+        requireElement('#setBody [data-cli="gemini"] [data-copy-address]').click();
         await waitFor(() => execCalls === 1, "the text-copy fallback runs");
         const fallback = { written: written.length, toast: $("toast").textContent, execCalls, leftover: document.querySelectorAll("body > textarea").length };
         copied = false; $("toast").textContent = "";
-        requireElement("#setBody [data-copy]").click();
+        requireElement('#setBody [data-cli="gemini"] [data-copy-address]').click();
         await waitFor(() => execCalls === 2, "the fallback runs again");
         const failed = { toast: $("toast").textContent };
-        check("the Copy button copies the install command and says so, and falls back to a hidden text copy when the clipboard refuses",
-          /^npm install -g /.test(command) && ok.written[0] === command && ok.toast === "Command copied" && fallback.written === 1 && fallback.toast === "Command copied" && fallback.leftover === 0 && /^Could not copy/.test(failed.toast), { command, ok, fallback, failed });
+        check("the Copy address button copies the official guide and says so, and falls back to a hidden text copy when the clipboard refuses",
+          address === "https://geminicli.com/docs/get-started/installation/" && ok.written[0] === address && ok.toast === "Address copied" && fallback.written === 1 && fallback.toast === "Address copied" && fallback.leftover === 0 && /^Could not copy/.test(failed.toast), { address, ok, fallback, failed });
       } finally { delete navigator.clipboard; delete document.execCommand; }
     });
   };

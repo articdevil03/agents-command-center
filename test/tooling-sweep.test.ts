@@ -143,3 +143,18 @@ test("resume refuses, with nothing started, on a different HEAD, a dirty copied 
   assert.match(world.logs.join("\n"), /REFUSED: this sweep is already complete/);
   assert.equal(await go(world, ["--resume", join(world.dir, "nowhere")]), 1, "not a sweep folder");
 });
+
+
+test("scoped baseline validates paths and runs only the requested files, while a survivor still gets the whole suite", async () => {
+  const files = ["test/a.test.ts", "test/b.test.ts"];
+  assert.deepEqual(parseArgs(["--baseline-files", files.join(",")], "C:/default").baselineFiles, files);
+  for (const value of ["", "test/../bad.test.ts", "outside.test.ts", "test/a.test.ts,"]) assert.throws(() => parseArgs(["--baseline-files", value], "C:/default"), /baseline-files/);
+  const world = makeWorld(scratchDir());
+  assert.equal(await go(world, ["--baseline-files", files.join(",")]), 0);
+  assert.deepEqual(world.calls[0].files, files, "baseline is scoped");
+  assert.equal(world.calls[0].red, false);
+  assert.ok(world.calls.some((call) => call.mutated.includes("src/c.js") && call.files === null), "the surviving control still runs the whole suite");
+  const defaultWorld = makeWorld(scratchDir());
+  assert.equal(await go(defaultWorld), 0);
+  assert.equal(defaultWorld.calls[0].files, null, "default baseline remains the whole suite");
+});

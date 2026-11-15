@@ -17,7 +17,8 @@
     if (active?.dataset.focusKey) settingsFocusKey = active.dataset.focusKey;
     // Focus that moved somewhere else on purpose (a picker over Settings) is left there; only lost focus comes back.
     const lost = !document.activeElement || document.activeElement === document.body;
-    return { key: active?.dataset.focusKey ?? (active || lost ? settingsFocusKey : null), value: active && "value" in active ? active.value : null, scrollTop: body.scrollTop };
+    // A secret field (a pasted sign-in code, public/first-run/login.js) is never copied out: only its place is remembered.
+    return { key: active?.dataset.focusKey ?? (active || lost ? settingsFocusKey : null), value: active && "value" in active && !active.dataset.secret ? active.value : null, scrollTop: body.scrollTop };
   }
   // Text the user typed or browsed into a Settings field survives a re-render (every state broadcast) until it is saved or the modal closes. A field never edited always shows the server value.
   function settingsDraftSnapshot(body) {
@@ -30,6 +31,7 @@
     }
     const drafts = new Map();
     for (const input of body.querySelectorAll("input[data-focus-key]")) {
+      if (input.dataset.secret) continue; // a pasted sign-in code is never a draft
       const key = input.dataset.focusKey;
       if (settingsEdits.has(key)) drafts.set(key, input.value);
     }
@@ -69,20 +71,46 @@
     settingsSection = current.dataset.section;
     markSettingsNav();
   }
+  // The server's catalog entry for a tool (state.cliCatalog): its display-only install command and maker, for the row and the Install consent.
+  const catalogEntry = (cli) => (Array.isArray(serverState?.cliCatalog) ? serverState.cliCatalog : []).find((item) => item?.id === cli) ?? null;
+  const installConsent = (cli) => window.CC_FIRST_RUN_CATALOG?.consentText(catalogEntry(cli) ?? { vendor: "The maker" }) ?? "Downloads and runs the maker's installer on this PC.";
+  const toolName = (id) => CLI_LABEL[id] ?? catalogEntry(id)?.displayName ?? id;
+  // Every installable tool in the server's catalog, the built-ins first; without a catalog, the four rows Settings always had.
+  function settingsToolIds() {
+    const listed = (Array.isArray(serverState?.cliCatalog) ? serverState.cliCatalog : []).filter((item) => item?.installable === true && typeof item.id === "string").map((item) => item.id);
+    return [...new Set([...(window.CC_FIRST_RUN_CATALOG?.BUILT_IN ?? []), ...(listed.length ? listed : Object.keys(serverState?.settings?.tools ?? {}))])];
+  }
+  // Install and sign-in facts: settings.tools where the server reports the tool there (built-ins, Gemini), else settings.catalogTools.
+  function settingsToolFacts(id) {
+    const legacy = serverState?.settings?.tools?.[id], facts = serverState?.settings?.catalogTools?.[id] ?? null;
+    if (id === "opencode") return facts;
+    return legacy ? { ...(facts ?? {}), installed: legacy.installed ?? facts?.installed ?? null, signedIn: legacy.signedIn ?? facts?.signedIn ?? null, version: legacy.version ?? facts?.version ?? null } : facts;
+  }
+  // An installed catalog tool that speaks ACP but has not been saved as a connection yet: it is not in the model picker until Connect (same rule as the wizard's connect, public/first-run/install.js).
+  const settingsCanConnect = (cli, tool) => catalogEntry(cli)?.installable === true && catalogEntry(cli).leader?.kind === "acp" && tool?.installed === true && tool.registered !== true;
   function settingsToolRow(cli, tool) {
     const key = `install-${cli}`;
-    const packageNames = { claude: "@anthropic-ai/claude-code", codex: "@openai/codex", opencode: "opencode-ai", gemini: "@google/gemini-cli" };
     const version = tool?.version ? ` · ${tool.version}` : "";
-    const subtitle = tool?.installed === false ? "Not installed." : tool?.installed === true
+    // An installation the server is running (it may have been started in setup, or before a reload) shows its step and holds Install.
+    const progress = serverState?.settings?.catalogTools?.[cli]?.action, installing = progress?.kind === "install" && progress.status === "running";
+    const unsupportedVersion = cli === "opencode" && tool?.installed === true && tool.supportedVersion !== true;
+    const signing = ["running", "orphan", "stuck"].includes(cliLoginUi?.viewOf(cli).state), held = Boolean(cliLoginUi?.busy());
+    const needsConnect = settingsCanConnect(cli, tool), connectKey = `connect-${cli}`;
+    const subtitle = installing ? window.CC_FIRST_RUN_CATALOG?.phaseText(progress.phase, toolName(cli), progress.message) ?? "Installing…" : signing ? "Signing in…" : unsupportedVersion ? "OpenCode 1 is needed" : cli === "opencode" && tool?.credentialSource === "environment" ? "A key is set outside Command Center. Its connection is not checked." : tool?.installed === false ? "Not installed." : needsConnect ? `Installed · Not connected yet${version}` : tool?.installed === true
       ? `${tool.signedIn === true ? "Signed in" : tool.signedIn === false ? "Installed · Not signed in" : cli === "gemini" ? "Installed · Gemini checks its own sign-in" : "Installed · Sign-in status unknown"}${version}`
       : `Install status unknown${version}`;
-    const install = tool?.installed === false ? `<button type="button" class="btn primary sm" data-setting-action="install-cli" data-cli="${cli}" data-focus-key="${key}" ${settingsActionRunning(key) ? "disabled" : ""}>Install</button>` : "";
+    const install = tool?.installed === false || unsupportedVersion ? `<button type="button" class="btn primary sm" data-setting-action="install-cli" data-cli="${cli}" data-focus-key="${key}" ${settingsActionRunning(key) || installing || held ? "disabled" : ""}>${unsupportedVersion ? "Install OpenCode 1" : "Install"}</button>` : "";
+    const connect = needsConnect ? `<button type="button" class="btn primary sm" data-setting-action="connect-cli" data-cli="${esc(cli)}" data-focus-key="${connectKey}" ${settingsActionRunning(connectKey) ? "disabled" : ""}>Connect</button>` : "";
     const loginKey = `login-${cli}`;
-    const login = tool?.installed === true && tool.signedIn !== true && cli !== "gemini" ? `<button type="button" class="btn sm" data-setting-action="login-cli" data-cli="${cli}" data-focus-key="${loginKey}" ${settingsActionRunning(loginKey) ? "disabled" : ""}>Sign in</button>` : "";
-    const connected = tool?.signedIn === true ? '<span class="tool-connected" data-tool-status="connected"><i></i>Connected</span>' : "";
-    const command = tool?.installed === false ? `npm install -g ${packageNames[cli]}` : "";
-    const copy = command ? `<div class="cmd"><code title="${esc(command)}">${esc(command)}</code><button type="button" data-copy="${esc(command)}">Copy</button></div>` : "";
-    return `<div class="crow tool-row" data-tool-row data-cli="${cli}"><span class="logo">${logo(cli, 18, 0)}</span><div class="d"><b>${esc(CLI_LABEL[cli] ?? cli)}</b><small data-tool-subtitle title="${esc(subtitle)}">${esc(subtitle)}</small>${copy}</div><div class="tool-row-action" data-tool-row-action>${connected}${install}${login}${actionStatusMarkup(key)}${actionStatusMarkup(loginKey)}</div></div>`;
+    // Sign in only for a tool with a managed sign-in; any other installed tool says why in the server's words. The panel goes in the slot.
+    const login = cliLoginUi?.offered(cli) ? `<button type="button" class="btn sm" data-setting-action="login-cli" data-cli="${cli}" data-focus-key="${loginKey}" ${settingsActionRunning(loginKey) || signing || held ? "disabled" : ""}>${signing ? "Signing in…" : "Sign in"}</button>` : "";
+    const unsupported = tool?.installed === true && tool.signedIn !== true ? cliLoginUi?.unsupportedMessage(cli) : null;
+    const note = unsupported ? `<small class="wrap" data-tool-signin-note>${esc(unsupported)}</small>` : "";
+    const slot = tool?.installed === true ? `<div class="cli-login-slot" data-cli-login-slot="${esc(cli)}"></div>` : "";
+    const connected = tool?.signedIn === true && !unsupportedVersion && !needsConnect ? `<span class="tool-connected" data-tool-status="connected"><i></i>${cli === "opencode" ? "Ready" : "Connected"}</span>` : "";
+    const guide = tool?.installed === false ? window.CC_FIRST_RUN_HELP?.tools?.[cli]?.page ?? catalogEntry(cli)?.sources?.[0] ?? "" : "";
+    const copy = guide ? `<details class="settings-install-by-hand"><summary>Install by hand</summary><p>Visit the official setup guide, then return here and press Check again.</p><div class="cmd"><code>${esc(guide)}</code><button type="button" data-copy-address="${esc(guide)}">Copy address</button></div></details>` : "";
+    return `<div class="crow tool-row" data-tool-row data-cli="${esc(cli)}"><span class="logo">${logo(cli, 18, 0)}</span><div class="d"><b>${esc(toolName(cli))}</b><small data-tool-subtitle title="${esc(subtitle)}">${esc(subtitle)}</small>${note}${copy}</div><div class="tool-row-action" data-tool-row-action>${connected}${install}${connect}${login}${actionStatusMarkup(key)}${actionStatusMarkup(connectKey)}${actionStatusMarkup(loginKey)}</div>${slot}</div>`;
   }
   function skillBlock(cli, inventory = {}) {
     const skillCount = Array.isArray(inventory.skills) ? inventory.skills.length : 0;
@@ -178,7 +206,7 @@
     const settings = serverState?.settings ?? {};
     nav.innerHTML = `<h2>Settings</h2>${sections.map(([id, label]) => `<button type="button" data-settings-section="${id}" data-focus-key="settings-nav-${id}" aria-current="${String(settingsSection === id)}">${label}</button>`).join("")}`;
     const themes = [["light", "Light", "#f0f0f0", "#ffffff"], ["dark", "Dark", "#0f0f11", "#19191c"], ["system", "Match my PC", "linear-gradient(90deg,#0f0f11 50%,#f0f0f0 50%)", "transparent"]];
-    const toolRows = ["claude", "codex", "opencode", "gemini"].map((cli) => settingsToolRow(cli, settings.tools?.[cli])).join("");
+    const toolRows = settingsToolIds().map((cli) => settingsToolRow(cli, settingsToolFacts(cli))).join("");
     const github = settings.github ?? {};
     const githubSubtitle = github.connected === true ? "Signed in through the GitHub CLI. Pushing still depends on each folder having its own repository and remote." : github.connected === false ? "Not connected" : "Connection status unknown";
     const githubTitle = github.account ?? "GitHub CLI";
@@ -198,7 +226,7 @@
     const permission = "Notification" in window ? Notification.permission : "unsupported";
     const notificationsOn = Boolean(settingValue("notificationsEnabled"));
     const content = `${settingsCrewUnavailable()}
-      <section class="settings-section" id="s-tools" data-section="tools"><h3>AI tools<button type="button" class="btn sm" data-settings-refresh data-focus-key="settings-refresh"${refreshing ? " disabled" : ""}>${refreshing ? "Checking…" : "Check again"}</button></h3><div class="card tool-card">${toolRows}</div><p class="settings-help">${refreshing ? "Checking every CLI…" : refreshState?.status === "done" ? `Checked ${esc(agoText(refreshState.at))}. ` : refreshState?.status === "failed" ? "Could not check just now. Try again. " : ""}Installed and signed in are checked separately; Install runs npm in the background and asks first.</p></section>
+      <section class="settings-section" id="s-tools" data-section="tools"><h3>AI tools<button type="button" class="btn sm" data-settings-refresh data-focus-key="settings-refresh"${refreshing ? " disabled" : ""}>${refreshing ? "Checking…" : "Check again"}</button></h3><div class="card tool-card">${toolRows}</div><p class="settings-help">${refreshing ? "Checking every CLI…" : refreshState?.status === "done" ? `Checked ${esc(agoText(refreshState.at))}. ` : refreshState?.status === "failed" ? "Could not check just now. Try again. " : ""}Installed and signed in are checked separately; Install runs the maker's own installer in the background and asks first.</p></section>
       ${settingsAcpSection()}
       <section class="settings-section" id="s-github" data-section="github"><h3>GitHub</h3><div class="card"><div class="crow github-row"><span class="logo">${logo("github", 18, 0)}</span><div class="d"><b title="${esc(githubTitle)}">${esc(githubTitle)}</b><small class="wrap">${esc(githubSubtitle)}</small></div><div class="ra"><button type="button" class="btn sm" data-setting-action="github-login" data-focus-key="github-login" ${settingsActionRunning("github-login") ? "disabled" : ""}>${github.connected === true ? "Reconnect" : "Connect"}</button>${actionStatusMarkup("github-login")}</div></div></div></section>
       <section class="settings-section" id="s-vault" data-section="vault"><h3>Notes vault</h3><div class="card"><div class="crow vault-row" data-vault-row><span class="logo">${logo("obsidian", 18, 0)}</span><div class="d"><b>Obsidian vault</b><small><span class="vault-path-wrap">${vaultPathControl}</span><span class="vault-separator"> · </span><span id="vaultConnectionStatus" class="${vaultConnectedClass}">${vaultStatus}</span></small></div><div class="ra settings-actions">${canBrowse ? '<button type="button" class="btn sm" data-setting-action="vault-browse" data-focus-key="vault-browse">Browse</button>' : ""}<button type="button" class="btn sm" data-setting-action="vault-toggle" data-focus-key="vault-toggle" ${settingsActionRunning("vault-save") || (!vaultPath.trim() && !savedVaultPath) ? "disabled" : ""}>${vaultToggleText}</button>${actionStatusMarkup("vault-save")}</div></div></div><p class="settings-help vault-help">Optional. Save always writes the tab's own <code>.command-center/&lt;tab&gt;/RESUME.md</code>; the vault is what Open in Obsidian opens.</p></section>
@@ -207,6 +235,7 @@
       <section class="settings-section" id="s-appearance" data-section="appearance"><h3>Appearance</h3><div class="theme" role="radiogroup" aria-label="Appearance">${themes.map(([value, label, background, side]) => `<button type="button" role="radio" data-theme="${value}" aria-checked="${String(activeTheme === value)}" data-focus-key="theme-${value}"><span class="sw" style="background:${background}"><i style="background:${side}"></i><i></i></span>${label}</button>`).join("")}</div><p class="settings-help">${activeTheme === "system" ? "Following your PC: it switches by itself when Windows does." : "Remembered on this PC."}</p></section>
       <section class="settings-section" id="s-behaviour" data-section="behaviour"><h3>Behaviour</h3><div class="card">${settingSwitch("notificationsEnabled", "Notifications", "A desktop notice when a seat finishes, fails or needs you", settingValue("notificationsEnabled"), false, notificationsOn && permission === "denied" ? '<small class="wrap" style="color:var(--danger-text)">Blocked by the browser for this page. Allow notifications in the site settings, or nothing will show.</small>' : notificationsOn && permission === "unsupported" ? '<small class="wrap">This window cannot show desktop notices.</small>' : "")}${settingSwitch("bellEnabled", "Completion sound", "A short chime when a seat finishes, fails or needs you, with Notifications on or off. The speaker in the top bar switches it too and sets its volume", settingValue("bellEnabled"))}</div></section>`;
     fillSettingsBody(body, content);
+    cliLoginUi?.mount(body, "settings"); // each tool row's sign-in panel, the same element every time
     // Order matters: the content (with the fixed crew section) is in place first, so the scroll position is put back on the full height, not cut to a shorter Settings.
     restoreSettingsDrafts(body, drafts);
     updateVaultControls();
@@ -235,12 +264,12 @@
       if (openSettingsForms.has(key)) openSettingsForms.delete(key); else openSettingsForms.add(key);
       renderSettings();
     }));
-    body.querySelectorAll("[data-copy]").forEach((button) => button.addEventListener("click", async () => {
-      const command = button.dataset.copy;
-      try { await navigator.clipboard.writeText(command); showToast("Command copied"); }
+    body.querySelectorAll("[data-copy-address]").forEach((button) => button.addEventListener("click", async () => {
+      const address = button.dataset.copyAddress;
+      try { await navigator.clipboard.writeText(address); showToast("Address copied"); }
       catch {
-        const input = document.createElement("textarea"); input.value = command; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0"; document.body.append(input); input.select();
-        const copied = document.execCommand("copy"); input.remove(); showToast(copied ? "Command copied" : "Could not copy. Select it and copy by hand");
+        const input = document.createElement("textarea"); input.value = address; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0"; document.body.append(input); input.select();
+        const copied = document.execCommand("copy"); input.remove(); showToast(copied ? "Address copied" : "Could not copy. Select it and copy by hand");
       }
     }));
     body.querySelectorAll("[data-setting]").forEach((button) => button.addEventListener("click", () => {
@@ -259,8 +288,18 @@
       if (action === "tab-folder-browse") { const tabId = button.dataset.tabId; pickFolder((folder) => send({ type: "changeFolder", tabId, folder })); return; }
       if (action === "project-folder-browse") { const projectId = currentProject()?.id; if (projectId) pickFolder((folder) => send({ type: "changeProjectFolder", projectId, folder })); return; }
       let payload = null; let key = ""; let confirmation = null;
-      if (action === "install-cli") { key = `install-${cli}`; payload = { type: "installCli", cli, confirm: true }; confirmation = { title: `Install ${CLI_LABEL[cli]}?`, body: `Runs npm install -g with ${CLI_LABEL[cli]}'s own fixed package in the background. Signing in comes after.`, ok: "Install" }; }
-      if (action === "login-cli") { key = `login-${cli}`; payload = { type: "cliLogin", cli }; }
+      if (action === "install-cli") {
+        if (cli === "opencode") {
+          const tool = settingsToolFacts(cli), active = Object.values(serverState?.settings?.catalogTools ?? {}).some((t) => t?.action?.kind === "install" && (t.action.status === "running" || t.action.reason === "cleanupUnconfirmed"));
+          if (cliLoginUi?.busy() || active || settingsActionRunning(`install-${cli}`) || (tool?.installed !== false && !(tool?.installed === true && tool.supportedVersion !== true))) return;
+        }
+        key = `install-${cli}`; payload = { type: "installCli", cli, confirm: true }; confirmation = { title: `Install ${toolName(cli)}?`, body: `${installConsent(cli)} Signing in comes after.`, ok: "Install" };
+      }
+      if (action === "connect-cli") {
+        if (!settingsCanConnect(cli, settingsToolFacts(cli)) || settingsActionRunning(`connect-${cli}`)) return;
+        key = `connect-${cli}`; payload = { type: "registerCatalogCli", cli, confirm: true };
+      }
+      if (action === "login-cli") { if (cliLoginUi?.start(cli)) renderSettings(); return; } // sends only {type, requestId, cli} (login.js)
       if (action === "github-login") { key = "github-login"; payload = { type: "ghLogin" }; }
       if (action === "vault-toggle") {
         key = "vault-save";

@@ -1,5 +1,6 @@
-import { buildClis, CLAUDE_MODEL_INFO, OPENCODE_MODEL_SUGGESTIONS, fixedCrewRecovery, writeWorkspaces, type WorkspaceTab, type Workspaces } from "../config.ts";
-import { independenceNotice, type AssignmentCatalogue } from "../fixed-crew/assignment.ts";
+import { cliAvailability } from "../settings/cli-availability.ts";
+import { buildClis, CLAUDE_MODEL_INFO, OPENCODE_MODEL_INFO, OPENCODE_MODEL_SUGGESTIONS, fixedCrewRecovery, writeWorkspaces, type WorkspaceTab, type Workspaces } from "../config.ts";
+import { effortChoices, independenceNotice, type AssignmentCatalogue } from "../fixed-crew/assignment.ts";
 import { assignmentsDigest, bulkAssignment } from "../fixed-crew/bulk-assignment.ts";
 import { creationCrew, exactKeys, fillCrew, knownSlot, setCrewAssignment, setCrewRoleExtra, validateFixedCrew, type FixedCrew } from "../fixed-crew/preferences.ts";
 import { FIXED_CREW, type Assignment, type FixedSlot } from "../fixed-crew/roster.ts";
@@ -10,6 +11,7 @@ import { tabLocation } from "./tabs.ts";
 import { seatIsWorking } from "./workspace.ts";
 import { fixedCrewOf, isFixedTab } from "../fixed-crew/runtime.ts";
 import { assertTaskRecoveryReady, assertWorkspaceRecoveryReady, workspaceRecovery } from "../fixed-crew/recovery.ts";
+import { eligibleAcpClis } from "../settings/catalog-acp.ts";
 
 type Dependencies = {
   workspace: () => Workspaces;
@@ -26,10 +28,10 @@ function manualAvailable(assignment: Assignment | null, catalogue: AssignmentCat
   if (!assignment) return;
   const cli = catalogue.clis.find((cli) => cli.id === assignment.cli && cli.installed === true);
   if (!cli) throw new Error("This CLI is unavailable. Refresh installed tools first");
-  const saved = previous?.cli === assignment.cli ? previous : undefined;
+  const saved = previous?.cli === assignment.cli && previous.model === assignment.model ? previous : undefined;
   const models = cli.models ?? catalogue.opencodeSuggestions ?? [];
   if (!models.includes(assignment.model) && assignment.model !== saved?.model && !cli.id.startsWith("opencode")) throw new Error("Unknown crew model");
-  if (!cli.efforts.includes(assignment.effort) && assignment.effort !== saved?.effort) throw new Error("Unknown crew effort");
+  if (!effortChoices(cli, assignment.model, catalogue).includes(assignment.effort) && assignment.effort !== saved?.effort) throw new Error("Unknown crew effort");
   if (assignment.advisor && (!cli.advisor || (!catalogue.claudeModels?.some((model) => model.value === assignment.advisor) && assignment.advisor !== saved?.advisor))) throw new Error("Unknown crew advisor");
 }
 export function createFixedCrewService(deps: Dependencies) {
@@ -110,7 +112,7 @@ export function createFixedCrewService(deps: Dependencies) {
   };
 }
 export function fixedCatalogue(): AssignmentCatalogue {
-  return { clis: buildClis((cli) => settingsService.state.tools[cli].installed ?? null, acpClis), opencodeSuggestions: OPENCODE_MODEL_SUGGESTIONS, claudeModels: CLAUDE_MODEL_INFO };
+  return { clis: buildClis((cli) => cliAvailability(cli, settingsService.state), eligibleAcpClis(acpClis, settingsService.state)), opencodeSuggestions: OPENCODE_MODEL_SUGGESTIONS, opencodeModelInfo: OPENCODE_MODEL_INFO, claudeModels: CLAUDE_MODEL_INFO };
 }
 export const fixedCrewService = createFixedCrewService({
   workspace: () => workspaces, selectedTabId: () => selectedTabId, catalogue: fixedCatalogue,
@@ -127,7 +129,7 @@ const OLD_MESSAGES = new Set(["updateSeat", "setSetup", "useSetup", "saveSetup",
 export function assertFixedCrewMessageAllowed(message: any): void {
   const taskAction = ["approveFixedPlan", "approveFixedRough", "requestFixedTaskAction"].includes(message.type);
   if (taskAction) assertTaskRecoveryReady();
-  const changesWorkspace = ["addProject", "renameProject", "removeProject", "addTab", "renameTab", "removeTab", "changeFolder", "changeProjectFolder",
+  const changesWorkspace = ["completeFirstRun", "skipFirstRun", "addProject", "renameProject", "removeProject", "addTab", "renameTab", "removeTab", "changeFolder", "changeProjectFolder",
     "setCrewAssignment", "clearCrewAssignment", "autoAssignCrew", "setCrewModelForAll", "setCrewRoleExtra", "resetCrewRoleExtra", "updateSeat", "setSetup", "useSetup", "saveSetup", "removeSetup",
     "run", "chat", "steer", "save", "sendRequest", "resolveRequest"].includes(message.type);
   if (!taskAction && changesWorkspace) assertWorkspaceRecoveryReady("message");

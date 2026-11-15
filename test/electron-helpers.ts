@@ -180,7 +180,7 @@ export function shellHarness(savedBounds = {}, { lockAcquired = true, smokeReady
       if (options?.flag === "wx" && files.has(file)) throw Object.assign(new Error(`EEXIST: file already exists, open '${file}'`), { code: "EEXIST" });
       files.set(file, data);
     }, existsSync: (file) => files.has(file),
-    process: { env },
+    process: { env, execPath: "C:/bundled/electron.exe" },
     spawn: (...args) => { order.push(`spawn:${args[0]}`); spawns.push(args); return String(args[0]).endsWith("taskkill.exe") ? killer : proc; },
     createServer: () => Object.assign(new EventEmitter(), {
       listen: (_port, _host, cb) => cb(), address: () => ({ port: 51234 }), close: (cb) => cb(),

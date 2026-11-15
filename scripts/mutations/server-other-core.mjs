@@ -162,8 +162,8 @@ export const serverOtherCoreMutations = [
   // role -- an edit to an Underground agent's role mid-run must never flip
   // the safety gate under an already-running process (server/index.ts) ----
   ["guard-run-record-frozen-at-launch", "server/runner.ts", "  run = Object.freeze({ ...run });\n", "  run = run;\n"],
-  ["disk-model", "server/fixed-crew/assignment.ts", "!isSafeShape(value.model) || !isSafeShape(value.effort)", "!isSafeShape(value.effort)"],
-  ["disk-effort", "server/fixed-crew/assignment.ts", "!isSafeShape(value.model) || !isSafeShape(value.effort)", "!isSafeShape(value.model)"],
+  ["disk-model","server/fixed-crew/assignment.ts","!isSafeShape(value.model) || !(value.cli === \"opencode\" && value.effort === \"\") && !isSafeShape(value.effort)","!(value.cli === \"opencode\" && value.effort === \"\") && !isSafeShape(value.effort)"],
+  ["disk-effort","server/fixed-crew/assignment.ts","!isSafeShape(value.model) || !(value.cli === \"opencode\" && value.effort === \"\") && !isSafeShape(value.effort)","!isSafeShape(value.model)"],
   ["disk-seat-unsafe-id", "server/config.ts", "if (!isObject(tab) || !validSlug(tab.id) || !validText(tab.name)", "if (!isObject(tab) || !validText(tab.name)"],
   ["disk-seat-duplicate-id", "server/config.ts", "if (tabIds.has(tab.id.toLowerCase())) throw", "if (false) throw"],
   ["disk-seat-id-length-cap","server/process-types.ts","if (id.trim().length === 0 || id.length > MAX_SEAT_ID_LENGTH) return false;","if (id.trim().length === 0) return false;"],

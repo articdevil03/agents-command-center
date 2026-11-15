@@ -32,7 +32,7 @@ test("W6: a creation draft picks its model and effort before Create, shows them 
     const from = await count(ev);
     await click(ev, `#pCrew [data-fc-new-model="coder"]`);
     await waitFor(`!document.querySelector("#pop").hidden&&Boolean(document.querySelector("#pop #mq"))`, "the model menu opens for the position");
-    const pick = await ev(`(()=>{const b=[...document.querySelectorAll("#pop [data-model]")].find((el)=>el.dataset.cli==="claude"&&el.getAttribute("aria-pressed")!=="true"&&!el.querySelector("small"));if(!b)return null;const out={model:b.dataset.model,shown:b.querySelector(".nm > span").textContent};b.click();return out})()`);
+    const pick = await ev(`(()=>{const b=[...document.querySelectorAll("#pop [data-model]")].find((el)=>el.dataset.cli==="claude"&&el.getAttribute("aria-pressed")!=="true"&&!el.querySelector("small")?.textContent);if(!b)return null;const out={model:b.dataset.model,shown:b.querySelector(".nm > span").textContent};b.click();return out})()`);
     assert.ok(pick, "control: the menu offers a Claude model with an effort setting");
     assert.equal(await ev(`document.querySelector('#pop [data-model="${pick.model}"][data-cli="claude"]').getAttribute("aria-pressed")`), "true", "the menu stays open and ticks the pick (drawn from the draft)");
     const effort = await ev(`(()=>{const b=[...document.querySelectorAll("#pop [data-effort]")].find((el)=>el.getAttribute("aria-checked")!=="true");if(!b)return null;b.click();return b.dataset.effort})()`);

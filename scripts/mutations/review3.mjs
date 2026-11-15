@@ -57,14 +57,14 @@ export const review3Mutations = [
   [
     "p26r8-shutdown-unknown-gate",
     "server/index.ts",
-    "if (!gitConfirmed || !workersConfirmed) { process.exit(1); return; }",
+    "if (!gitConfirmed || !workersConfirmed || !installerConfirmed || !loginConfirmed) { process.exit(1); return; }",
     "if (false) { process.exit(1); return; }"
   ],
   [
     "p26r8-shutdown-unknown-exit",
     "server/index.ts",
-    "if (!gitConfirmed || !workersConfirmed) { process.exit(1); return; }",
-    "if (!gitConfirmed || !workersConfirmed) { process.exit(0); return; }"
+    "if (!gitConfirmed || !workersConfirmed || !installerConfirmed || !loginConfirmed) { process.exit(1); return; }",
+    "if (!gitConfirmed || !workersConfirmed || !installerConfirmed || !loginConfirmed) { process.exit(0); return; }"
   ],
   [
     "p26r8-unused-planner-future",

@@ -1,3 +1,16 @@
+import { pack29OpenCodeModelsMutations } from "./mutations/pack29-opencode-models.mjs";
+import { pack29CliInstallMutations } from "./mutations/pack29-cli-install.mjs";
+import { pack29OpenCodeInstallMutations } from "./mutations/pack29-opencode-install.mjs";
+import { pack29OpenCodeKeyMutations } from "./mutations/pack29-opencode-key.mjs";
+import { pack29OpenCodeUiMutations } from "./mutations/pack29-opencode-ui.mjs";
+import { pack29CliLoginMutations } from "./mutations/pack29-cli-login.mjs";
+import { pack29CliLoginUiMutations } from "./mutations/pack29-cli-login-ui.mjs";
+import { pack29ScanMutations } from "./mutations/pack29-scan.mjs";
+import { pack29RuntimeMutations } from "./mutations/pack29-runtime.mjs";
+import { pack29InstallerMutations } from "./mutations/pack29-installer.mjs";
+import { pack29FirstRunMutations } from "./mutations/pack29-first-run.mjs";
+import { pack29OtherToolsMutations } from "./mutations/pack29-other-tools.mjs";
+import { pack29PathRefreshMutations } from "./mutations/pack29-path-refresh.mjs";
 import { existsSync, lstatSync, readdirSync, rmdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -102,6 +115,31 @@ export const mutations = [
   ...toolingMutations,
   ...pack27AdvisorMutations,
   ...pack28ClosingNoticeMutations,
+  ...pack29ScanMutations,
+  // O4 cannot edit runtime.mjs. Preserve its three isolation rows while including
+  // O1's added auto-update setting in both sides of the original mutation.
+  ...pack29RuntimeMutations.map((entry) => {
+    if (!["p29-env-worker", "p29-env-settings", "p29-env-git"].includes(entry[0])) return entry;
+    const [name, file, from, to] = entry;
+    const updated = (text) => file.endsWith("cli-path.ts")
+      ? text.replace("...extra });", '...extra, OPENCODE_DISABLE_AUTOUPDATE: "1" });')
+      : text.replace('...options.env, NoDefault', '...options.env, OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefault');
+    const replacement = name === "p29-env-git"
+      ? 'return Object.keys(extra).length ? stripElectronNodeEnv({ ...childEnv, ...extra, OPENCODE_DISABLE_AUTOUPDATE: "1" }) : { ...childEnv, NoDefaultCurrentDirectoryInExePath: "1", OPENCODE_DISABLE_AUTOUPDATE: "1" };'
+      : updated(to);
+    return [name, file, updated(from), replacement];
+  }),
+  ...pack29InstallerMutations,
+  ...pack29FirstRunMutations,
+  ...pack29OtherToolsMutations,
+  ...pack29PathRefreshMutations,
+  ...pack29CliInstallMutations,
+  ...pack29CliLoginMutations,
+  ...pack29CliLoginUiMutations,
+  ...pack29OpenCodeInstallMutations,
+  ...pack29OpenCodeKeyMutations,
+  ...pack29OpenCodeUiMutations,
+  ...pack29OpenCodeModelsMutations,
 ];
 
 // Behaviour a mutation exists for but that no test at HEAD would fail on yet. Each entry is [name, file, from, to, why no test]. The sweep does not

@@ -221,6 +221,10 @@ test("sweep: every validateFolderPath site in the server is listed, and 'writes 
   // Each message handler is the function `onXxx(ws, message)` in server/main/messages/ (named after its first message type), ending at its closing brace line.
   const cases = [...source.matchAll(/^function on([A-Z][A-Za-z]*)\(ws: WebSocket, message: any\): void \{/gm)].map((m) => ({ name: m[1][0].toLowerCase() + m[1].slice(1), at: m.index!, end: source.indexOf("\n}\n", m.index!) }));
   assert.ok(cases.length >= 43, `control: the scan found only ${cases.length} message handlers`);
+  const creators = [...source.matchAll(/^export function createProject\(/gm)];
+  assert.equal(creators.length, 1, "control: exactly one shared project creator must be found");
+  cases.push({ name: "addProject", at: creators[0].index!, end: source.indexOf("\n}\n", creators[0].index!) });
+  assert.ok(cases.every((c) => c.end > c.at), "every scanned body must have a closing brace");
   for (const call of source.matchAll(/validateFolderPath\((.*?), "((?:tab|project) folder)"\)/g)) {
     const owner = cases.find((c) => c.at < call.index! && call.index! < c.end);
     sites.push(`${owner?.name ?? "(outside every message handler)"}|${call[2]}`);
@@ -229,8 +233,9 @@ test("sweep: every validateFolderPath site in the server is listed, and 'writes 
   assert.deepEqual([...sites].sort(), Object.keys(SWEEP).sort(), "a new or removed folder-assignment site needs a decision in SWEEP");
   for (const [key, decision] of Object.entries(SWEEP)) {
     const name = key.split("|")[0];
-    const owner = cases.find((c) => c.name === name)!;
-    const body = source.slice(owner.at, owner.end);
+    const owners = cases.filter((c) => c.name === name);
+    assert.ok(owners.length > 0, `${name} must be found`);
+    const body = owners.map((owner) => source.slice(owner.at, owner.end)).join("\n");
     assert.equal(/writeProjectRules\(/.test(body), decision === "writes rules", `${name} is ${decision}`);
     if (decision === "writes rules") assert.match(body, /message\.projectOnly === true/, `${name} only writes when projectOnly is true`);
     else assert.match(body, /Deliberately no "Work on this project only"/, `${name} says why it is excluded`);

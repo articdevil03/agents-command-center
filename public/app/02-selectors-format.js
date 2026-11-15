@@ -250,9 +250,10 @@
     if (cli === "opencode" && Array.isArray(serverState?.opencodeModels)) return [...new Set(serverState.opencodeModels.filter((item) => typeof item === "string"))];
     return [];
   }
-  function effortOptions(cli) { return cliCap(cli)?.efforts ?? (Array.isArray(serverState?.effortOptions?.[cli]) ? serverState.effortOptions[cli] : []); }
+  function effortOptions(cli, model) { if (cli === "opencode") return ["", ...(serverState?.opencodeModelInfo?.find((item) => item.value === model)?.variants ?? [])]; return cliCap(cli)?.efforts ?? (Array.isArray(serverState?.effortOptions?.[cli]) ? serverState.effortOptions[cli] : []); }
   // No effort setting when the CLI lists no efforts or is an ACP one; a Claude model can opt out on its own (claudeModels says which).
   function modelSupportsEffort(cli, model) {
+    if (cli === "opencode") return (serverState?.opencodeModelInfo?.find((item) => item.value === model)?.variants?.length ?? 0) > 0;
     if (isAcpCli(cli)) return false;
     const cap = cliCap(cli);
     if (cap && !cap.efforts.length) return false;

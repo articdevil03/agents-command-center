@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { Assignment } from "../server/fixed-crew/roster.ts";
 import {
-  autoFillPreferences, freshPreferences, validateAssignment, validatePreference,
+  effortChoices, autoFillPreferences, freshPreferences, validateAssignment, validatePreference,
   requireAssignment, independenceNotice, assignmentCompany,
   type AssignmentCatalogue, type CliInventory, type CrewPreferences,
 } from "../server/fixed-crew/assignment.ts";
@@ -16,7 +16,7 @@ const codex = (extra: Partial<CliInventory> = {}): CliInventory => ({
   id: "codex", installed: true, models: [SOL], efforts: ["low", "medium", "high", "xhigh", "max"], advisor: false, ...extra,
 });
 const opencode = (extra: Partial<CliInventory> = {}): CliInventory => ({
-  id: "opencode", installed: true, models: null, efforts: ["max"], advisor: false, ...extra,
+  id: "opencode", installed: true, models: null, efforts: [], advisor: false, ...extra,
 });
 const acp = (extra: Partial<CliInventory> = {}): CliInventory => ({
   id: "acp:custom", installed: true, models: ["default"], efforts: ["default"], advisor: false, ...extra,
@@ -56,7 +56,7 @@ test("FC one installed CLI fills every auto seat with usable values", () => {
       assert.ok(preference.assignment, `${cli.id} should fill all auto seats`);
       assert.equal(preference.assignment.cli, cli.id);
       assert.ok((cli.models ?? suggestions).includes(preference.assignment.model));
-      assert.ok(cli.efforts.includes(preference.assignment.effort));
+      assert.ok(effortChoices(cli, preference.assignment.model, { clis: [cli] }).includes(preference.assignment.effort));
       assert.equal(preference.source, "auto");
       assert.deepEqual(validatePreference(frozen(preference)), preference);
     }
@@ -157,13 +157,13 @@ test("FC worker defaults prefer Sonnet then Opus and never Fable", () => {
     assignment("claude", OPUS));
   assert.equal(fill({}, { clis: [claude({ models: ["claude-fable-5-1", "fable"] })] }).coder.assignment, null);
   assert.deepEqual(fill({}, { clis: [opencode({ models: ["vendor/fable", "vendor/custom"] })] }).coder.assignment,
-    assignment("opencode", "vendor/custom", "max"));
+    assignment("opencode", "vendor/custom", ""));
 });
 
 test("FC reviewers alternate company even when roster preference is available", () => {
   const fallbackWriter = fill({}, { clis: [claude(), opencode({ models: ["openai/gpt-6-astra"] })] });
   assert.deepEqual(fallbackWriter.coder.assignment, assignment("claude", SONNET));
-  assert.deepEqual(fallbackWriter.reviewer1.assignment, assignment("opencode", "openai/gpt-6-astra", "max"));
+  assert.deepEqual(fallbackWriter.reviewer1.assignment, assignment("opencode", "openai/gpt-6-astra", ""));
   const chosen = { coder: { source: "user" as const, assignment: assignment("claude", OPUS, "high") } };
   const result = fill(chosen, { clis: [claude(), codex()] });
   assert.deepEqual(result.coder, chosen.coder);
@@ -175,13 +175,13 @@ test("FC reviewers alternate company even when roster preference is available", 
   assert.equal(independenceNotice(one.coder.assignment, one.reviewer1.assignment).status, "same-model");
   const unknown = fill({ coder: { source: "user", assignment: assignment("opencode", "vendor/other", "max") } },
     { clis: [opencode({ models: ["vendor/custom"] }), acp()] });
-  assert.deepEqual(unknown.reviewer1.assignment, assignment("opencode", "vendor/custom", "max"));
+  assert.deepEqual(unknown.reviewer1.assignment, assignment("opencode", "vendor/custom", ""));
   assert.equal(independenceNotice(unknown.coder.assignment, unknown.reviewer1.assignment).status, "unknown");
 });
 
 test("FC OpenCode custom capability uses separately supplied safe suggestions", () => {
   const result = fill({}, { clis: [opencode()], opencodeSuggestions: ["bad & shell", "vendor/z", "vendor/a"] });
-  assert.deepEqual(result.coder.assignment, assignment("opencode", "vendor/a", "max"));
+  assert.deepEqual(result.coder.assignment, assignment("opencode", "vendor/a", ""));
   assert.deepEqual(fill({}, { clis: [opencode({ models: [] })], opencodeSuggestions: ["vendor/a"] }), freshPreferences());
   assert.deepEqual(fill({}, { clis: [opencode()], opencodeSuggestions: ["vendor/../bad"] }), freshPreferences());
 });
@@ -203,7 +203,7 @@ test("FC reviewer fallback selects known different company before same or unknow
   preferences.coder = { source: "user", assignment: assignment() };
   const clis = [codex({ models: ["gpt-6-a"] }), opencode()];
   const result = fill(preferences, { clis, opencodeSuggestions: ["vendor/aaa-unknown", "vendor/gpt-6-b", "vendor/claude-sonnet-5"] });
-  assert.deepEqual(result.reviewer1.assignment, assignment("opencode", "vendor/claude-sonnet-5", "max"));
+  assert.deepEqual(result.reviewer1.assignment, assignment("opencode", "vendor/claude-sonnet-5", ""));
   const sameOnly = fill(preferences, { clis, opencodeSuggestions: ["vendor/gpt-6-b"] });
   assert.equal(sameOnly.reviewer1.assignment?.cli, "codex", "same company remains allowed with deterministic fallback");
   const unknownOnly = fill(preferences, { clis: [codex({ models: [] }), opencode()], opencodeSuggestions: ["vendor/unknown"] });

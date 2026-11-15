@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { defaultEffort } from "../config.ts";
-import { validateAssignment, type AssignmentCatalogue } from "./assignment.ts";
+import { effortChoices, validateAssignment, type AssignmentCatalogue } from "./assignment.ts";
 import type { FixedCrew } from "./preferences.ts";
 import { FIXED_CREW, type Assignment, type FixedSlot } from "./roster.ts";
 
@@ -19,7 +19,7 @@ export function bulkAssignment(current: FixedCrew, catalogue: AssignmentCatalogu
   if (typeof confirmReplace !== "boolean") throw new Error("confirmReplace must be true or false");
   const cli = catalogue.clis.find((item) => item.id === cliId && item.installed === true);
   if (!cli) throw new Error("This CLI is unavailable. Refresh installed tools first");
-  const fallback = defaultEffort(cli.id as Assignment["cli"]);
+  const fallback = defaultEffort(cli.id as Assignment["cli"], String(model));
   const selected = validateAssignment({ cli: cli.id, model, effort: fallback })!;
   const models = cli.models ?? catalogue.opencodeSuggestions ?? [];
   if (!models.includes(selected.model) && !cli.id.startsWith("opencode") && !cli.id.startsWith("acp:")) throw new Error("Unknown crew model");
@@ -31,7 +31,7 @@ export function bulkAssignment(current: FixedCrew, catalogue: AssignmentCatalogu
     const previous = current.preferences[slot];
     const old = previous.assignment;
     const assignment: Assignment = { ...selected,
-      effort: old && cli.efforts.includes(old.effort) ? old.effort : fallback,
+      effort: old && effortChoices(cli, selected.model, catalogue).includes(old.effort) ? old.effort : fallback,
       ...(old?.advisor && cli.advisor && catalogue.claudeModels?.some((item) => item.value === old.advisor) ? { advisor: old.advisor } : {}),
     };
     if (previous.source === "user" && JSON.stringify(old) === JSON.stringify(assignment)) continue;

@@ -1,3 +1,4 @@
+import { openCodeEfforts, type OpenCodeModelInfo } from "../settings/opencode/models.ts";
 import { cliCaps, isAcpCli, isObj } from "../process-types.ts";
 import { isSafeShape } from "../config-files.ts";
 import type { CliCap } from "../config.ts";
@@ -10,6 +11,7 @@ export type ModelIdentity = { value: string; displayName: string };
 export interface AssignmentCatalogue {
   clis: readonly CliInventory[];
   opencodeSuggestions?: readonly string[];
+  opencodeModelInfo?: readonly OpenCodeModelInfo[];
   claudeModels?: readonly ModelIdentity[];
 }
 
@@ -21,7 +23,7 @@ export function freshPreferences(): CrewPreferences {
 // a previously valid model or effort must not erase an existing choice.
 export function validateAssignment(value: unknown): Assignment | null {
   if (value === null) return null;
-  if (!isObj(value) || !cliCaps(value.cli) || !isSafeShape(value.model) || !isSafeShape(value.effort)) {
+  if (!isObj(value) || !cliCaps(value.cli) || !isSafeShape(value.model) || !(value.cli === "opencode" && value.effort === "") && !isSafeShape(value.effort)) {
     throw new Error("Invalid crew assignment");
   }
   const cli = value.cli as Assignment["cli"];
@@ -48,7 +50,8 @@ function modelChoices(cli: CliInventory, catalogue: AssignmentCatalogue): string
   }).sort();
 }
 
-function effortChoices(cli: CliInventory): string[] {
+export function effortChoices(cli: CliInventory, model: string, catalogue: AssignmentCatalogue): string[] {
+  if (cli.id === "opencode") return openCodeEfforts(catalogue.opencodeModelInfo ?? [], model);
   return isAcpCli(cli.id) ? ["default"] : [...new Set(cli.efforts)].filter(isSafeShape).sort();
 }
 
@@ -116,12 +119,11 @@ export function autoFillPreferences(preferences: Partial<CrewPreferences>, catal
     return model ? [model, ...models.filter((candidate) => candidate !== model)] : [];
   }
 
-  function singleAssignment(seat: Readonly<FixedSeat>, cli: CliInventory): Assignment | null {
-    const efforts = effortChoices(cli);
-    const model = workerModels(seat, cli)[0];
+  function singleAssignment(seat: Readonly<FixedSeat>, cli: CliInventory, model = workerModels(seat, cli)[0]): Assignment | null {
+    const efforts = effortChoices(cli, model, catalogue);
     const effort = efforts.includes(seat.preferred.effort) ? seat.preferred.effort
       : efforts.includes("medium") ? "medium" : efforts[0];
-    if (!model || !effort) return null;
+    if (!model || effort === undefined) return null;
     return withAdvisor(seat, { cli: cli.id as Assignment["cli"], model, effort }, cli, catalogue);
   }
 
@@ -134,8 +136,7 @@ export function autoFillPreferences(preferences: Partial<CrewPreferences>, catal
     const preferred = preferredCli ? singleAssignment(seat, preferredCli) : null;
     const ordered = preferredCli ? [preferredCli, ...available.filter((cli) => cli !== preferredCli)] : available;
     const candidates = ordered.flatMap((cli) => {
-      const selected = singleAssignment(seat, cli);
-      return selected ? workerModels(seat, cli).map((model): Assignment => ({ ...selected, model })) : [];
+      return workerModels(seat, cli).flatMap((model) => { const selected = singleAssignment(seat, cli, model); return selected ? [selected] : []; });
     });
     const writerCompany = seat.reviews ? assignmentCompany(next[seat.reviews].assignment) : null;
     const differentCompany = writerCompany ? candidates.find((candidate) => {

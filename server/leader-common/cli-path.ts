@@ -1,7 +1,9 @@
+import { stripElectronNodeEnv } from "../runtime-env.ts";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { LeaderSpawn } from "./types.ts";
+import { managedCli } from "../settings/opencode/paths.ts";
 
 // cmd.exe looks in the current folder before PATH, so a codex.cmd planted in a project folder would run instead of the real CLI.
 // Resolve the CLI ourselves from PATH (never the cwd) and spawn that absolute path; cmd.exe is also told not to search the cwd.
@@ -35,6 +37,8 @@ export function setCliSkipFolders(getFolders: () => string[]): void { workspaceF
 export function cliSkipFolders(cwd?: string | string[]): string[] { return [...(cwd === undefined ? [] : [cwd].flat()), ...workspaceFolders()].filter(Boolean); }
 export function resolveCliPath(name: string, env: NodeJS.ProcessEnv = process.env, cwd?: string | string[], ignoreSkip = false): string | null {
   const skip = ignoreSkip ? [] : cliSkipFolders(cwd);
+  const managed = name === "opencode" ? managedCli(env) : null;
+  if (managed && !skip.some((folder) => isInsideFolder(managed, folder))) return managed;
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path");
   for (const raw of (pathKey ? env[pathKey] ?? "" : "").split(";")) {
     const dir = raw.trim().replace(/^"(.*)"$/, "$1");
@@ -51,7 +55,7 @@ export function resolveCliPath(name: string, env: NodeJS.ProcessEnv = process.en
 export const KNOWN_CLI_NAMES = ["claude", "codex", "opencode", "gemini"] as const;
 const KNOWN_CLI_START = new RegExp(`^(${KNOWN_CLI_NAMES.join("|")})(?=\\s|$)`);
 // The absolute path of a CLI found on PATH outside every project folder; fails closed (a bare name would make cmd.exe search the inherited PATH, which may hold the project folder).
-export function resolveCliOrThrow(name: string, env: NodeJS.ProcessEnv = process.env, cwd?: string | string[]): string {
+export function resolveCliOrThrow(name: string, env: NodeJS.ProcessEnv = process.env, cwd?: string | string[], directExecutable = false): string {
   const found = resolveCliPath(name, env, cwd);
   if (!found) {
     const hidden = resolveCliPath(name, env, cwd, true);
@@ -59,7 +63,7 @@ export function resolveCliOrThrow(name: string, env: NodeJS.ProcessEnv = process
       ? `${name} was found only inside a project folder (${dirname(hidden)}), which is never used; install it outside your project folders or remove that project folder`
       : `${name} was not found on PATH`);
   }
-  if (/["%]/.test(found)) throw new Error(`${name} was not found on PATH`);
+  if ((directExecutable && !/\.(cmd|bat)$/i.test(found) ? /["\r\n\0]/ : /["%]/).test(found)) throw new Error(`${name} was not found on PATH`);
   return found;
 }
 // Swaps the leading CLI name of a fixed command for its quoted absolute path. A CLI that cannot be resolved (or whose path cmd.exe would expand) fails closed.
@@ -89,7 +93,7 @@ export function leaderKindOf(cli: unknown): "claude" | "codex" | "opencode" | "a
 // The leader child must never inherit the app's private data root, the app key or a stray server password (same strip as buildLeaderOptions).
 export function leaderChildEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const { CC_DATA_DIR: _ccDataDir, CC_TEST_FORCE_PACKAGED: _ccTestForcePackaged, CC_APP_KEY: _ccAppKey, OPENCODE_SERVER_PASSWORD: _ocPassword, ...childEnv } = process.env;
-  return { ...childEnv, NoDefaultCurrentDirectoryInExePath: "1", ...extra };
+  return stripElectronNodeEnv({ ...childEnv, NoDefaultCurrentDirectoryInExePath: "1", ...extra, OPENCODE_DISABLE_AUTOUPDATE: "1" });
 }
 
 // Absolute System32 paths: a bare "taskkill" or "powershell" is looked for in the current folder first.

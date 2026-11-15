@@ -46,10 +46,11 @@ test("assignment cli: the effort is the user's pick, and one that does not exist
   await withServer({ leader: CLAUDE_LEADER, installed: ["opencode"] }, async (h) => {
     await h.refresh();
     const before = h.savedSeat(WORKER.slotId);
-    // OpenCode offers only "max" in this server; the Claude seat's own effort is not carried over, no default is substituted.
-    const refused = await h.assign(WORKER.slotId, { cli: "opencode", model: "opencode/glm-5.2", effort: WORKER.effort });
+    // The fake OpenCode reports only max and high for this model: an effort it does not report is refused, never replaced by a default.
+    const refused = await h.assign(WORKER.slotId, { cli: "opencode", model: "opencode/glm-5.2", effort: "xhigh" });
     assert.equal(refused.type, "error"); assert.match(refused.message, /Unknown crew effort/);
     assert.deepEqual(h.savedSeat(WORKER.slotId), before, "the seat kept its saved assignment");
+    assert.equal((await h.assign(WORKER.slotId, { cli: "opencode", model: "opencode/glm-5.2", effort: "high" })).type, "actionResult", "control: an effort the model reports is accepted");
     assert.equal((await h.assign(WORKER.slotId, { cli: "opencode", model: "opencode/glm-5.2", effort: "max" })).type, "actionResult");
     assert.deepEqual(h.savedSeat(WORKER.slotId), { cli: "opencode", model: "opencode/glm-5.2", effort: "max" });
   });

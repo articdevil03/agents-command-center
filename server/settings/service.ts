@@ -1,13 +1,17 @@
+import type { OpenCodeModelRefresh } from "./opencode/models.ts";
+import { createSetupActions } from "./setup-actions.ts";
 import { readdirSync, statSync } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { isSafeRequestId } from "../chat-store.ts";
-import { withResolvedCli } from "../leader-common.ts";
-import { runCli } from "./cli-runner.ts";
-import { ACTION_TIMEOUT_MS, AUTH_ARGS, CLI_IDS, CLI_TIMEOUT_MS, LOGIN_ARGS, MCP_NAME, PACKAGES, PERMISSION_MODES, PLUGIN_NAME } from "./constants.ts";
+import { CliInstaller } from "./cli-install.ts";
+import { refreshCatalog } from "./cli-auth.ts";
+import { CliLogin, type LoginSend } from "./cli-login.ts";
+import { createDetachedLoginLauncher } from "./cli-login-runner.ts";
+import { ACTION_TIMEOUT_MS, CLI_IDS, CLI_TIMEOUT_MS, MCP_NAME, PERMISSION_MODES, PLUGIN_NAME } from "./constants.ts";
 import { applyBounded, LIVE_TIMEOUT, ModeBusyError, serializePermissionMode } from "./permissions.ts";
-import { knownAuthStatus, parseGitHubAuthStatus, parseMcpCommand, parseMcpList, parsePluginList, parseVersion } from "./parse.ts";
+import { parseGitHubAuthStatus, parseMcpCommand, parseMcpList, parsePluginList } from "./parse.ts";
 import { freshState, persist, readPersisted } from "./store.ts";
 import type { ActionState, CliId, CliResult, PermissionMode, PersistedSettings, RunCli, SettingsServiceOptions, SettingsState } from "./types.ts";
 
@@ -29,10 +33,14 @@ export class SettingsService {
   private recoveryNotice: string | null = null;
   private readonly env: NodeJS.ProcessEnv;
   private readonly run: RunCli;
+  private readonly launchGitHub: () => Promise<boolean>;
   private onChange: () => void;
   private readonly permissionTimeoutMs: number;
   private readonly loginRecheckMs: number;
   private readonly loginWatchers = new Map<string, ReturnType<typeof setTimeout>>();
+  readonly models: OpenCodeModelRefresh;
+  readonly installer: CliInstaller;
+  readonly login: CliLogin;
   private readonly permissionModeSequences = new Map<string, number>();
   private readonly permissionModeTails = new Map<string, Promise<void>>();
 
@@ -43,10 +51,12 @@ export class SettingsService {
     if (read.recovered) this.recoveryNotice = "The settings file was damaged, so your saved permission modes were lost. A copy was kept beside it. Every tab without a saved mode now asks before changing files; pick a mode for each tab to change that.";
     this.state = freshState(this.saved);
     this.env = options.env ?? process.env;
-    this.run = options.runCli ?? runCli;
+    this.launchGitHub = options.launchGitHub ?? createDetachedLoginLauncher(undefined, this.env);
     this.onChange = options.onChange ?? (() => {});
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? 15_000;
     this.loginRecheckMs = options.loginRecheckMs ?? 3_000;
+    const setup = createSetupActions(options, this.state, this.env, () => this.publish());
+    this.models = setup.models; this.run = setup.run; this.installer = setup.installer; this.login = setup.login;
   }
 
   // A login window opens and the user takes a while: read the status again every few seconds until it says signed in (or 3 minutes pass).
@@ -102,16 +112,6 @@ export class SettingsService {
     catch { return { code: -1, stdout: "", stderr: "command failed" }; }
   }
 
-  private async updateTool(cli: CliId): Promise<void> {
-    const versionResult = await this.call(cli, ["--version"]);
-    const installed = versionResult.code === 0 ? true : versionResult.code === 127 ? false : null;
-    const version = installed ? parseVersion(versionResult.stdout || versionResult.stderr) : null;
-    let signedIn: boolean | null = null;
-    const authArgs = AUTH_ARGS[cli];
-    if (installed && authArgs) signedIn = knownAuthStatus(cli, await this.call(cli, authArgs));
-    Object.assign(this.state.tools[cli], { installed, version, signedIn });
-  }
-
   private skillNames(directory: string): string[] {
     try { return readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).filter((name) => /^[A-Za-z0-9_.-]{1,128}$/.test(name)).sort(); }
     catch { return []; }
@@ -159,7 +159,7 @@ export class SettingsService {
   async refreshAll(folder: string | null): Promise<void> {
     this.refreshProjectInstructions(folder);
     this.refreshLocalSkills();
-    await Promise.all([...CLI_IDS.map((cli) => this.updateTool(cli)), ...CLI_IDS.map((cli) => this.refreshCliInventory(cli))]);
+    await Promise.all([this.models.refresh(), refreshCatalog(this.state, this.run), ...CLI_IDS.map((cli) => this.refreshCliInventory(cli))]);
     const gh = await this.call("gh", ["auth", "status"]);
     Object.assign(this.state.github, parseGitHubAuthStatus(gh));
     this.publish();
@@ -183,43 +183,20 @@ export class SettingsService {
     }
   }
 
-  async installCli(cli: CliId, requestId: string, confirm: unknown): Promise<void> {
-    if (!CLI_IDS.includes(cli)) throw new SettingsActionError("unknown CLI", requestId);
-    return this.action(this.state.tools[cli], requestId, async () => {
-      await this.updateTool(cli);
-      if (this.state.tools[cli].installed === true) throw new Error("CLI is already installed");
-      if (this.state.tools[cli].installed === null) throw new Error("CLI installation status is unknown");
-      if (confirm !== true) throw new Error("install confirmation is required");
-      const result = await this.call("npm", ["install", "-g", PACKAGES[cli]], ACTION_TIMEOUT_MS);
-      if (result.code !== 0) throw new Error("CLI installation failed");
-      await this.updateTool(cli);
-      if (!this.state.tools[cli].installed) throw new Error("installation finished but the CLI was not found");
-    });
+  async installCli(cliOrMessage: unknown, requestId?: string, confirm?: unknown): Promise<void> {
+    return this.installer.install(typeof cliOrMessage === "string" ? { type: "installCli", cli: cliOrMessage, requestId, confirm } : cliOrMessage);
   }
+  cancelCliInstall(message: unknown): Promise<void> { return this.installer.cancel(message); }
 
-  async loginCli(cli: CliId, requestId: string, folder: string | null): Promise<void> {
-    if (!CLI_IDS.includes(cli)) throw new SettingsActionError("unknown CLI", requestId);
-    return this.action(this.state.tools[cli], requestId, async () => {
-      if (cli === "gemini") throw new Error("Gemini sign-in status is unknown and sign-in is unavailable");
-      const loginArgs = LOGIN_ARGS[cli];
-      if (!loginArgs) throw new Error("CLI sign-in is unavailable");
-      await this.updateTool(cli);
-      if (this.state.tools[cli].installed !== true) throw new Error(this.state.tools[cli].installed === false ? "CLI is not installed" : "CLI installation status is unknown");
-      // `start` would look for a bare name in the current folder and on PATH, project folders included: hand it the path the status check uses.
-      const program = withResolvedCli(cli, this.env, process.cwd()).replace(/^"(.*)"$/, "$1");
-      if (/["\u0000-\u001f]/.test(program)) throw new Error(`${cli} sits at a path with characters the login window cannot take: ${program}`);
-      // The path travels in an environment variable that cmd expands once, inside quotes, so & ^ ( ) % and spaces in it stay plain text.
-      const result = await this.call("cmd", ["/c", "start", '""', '"%CC_LOGIN_PROGRAM%"', ...loginArgs], 5_000, { env: { CC_LOGIN_PROGRAM: program }, verbatimArgs: true });
-      if (result.code !== 0) throw new Error("could not open the CLI login window");
-      // The window has only just opened: nothing has changed yet, so the status is read again while the user signs in.
-      this.watchSignIn(cli, async () => { await this.updateTool(cli); return this.state.tools[cli].signedIn; });
-    });
+  loginCli(cli: string, requestId: string, _folder: string | null): Promise<void> {
+    return this.login.start({ type: "cliLogin", cli, requestId });
   }
+  cliLogin(message: unknown, send: LoginSend): Promise<void> { return this.login.request(message, send); }
 
   async loginGitHub(requestId: string): Promise<void> {
     return this.action(this.state.github, requestId, async () => {
-      const result = await this.call("cmd", ["/c", "start", "", "gh", "auth", "login", "--web"], 5_000);
-      if (result.code !== 0) throw new Error("could not open the GitHub login window");
+      const launched = await this.launchGitHub();
+      if (!launched) throw new Error("could not open the GitHub login window");
       this.watchSignIn("gh", async () => {
         const parsed = parseGitHubAuthStatus(await this.call("gh", ["auth", "status"]));
         this.state.github.connected = parsed.connected;
@@ -351,6 +328,7 @@ export class SettingsService {
 
   recordFailure(action: string, cli: unknown, tabId: unknown, requestId: string, message: string): void {
     if (!isSafeRequestId(requestId)) return;
+    if (["installCli", "cancelCliInstall", "cliLogin", "replaceCliLogin", "submitCliLoginKey", "getCliLoginState", "openCliLogin", "submitCliLoginCode", "cancelCliLogin"].includes(action)) return; // Installer owns its canonical state, including a retained cleanup lock.
     const target: { action?: ActionState } | null = action === "installCli" || action === "cliLogin"
       ? CLI_IDS.includes(cli as CliId) ? this.state.tools[cli as CliId] : null
       : action === "ghLogin" ? this.state.github

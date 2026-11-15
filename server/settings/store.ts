@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { keepBadCopy, writeFileSynced, replaceFile } from "../safe-file.ts";
 import { PERMISSION_MODES } from "./constants.ts";
+import { CLI_CATALOG } from "./cli-catalog.ts";
 import type { CliInventory, PermissionMode, PersistedSettings, SettingsState } from "./types.ts";
 
 const EMPTY_SETTINGS: PersistedSettings = { notesVaultPath: null, defaultProjectFolder: "", permissionModes: {} };
@@ -13,6 +14,8 @@ function freshInventory(): CliInventory {
 
 export function freshState(saved: PersistedSettings): SettingsState {
   return {
+    catalogTools: Object.fromEntries(CLI_CATALOG.map(({ id, leader }) => [id, { installed: null, version: null, signedIn: null,
+      registered: false, leaderEligible: false, tested: leader.qualified === true, leaderLabel: leader.qualified === true ? "Tested" as const : "Not tested yet" as const, connection: "unknown" as const }])),
     tools: {
       claude: { installed: null, version: null, signedIn: null },
       codex: { installed: null, version: null, signedIn: null },

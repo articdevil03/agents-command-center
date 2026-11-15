@@ -109,7 +109,7 @@ export const serverOtherMutations = [
   // Item 1, guard 2: buildCommand is the last gate before shell:true and must
   // validate every interpolated value itself, not trust an upstream caller.
   ["guard-buildcommand-validates-model", "server/runner.ts", "  if (!isValidModel(run.cli, run.model)) throw new Error(`buildCommand: refusing invalid model for \"${run.seatKey}\": ${run.model}`);\n", ""],
-  ["guard-buildcommand-validates-effort", "server/runner.ts", "  if (!isValidEffort(run.cli, run.effort)) throw new Error(`buildCommand: refusing invalid effort for \"${run.seatKey}\": ${run.effort}`);\n", ""],
+  ["guard-buildcommand-validates-effort","server/runner.ts","  if (!isValidEffort(run.cli, run.effort, run.model)) throw new Error(`buildCommand: refusing invalid effort for \"${run.seatKey}\": ${run.effort}`);\n",""],
   // Item 1, layer 3: discovery output is untrusted -- a line that doesn't
   // look like a real "provider/model" id must never survive into the
   // suggestion list the seat-kind cascade assigns from unvalidated.
@@ -127,7 +127,7 @@ export const serverOtherMutations = [
   // Item 3, guard 4: the cascade must produce a model that is actually valid
   // for the TARGET kind -- opencode requires a "provider_id/model_id" shape,
   // not just a safe character set.
-  ["guard-opencode-model-requires-slash","server/process-types.ts","customModel: \"^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$\" }","customModel: \"^[A-Za-z0-9._/-]+$\" }"],
+  ["guard-opencode-model-requires-slash","server/process-types.ts","customModel: \"^[A-Za-z0-9._-]+/[A-Za-z0-9._/:-]+$\" }","customModel: \"^[A-Za-z0-9._/:-]+$\" }"],
 
   // Item 4, guard 5: an existing install's roster migrates forward -- a new
   // cast member is added, a relabeled role lands, a retired seat is dropped,
@@ -155,7 +155,7 @@ export const serverOtherMutations = [
     '{ value: "claude-fable-5-1[1m]", displayName: "Fable", supportsEffort: false },\n',
     ''],
   ["guard-codex-luna-present","server/config.ts","const CODEX_BASELINE_MODELS = [\"gpt-6-luna\", \"gpt-6-sol\", \"gpt-6-astra\", \"gpt-6.1-sol\"];","const CODEX_BASELINE_MODELS = [\"gpt-6-sol\", \"gpt-6-astra\", \"gpt-6.1-sol\"];"],
-  ["guard-codex-derive-from-opencode", "server/config.ts", "if (isSafeShape(id) && !BASE.codexModels.includes(id)) BASE.codexModels.push(id);", ""],
+  ["guard-codex-derive-from-opencode","server/config.ts","const id = model.slice(\"opencode/\".length);\n      if (isSafeShape(id) && !BASE.codexModels.includes(id)) BASE.codexModels.push(id);","const id = model.slice(\"opencode/\".length);"],
   // ---- Atlas knows the crew and can put them to work: leader-tools.ts's
   // pure crew snapshot, and index.ts's leaderLaunchSeat wrapper -- the ONE
   // path Atlas's own launch_seat MCP tool is allowed to reach. ----

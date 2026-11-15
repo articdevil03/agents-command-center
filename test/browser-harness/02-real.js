@@ -201,7 +201,7 @@
       const origin = { ...seatOf("coder") };
       await openPicker("coder");
       const groupNames = [...document.querySelectorAll("#pop [data-grp]")].map((node) => node.dataset.grp);
-      check("the picker groups models by installed CLI, the seat's own first", groupNames[0] === origin.cli && groupNames.includes("claude") && groupNames.includes("codex") && groupNames.includes("opencode"), { groupNames, own: origin.cli });
+      check("the picker groups models by installed CLI, the seat's own first", groupNames[0] === origin.cli && groupNames.includes("claude") && groupNames.includes("codex") && groupNames.includes("opencode") && [...document.querySelectorAll('#pop [data-grp="opencode"]')].some((node) => node.textContent.includes("OpenCode / opencode-go")), { groupNames, own: origin.cli });
       const groups = () => [...document.querySelectorAll("#pop [data-grp]")].map((node) => node.dataset.grp);
       // Delivered and read in the same turn: a real broadcast (the server echoes every pref the page saves) can land during any wait and replace this state.
       const deliverTools = (patch) => {

@@ -1,3 +1,4 @@
+import { openCodeEfforts, type OpenCodeModelInfo } from "./settings/opencode/models.ts";
 import { readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { keepBadCopy } from "./safe-file.ts";
@@ -7,6 +8,7 @@ import { dataRoot, configDir, workspacesPath, projectsPath, publishConfigFile, s
 import { acpKindOf, type AcpCli } from "./config-acp.ts";
 import { assignments, freshFixedCrew, preserveFutureCrews, validateFixedCrew, type FixedCrew } from "./fixed-crew/preferences.ts";
 import { assertWorkspaceRecoveryReady, initializeWorkspaceRecovery, unavailableWorkspace, workspaceRecovery } from "./fixed-crew/recovery.ts";
+import { initializeFirstRun } from "./first-run/state.ts";
 
 export { workspacesPath, projectsPath, clientPrefsPath, launchSafetyPath, acpClisPath } from "./config-files.ts";
 export * from "./config-acp.ts";
@@ -57,12 +59,12 @@ const FALLBACK_CLAUDE_EFFORT = ["low", "medium", "high", "xhigh", "max"];
 export const EFFORT_OPTIONS: Record<SeatKind, string[]> = {
   claude: [...FALLBACK_CLAUDE_EFFORT],
   codex: ["low", "medium", "high", "xhigh", "max"],
-  // Only the fake-CLI test runner may widen it, to prove the leader reads the saved effort on every turn.
-  opencode: process.env.CC_TEST_FAKE_CLI === "1" && process.env.CC_TEST_OPENCODE_EFFORTS ? process.env.CC_TEST_OPENCODE_EFFORTS.split(",") : ["max"],
+  opencode: [],
 };
-export const OPENCODE_MODEL_SUGGESTIONS_FALLBACK = ["opencode/claude-sonnet-5", "opencode/gpt-6-astra", "opencode/glm-5.2", "opencode/qwen3.6-plus", "opencode/grok-4.6"];
+export const OPENCODE_MODEL_SUGGESTIONS_FALLBACK: string[] = [];
+export let OPENCODE_MODEL_INFO: OpenCodeModelInfo[] = [];
 export let OPENCODE_MODEL_SUGGESTIONS: string[] = [...OPENCODE_MODEL_SUGGESTIONS_FALLBACK];
-export type DiscoveryInfo = { claudeEffort: { fallback: boolean }; opencodeModels: { fallback: boolean }; claudeModels: { fallback: boolean } };
+export type DiscoveryInfo = { claudeEffort: { fallback: boolean }; opencodeModels: { fallback: boolean; refreshing?: boolean; stale?: boolean; error?: string | null }; claudeModels: { fallback: boolean } };
 export const discoveryInfo: DiscoveryInfo = { claudeEffort: { fallback: true }, opencodeModels: { fallback: true }, claudeModels: { fallback: true } };
 
 const OPENCODE_MODEL_PATTERN = new RegExp(CLI_CAPS.opencode.customModel!);
@@ -71,6 +73,7 @@ const CODEX_MODEL_PATTERN = new RegExp(CLI_CAPS.codex.customModel!);
 // adopted at boot (adoptSavedValues) and stays valid through every later refresh; only user input is checked against
 // the live list.
 const SAVED_MODELS: Record<SeatKind, Set<string>> = { claude: new Set(), codex: new Set(), opencode: new Set() };
+const SAVED_PAIRS = new Set<string>();
 const SAVED_EFFORTS: Record<SeatKind, Set<string>> = { claude: new Set(), codex: new Set(), opencode: new Set() };
 // A write or a user pick needs a safe shape (the same rule a load applies) AND the list/CLI check, so nothing
 // can be saved that the next start would refuse.
@@ -83,11 +86,12 @@ export function isValidModel(kind: SeatKind | AcpKind, model: string): boolean {
     ? model.length <= 100 && CODEX_MODEL_PATTERN.test(model)
     : kind === "opencode" && model.length <= 100 && OPENCODE_MODEL_PATTERN.test(model);
 }
-export function isValidEffort(kind: SeatKind | AcpKind, effort: string): boolean { if (isAcpKind(kind)) return effort === ACP_DEFAULT; return isSafeShape(effort) && (EFFORT_OPTIONS[kind].includes(effort) || SAVED_EFFORTS[kind]?.has(effort) === true); }
+export function modelEfforts(kind: SeatKind | AcpKind, model: string): string[] { return kind === "opencode" ? openCodeEfforts(OPENCODE_MODEL_INFO, model) : isAcpKind(kind) ? [ACP_DEFAULT] : EFFORT_OPTIONS[kind]; }
+export function isValidEffort(kind: SeatKind | AcpKind, effort: string, model = ""): boolean { if (kind === "opencode") return modelEfforts(kind, model).includes(effort) || (isSafeShape(effort) && SAVED_PAIRS.has(JSON.stringify([model, effort]))); if (isAcpKind(kind)) return effort === ACP_DEFAULT; return isSafeShape(effort) && (EFFORT_OPTIONS[kind].includes(effort) || SAVED_EFFORTS[kind]?.has(effort) === true); }
 // The one load-time rule for a saved model or effort: it can never be dangerous in argv or a path. No list is
 // consulted. Letter or digit first (never a flag), a conservative charset, a length cap, and no ".." segment.
 // What a seat gets when its CLI changes and its old effort does not exist there.
-export function defaultEffort(kind: SeatKind | AcpKind): string { if (isAcpKind(kind)) return ACP_DEFAULT; return EFFORT_OPTIONS[kind].includes("medium") ? "medium" : EFFORT_OPTIONS[kind][0]; }
+export function defaultEffort(kind: SeatKind | AcpKind, _model = ""): string { if (kind === "opencode") return ""; if (isAcpKind(kind)) return ACP_DEFAULT; return EFFORT_OPTIONS[kind].includes("medium") ? "medium" : EFFORT_OPTIONS[kind][0]; }
 
 
 export type CliCap = { id: string; label: string; advisor: boolean; readOnlyEnforced: boolean; customModel: string | null; installed: boolean | null; models: string[] | null; efforts: string[] };
@@ -157,7 +161,7 @@ function publishDefaultWorkspaces(replace: boolean): void {
 }
 
 function seedConfig(): void {
-  initializeWorkspaceRecovery(defaultWorkspaces);
+  initializeFirstRun(() => { initializeWorkspaceRecovery(defaultWorkspaces); });
   if (workspaceRecovery().blocked || workspaceRecovery().recovered) return;
   sweepSeedTemps(configDir);
   if (existsSync(workspacesPath)) {
@@ -205,19 +209,21 @@ const BASE: { claudeModels: ClaudeModelInfo[]; codexModels: string[]; opencodeMo
   efforts: { claude: [...EFFORT_OPTIONS.claude], codex: [...EFFORT_OPTIONS.codex], opencode: [...EFFORT_OPTIONS.opencode] },
 };
 function rebuildCatalogues(): void {
-  for (const kind of Object.keys(SAVED_EFFORTS) as SeatKind[]) EFFORT_OPTIONS[kind] = [...BASE.efforts[kind], ...[...SAVED_EFFORTS[kind]].filter((effort, at, all) => !BASE.efforts[kind].includes(effort) && all.indexOf(effort) === at)];
+  for (const kind of Object.keys(SAVED_EFFORTS) as SeatKind[]) EFFORT_OPTIONS[kind] = kind === "opencode" ? [] : [...BASE.efforts[kind], ...[...SAVED_EFFORTS[kind]].filter((effort, at, all) => !BASE.efforts[kind].includes(effort) && all.indexOf(effort) === at)];
   MODEL_OPTIONS.codex = [...BASE.codexModels, ...[...SAVED_MODELS.codex].filter((model) => !BASE.codexModels.includes(model))];
   OPENCODE_MODEL_SUGGESTIONS = [...BASE.opencodeModels, ...[...SAVED_MODELS.opencode].filter((model) => !BASE.opencodeModels.includes(model))];
   CLAUDE_MODEL_INFO = mergeClaudeModelInfo(BASE.claudeModels, [...SAVED_MODELS.claude]);
   MODEL_OPTIONS.claude = CLAUDE_MODEL_INFO.map((item) => item.value);
 }
 export function adoptSavedValues(workspaces: Workspaces): void {
+  SAVED_PAIRS.clear();
   for (const kind of Object.keys(SAVED_MODELS) as SeatKind[]) { SAVED_MODELS[kind].clear(); SAVED_EFFORTS[kind].clear(); }
   const fixed = workspaces.projects.flatMap((project) => project.tabs).flatMap((tab) => {
     if (!tab.fixedCrew || tab.fixedCrew.version !== 1) return [];
     return assignments(tab.fixedCrew);
   });
   for (const seat of fixed) {
+    if (seat.cli === "opencode") SAVED_PAIRS.add(JSON.stringify([seat.model, seat.effort]));
     if (!isAcpKind(seat.cli)) { SAVED_MODELS[seat.cli].add(seat.model); SAVED_EFFORTS[seat.cli].add(seat.effort); }
     if (seat.advisor) SAVED_MODELS.claude.add(seat.advisor);
   }
@@ -233,10 +239,9 @@ function applyDiscovery(claudeEffort: Discovered, opencodeModels: Discovered, cl
   // A discovered value that is not safe-shaped is never offered (a write of it would be refused).
   BASE.efforts.claude = claudeEffort.values.filter(isSafeShape);
   discoveryInfo.claudeEffort.fallback = claudeEffort.fallback;
-  BASE.opencodeModels = opencodeModels.values.filter(isSafeShape);
-  discoveryInfo.opencodeModels.fallback = opencodeModels.fallback;
-  BASE.codexModels = [...CODEX_BASELINE_MODELS];
+  if (!opencodeModels.fallback) { BASE.opencodeModels = opencodeModels.values.filter(isSafeShape); discoveryInfo.opencodeModels.fallback = false; }
   if (!opencodeModels.fallback) {
+    BASE.codexModels = [...CODEX_BASELINE_MODELS];
     for (const model of BASE.opencodeModels.filter((item) => item.startsWith("opencode/gpt-"))) {
       const id = model.slice("opencode/".length);
       if (isSafeShape(id) && !BASE.codexModels.includes(id)) BASE.codexModels.push(id);
@@ -259,6 +264,19 @@ export async function refreshDiscovery(
     discoverModelsForClaude(FALLBACK_CLAUDE_MODELS, claudeCliPath),
   ]);
   applyDiscovery(claudeEffort, opencodeModels, claudeModels);
+}
+
+export function applyOpenCodeModels(models: OpenCodeModelInfo[] | null, state: Partial<DiscoveryInfo["opencodeModels"]>): void {
+  if (models) {
+    OPENCODE_MODEL_INFO = models; BASE.opencodeModels = models.map((item) => item.value);
+    BASE.codexModels = [...CODEX_BASELINE_MODELS];
+    for (const value of BASE.opencodeModels.filter((item) => item.startsWith("opencode/gpt-"))) {
+      const id = value.slice("opencode/".length);
+      if (isSafeShape(id) && !BASE.codexModels.includes(id)) BASE.codexModels.push(id);
+    }
+    discoveryInfo.opencodeModels.fallback = false; rebuildCatalogues();
+  }
+  Object.assign(discoveryInfo.opencodeModels, state);
 }
 
 export const IMAGE_EXT_TO_MIME: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" };

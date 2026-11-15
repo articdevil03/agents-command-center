@@ -31,16 +31,25 @@ Command Center is local mission control for the AI coding tools you already use.
 
 ## Quick start
 
-You need Windows, [Node 24](https://nodejs.org) or newer, and at least one of Claude Code, Codex or OpenCode installed and signed in.
+### Install (Windows)
+
+Download `Command Center Setup <version>.exe` when the owner publishes a release. It is built with `npm run dist:installer`. The installer is unsigned, so Windows SmartScreen may show "Windows protected your PC". Choose **More info**, then **Run anyway** if you trust the download. SmartScreen appearance on another PC: **NOT VERIFIED**.
+
+No Node, npm, git or terminal is needed to install Command Center. It installs for your Windows user, without admin rights, under `%LOCALAPPDATA%\Programs\command-center`. Uninstalling never deletes your data in `%APPDATA%\command-center`.
+
+To work with agents, at least one of Claude Code, Codex or OpenCode must be installed and signed in. On first open, setup shows **Welcome**, **Folder**, **AI tool**, then **Ready**. The wizard checks your AI tools and explains what to install or sign in to.
+
+### Run from source (developers)
+
+You need Windows and [Node 24](https://nodejs.org) or newer. Clone this repository, then in its folder:
 
 ```sh
-# clone this repository, then in its folder:
 npm install
 npm run app      # desktop window
 # or: npm start  # then open the printed http://127.0.0.1:4317/#key=... address
 ```
 
-Build a portable exe with `npm run dist` (it still needs Node 24 on the machine).
+`npm run dist` still builds the portable exe. Both packaged forms use Electron's bundled Node to run the server.
 
 ## How it works
 
@@ -102,9 +111,17 @@ npm run dist:proof -- "<output>/win-unpacked/resources/app" "<output>/Command Ce
 
 The checks reject an app/exe pair from different builds and the published `dist/` pair. `npm run dist` removes its staging artifacts after verification. The smoke verifies startup, not whether the agent CLIs are installed. Builds are locked, and publication happens only after the staged build passes. A failed build quarantines its own exe and puts the last verified exe back over a current one that differs from it (if there is no last verified exe, the current one is left untouched); the next build removes that quarantined exe. A build that runs over 20 minutes or a smoke over 5 is stopped with all its child processes and counts as a failure.
 
-The exe is not self-contained. It starts `node server/index.ts` as a child process, so Node 24 must be installed on the machine running it. `asar` is disabled because Node executes the packaged server from regular files under `resources/app/`.
+The packaged app runs its server on Electron's own bundled Node through `electron/node-runtime.js`, so system Node is not required. `asar` is disabled because the bundled runtime executes the server from regular files under `resources/app/`.
 
 The portable app unpacks to a fresh temp folder each launch, so packaged data lives under `%APPDATA%\command-center`. Electron passes that directory as `CC_DATA_DIR` only for packaged runs. Source runs keep config, logs, chats, and scratch files in the repository. On first packaged launch the app starts on one empty example project (`workspaces.json`, with a new empty `example-project` folder in the data root): the bundled `projects.json` is never copied to a user. No legacy `seats.json` is copied: nothing reads it. Older files already in the data root are never used to build tabs: older-format workspace data is copied to a backup first and then replaced by the fresh example workspace (see below).
+
+### Installer
+
+`npm run dist:installer` builds in its own stage, runs the packaged proof with system Node removed from PATH, checks `resources/app`, and scans every packaged file for leaks when `.leak-patterns.local` exists. Without that private word list, contributor builds print a skip line. A scan failure stops publication. A successful build publishes `dist/installers/Command Center Setup <version>.exe` and its `.sha256` sidecar, then removes its stage. The portable `npm run dist` command is unchanged.
+
+`node scripts/pack29-installer-proof.mjs` checks real install, upgrade and uninstall using a scratch-named variant. It also scans the installed payload when the private word list exists. Allow about two minutes; timing on this machine for this block is **NOT VERIFIED**.
+
+`config/first-run.json` under the data root records whether setup is `pending` or `complete`. A pending marker shows the wizard unless workspace recovery is blocked. Completing or skipping setup marks it complete. Deleting the marker is not a reset procedure.
 
 ## Workspaces and old data
 

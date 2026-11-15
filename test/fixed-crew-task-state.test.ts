@@ -4,6 +4,7 @@ import { fixture } from "./fixed-crew-task-plan.test.ts";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { tempRoot, importWithTempDataRoot } from "./temp-root.ts";
+import { CLI_CATALOG } from "../server/settings/cli-catalog.ts";
 const test = (name: string, check: (t: TestContext) => void) => nodeTest(name, (t) => assert.doesNotThrow(() => check(t), name));
 
 test("FCT approval check review and stage setters form a complete lifecycle", (t) => {
@@ -59,7 +60,10 @@ nodeTest("FCT browser dispatch limits authority and broadcasts only compact task
     state.setLaunchSafety({ blocked: [], uncertain: [], released: [], notices: [], live: [] });
     state.setChatStore({ counters: () => ({ revision: 0, savedRevision: 0 }) });
     state.setRequestsStore({ list: () => [], pendingCount: () => 0 });
-    state.setSettingsService({ state: { tools: { claude: {}, codex: {}, opencode: {} }, permissionActions: {}, uploads: {} }, snapshot: () => ({}), permissionMode: () => "ask" });
+    const catalogTools = Object.fromEntries(CLI_CATALOG.map(({ id }) => [id, {
+      installed: null, version: null, signedIn: null, registered: false, leaderEligible: false, connection: "unknown",
+    }]));
+    state.setSettingsService({ state: { tools: { claude: {}, codex: {}, opencode: {} }, catalogTools, permissionActions: {}, uploads: {} }, installer: { busy: false }, login: { busy: false }, models: { busy: false }, snapshot: () => ({}), permissionMode: () => "ask" });
     const replies: any[] = [], socket = { send: (raw: string) => replies.push(JSON.parse(raw)) };
     const dispatch = (type: string, extra: Record<string, unknown> = {}) => {
       messages.handleMessage(socket, JSON.stringify({ type, requestId: `browser${replies.length}`, tabId: "tab1", ...extra })); return replies.at(-1);
@@ -68,7 +72,7 @@ nodeTest("FCT browser dispatch limits authority and broadcasts only compact task
     for (const key of ["actor", "role", "sessionId", "triage", "findings", "leader", "planner", "reviewer"]) assert.equal(dispatch("approveFixedPlan", { taskId: f.get().id, planVersion: 1, recordRevision: f.get().recordRevision, [key]: "forged" }).type, "error", key);
     assert.equal(dispatch("approveFixedPlan").type, "error");
     const expected = { taskId: f.get().id, planVersion: 1, recordRevision: f.get().recordRevision };
-    const approval = dispatch("approveFixedPlan", expected); assert.equal(approval.type, "fixedTaskResult"); assert.equal(f.get().executions.length, 0);
+    const approval = dispatch("approveFixedPlan", expected); assert.equal(approval.type, "fixedTaskResult", JSON.stringify(approval)); assert.equal(f.get().executions.length, 0);
     assert.equal(dispatch("approveFixedPlan", expected).type, "error", "stale revision refuses");
     const request = { type: "requestFixedTaskAction", requestId: "same-request", tabId: "tab1", taskId: f.get().id, planVersion: 1, recordRevision: f.get().recordRevision, action: "build" };
     messages.handleMessage(socket, JSON.stringify(request)); const result = replies.at(-1); assert.equal(result.type, "fixedTaskResult"); assert.equal(result.executionAvailable, true);

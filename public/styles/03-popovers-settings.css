@@ -73,11 +73,15 @@
 button.rowb:hover:not(:disabled){background:var(--sf2)}
 .sc .acts{display:flex;gap:8px;flex-wrap:wrap}
 .sc .acts .btn{flex:1}
-.effort{display:flex;gap:2px;padding:3px;margin:4px 6px 6px;background:var(--tb);border-radius:10px}
-.effort button{flex:1;padding:6px 0;border-radius:7px;font-size:12.5px;color:var(--text-2);min-width:0}
+.effort{display:flex;flex-wrap:wrap;gap:2px;padding:3px;margin:4px 6px 6px;background:var(--tb);border-radius:10px}
+.effort button{flex:1 1 auto;padding:4px 9px;border-radius:7px;font-size:12.5px;line-height:1.3;white-space:nowrap;color:var(--text-2);min-width:0}
 .effort button[aria-checked="true"]{background:var(--sf);color:var(--text);box-shadow:var(--card)}
 .msearch{padding:6px 6px 2px}
 .mscroll{max-height:280px;overflow:auto}
+/* The model menu is one column: only the model list scrolls, never the menu around it (a short window shrinks the list). */
+.pop:has(>.msearch){display:flex;flex-direction:column;overflow:hidden}
+.pop:has(>.msearch)>*{flex:none}
+.pop:has(>.msearch)>.mscroll{flex:1 1 auto;min-height:84px}
 .nores{padding:10px;font-size:12.5px;color:var(--text-3)}
 .ncard{display:grid;gap:6px;padding:12px;border-radius:12px;margin:4px;background:var(--sf2);min-width:0}
 /* where a card belongs: one line, cut with an ellipsis and a full-text title, never past the card */

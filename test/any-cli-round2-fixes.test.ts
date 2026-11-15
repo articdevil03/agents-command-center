@@ -71,8 +71,8 @@ test("OpenCode leader: Stop while a reply is still being acknowledged still reje
 });
 
 test("OpenCode leader: the effort sent with each prompt follows the saved fixed assignment", { timeout: 60000 }, async () => {
-  // OpenCode offers one effort today: the test runner widens the list to two so a leader that froze its effort at start is caught.
-  await withServer({ leader: OPENCODE_LEADER, installed: ["opencode"], env: { CC_TEST_OPENCODE_EFFORTS: "max,high" } }, async (h) => {
+  // The fake verbose catalogue reports max and high for this model.
+  await withServer({ leader: OPENCODE_LEADER, installed: ["opencode"] }, async (h) => {
     await h.refresh();
     let start = h.chat("first"); await h.wait(() => h.turnEnded(start).length === 1, "first turn"); await h.idle();
     assert.equal((await h.assign(LEADER.slotId, { ...OPENCODE_LEADER, effort: "high" })).type, "actionResult");

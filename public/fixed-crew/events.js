@@ -13,11 +13,11 @@
     const view = FC.createView(page, store);
 
     // The effort a new pick starts with: the current one when the CLI stays the same, else medium, else the CLI's first.
-    function chooseEffort(cli, current) {
+    function chooseEffort(cli, model, current) {
       if (page.isAcpCli(cli)) return "default";
-      const efforts = page.effortOptions(cli);
+      const efforts = page.effortOptions(cli, model);
       if (current?.cli === cli && efforts.includes(current.effort)) return current.effort;
-      return efforts.includes("medium") ? "medium" : efforts[0];
+      return cli === "opencode" ? "" : efforts.includes("medium") ? "medium" : efforts[0];
     }
     // A pick from the shared model menu ({ model, cli? } or { effort }) made into a whole assignment. An advisor stays only on its own CLI.
     function assignmentFrom(fields, current) {
@@ -28,10 +28,10 @@
         else next.advisor = fields.advisor;
         return next;
       }
-      if (fields.effort) return current ? { ...current, effort: fields.effort } : null;
+      if (Object.hasOwn(fields, "effort")) return current ? { ...current, effort: fields.effort } : null;
       const cli = fields.cli ?? current?.cli;
       if (!cli || typeof fields.model !== "string") return null;
-      const next = { cli, model: fields.model, effort: chooseEffort(cli, current) };
+      const next = { cli, model: fields.model, effort: chooseEffort(cli, fields.model, current) };
       if (current?.advisor && current.cli === cli) next.advisor = current.advisor;
       return next;
     }

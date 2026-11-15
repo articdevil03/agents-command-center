@@ -9,7 +9,7 @@ const { modules: { bulk, prefs, roster } } = await importWithTempDataRoot(async 
 const catalogue = { clis: [
   { id: "codex", installed: true, models: ["gpt-6.1-sol"], efforts: ["low", "medium", "high"], advisor: false },
   { id: "claude", installed: true, models: ["claude-sonnet-5-5[1m]"], efforts: ["low", "medium", "high"], advisor: true },
-  { id: "opencode", installed: true, efforts: ["low", "medium"], advisor: false },
+  { id: "opencode", installed: true, efforts: [], advisor: false },
   { id: "acp:local", installed: true, models: ["default"], efforts: ["default"], advisor: false },
 ], claudeModels: [{ value: "claude-fable-5-1", displayName: "Fable" }] };
 const model = { cli: "codex", model: "gpt-6.1-sol", effort: "medium" } as const;
@@ -80,4 +80,16 @@ test("FCB effort and advisor conversion uses each position's supported values", 
   const digest = bulk.assignmentsDigest(crew);
   crew.roleExtras.coder = "different extras"; assert.equal(bulk.assignmentsDigest(crew), digest);
   crew.preferences.coder.source = "auto"; assert.notEqual(bulk.assignmentsDigest(crew), digest);
+});
+
+test("FCB OpenCode efforts belong to the destination model, with a nonempty supporting control", () => {
+  const crew = prefs.setCrewAssignment(prefs.freshFixedCrew(), "coder", { cli: "opencode", model: "provider/old", effort: "thinking" });
+  const opencodeModelInfo = [
+    { value: "provider/empty", providerID: "provider", modelID: "empty", displayName: "Empty", variants: [] },
+    { value: "provider/control", providerID: "provider", modelID: "control", displayName: "Control", variants: ["thinking"] },
+  ];
+  for (const [model, effort] of [["provider/empty", ""], ["provider/control", "thinking"]]) {
+    const result = apply(crew, { cli: "opencode", model, catalogue: { ...catalogue, opencodeModelInfo } });
+    assert.deepEqual(result.crew.preferences.coder.assignment, { cli: "opencode", model, effort });
+  }
 });

@@ -1,9 +1,10 @@
-import { app } from "electron";
+import { app, shell } from "electron";
+import { validateLoginUrl } from "../server/settings/cli-login-policy.js";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { serverNodeRuntime } from "./node-runtime.js";
 import { root, smokeReadyFile } from "./config.js";
 
 // Must stay above the server's start-up sweep cap (SWEEP_CAP_MS, 41 s) plus start-up work: the server waits for that sweep before it listens.
@@ -33,6 +34,17 @@ function getFreePort() {
       probe.close(() => resolvePort(port));
     });
   });
+}
+
+export async function handleLoginOpen(message, reply, open = (url) => shell.openExternal(url)) {
+  if (!message || message.type !== "openCliLogin") return;
+  if (typeof message.id !== "string" || !/^[a-f0-9]{48}$/.test(message.id)) return;
+  const url = validateLoginUrl(message.cli, message.url);
+  let ok = false;
+  if (url && Object.keys(message).length === 4) {
+    try { await open(url); ok = true; } catch { /* only a boolean crosses back */ }
+  }
+  reply({ type: "cliLoginOpened", id: message.id, ok });
 }
 
 export let serverProcess = null;
@@ -65,7 +77,9 @@ export async function startServer(onFailure = () => {}) {
     if (key.startsWith("CC_SMOKE_") || key.startsWith("CC_TEST_FAKE_CLI")) delete serverEnv[key];
   }
   if (!passDiscoverySkip) delete serverEnv.CC_SKIP_DISCOVERY;
-  serverProcess = spawn("node", buildServerCommandArgs(serverEntry, passDiscoverySkip), {
+  const runtime = serverNodeRuntime(serverEntry, passDiscoverySkip);
+  Object.assign(serverEnv, runtime.env);
+  serverProcess = spawn(runtime.command, runtime.args, {
     cwd: root,
     env: { ...serverEnv, CC_PORT: String(port), CC_APP_KEY: appKey, ...dataDirEnv },
     windowsHide: true,
@@ -73,6 +87,12 @@ export async function startServer(onFailure = () => {}) {
     // disconnect handler instead of terminating it with Electron's console.
     detached: true,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
+  });
+  const ownedServer = serverProcess;
+  ownedServer.on("message", (message) => {
+    void handleLoginOpen(message, (result) => {
+      if (ownedServer.connected) ownedServer.send(result, () => {});
+    });
   });
   // Before the server reports ready, a failure comes back through the returned reason (one error page, with its output); only a
   // server that was running and then stopped is reported through onFailure.
@@ -106,9 +126,9 @@ export async function startServer(onFailure = () => {}) {
     };
     const onStderr = (chunk) => { stderr += chunk.toString("utf8"); };
     const onExit = (code) => finish({ ok: false, reason: `server exited with code ${code} before it was ready.\n\n${buffered}\n${stderr}` });
-    // A missing Node never starts, so it emits "error" and no "exit": without this the clear reason waits out the 15 s timer and is
+    // A missing bundled runtime never starts, so it emits "error" and no "exit": without this the clear reason waits out the 15 s timer and is
     // then replaced by a vaguer one.
-    const onError = (error) => finish({ ok: false, reason: `the server could not be started: ${error.message}\n\nCommand Center needs Node.js 24 or newer installed and on the PATH.\n\n${buffered}\n${stderr}` });
+    const onError = (error) => finish({ ok: false, reason: `the server could not be started: ${error.message}\n\nCommand Center's bundled runtime could not start.\n\n${buffered}\n${stderr}` });
     const timer = setTimeout(
       () => finish({ ok: false, reason: `server did not report ready within ${READY_TIMEOUT_MS}ms.\n\n${buffered}\n${stderr}` }),
       READY_TIMEOUT_MS
@@ -141,14 +161,4 @@ export function stopServer() {
     if (proc.connected) proc.send("shutdown", () => {});
   });
   return serverStopPromise;
-}
-
-export function buildServerCommandArgs(serverEntry, passDiscoverySkip) {
-  if (!passDiscoverySkip) return [serverEntry];
-  // Direct `node <entry>` cannot clear this startup-only flag after the entry
-  // imports but before the server launches agents. The bootstrap keeps it in
-  // the server during discovery and removes it before agent children spawn.
-  const entryUrl = pathToFileURL(serverEntry).href;
-  const bootstrap = "im" + "port(" + JSON.stringify(entryUrl) + ").then(() => { delete process.env.CC_SKIP_DISCOVERY; });";
-  return ["--input-type=module", "--eval", bootstrap];
 }

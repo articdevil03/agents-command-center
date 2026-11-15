@@ -7,6 +7,7 @@ import * as stall from "../server/stall.ts";
 import * as agentUsage from "../server/agent-usage.ts";
 import { removeWithRetry } from "../scripts/mutation-proof.mjs";
 import { loadServer, loadFixed, waitFor, setAssignment, startHelper, endRun, loadRunnerHarness, isolatedRunnerProc, isolatedRunnerCapture, isolatedRun, connect, lastState, tick } from "./round2-helpers.ts";
+import { config } from "./round2-setup.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
 
 test("cleanScratch removes expired uploads while preserving fresh files", async () => {
@@ -65,6 +66,14 @@ test("start-up cleans the scratch folder itself: an old generated upload is dele
   assert.equal(existsSync(path.join(dir, names.oldForeign)), true, "an old file that is not a generated upload name stays");
 });
 
+function reportOpenCodeModel(t: any) {
+  const previous = config.OPENCODE_MODEL_INFO;
+  config.applyOpenCodeModels([{ value: "vendor/model-a", providerID: "vendor", modelID: "model-a", displayName: "Fixture model", variants: ["max"] }], {});
+  t.after(() => config.applyOpenCodeModels(previous, {}));
+  assert.equal(config.isValidEffort("opencode", "max", "vendor/model-a"), true);
+  assert.equal(config.isValidEffort("opencode", "high", "vendor/model-a"), false);
+}
+
 const refusal = (promise: Promise<unknown>) => promise.then(() => "launched", (error: Error) => error.message);
 
 test("MONEY GUARD 1: a rejected runner start rolls back its reservation, budget slot and notice, and the next start is clean", async () => {
@@ -97,9 +106,11 @@ test("MONEY GUARD 3 (call site): a stall after actual output is escalated; the r
 for (const [label, assignment, expectedCli] of [
   ["Claude", { cli: "claude", model: "claude-sonnet-5-5[1m]", effort: "medium" }, "claude"],
   ["OpenCode", { cli: "opencode", model: "vendor/model-a", effort: "max" }, "opencode"],
-] as const) test(`MONEY GUARD 4: a ${label} position assigned in Settings is escalated and keeps running: the timer never stops or restarts it`, async () => {
+] as const) test(`MONEY GUARD 4: a ${label} position assigned in Settings is escalated and keeps running: the timer never stops or restarts it`, async (t) => {
+  if (expectedCli === "opencode") reportOpenCodeModel(t);
   const server = await loadFixed({ skipHealth: true }), ws = connect(server);
   server.settingsService.state.tools.opencode.installed = true;
+  Object.assign(server.settingsService.state.catalogTools.opencode, { installed: true, supportedVersion: true });
   const saved = await setAssignment(ws, "alpha-dev", "helper", assignment);
   assert.equal(saved.type, "actionResult", JSON.stringify(saved));
   await startHelper(server, "alpha-dev", "helper", "assigned task"); const active = server.launched[0];
@@ -222,7 +233,8 @@ test("agent-usage: a blank line after the Codex footer does not erase its held m
   assert.equal(capture.events.find((event) => event.type === "usage").usage.contextTokens, 19878);
 });
 
-test("agent-usage: OpenCode never fabricates a usage entry when it reports no measurement", () => {
+test("agent-usage: OpenCode never fabricates a usage entry when it reports no measurement", (t) => {
+  reportOpenCodeModel(t);
   const harness = loadRunnerHarness(), proc = isolatedRunnerProc(), capture = isolatedRunnerCapture();
   harness.runSeat(isolatedRun({ runId: "opencode-no-usage", cli: "opencode", model: "vendor/model-a", effort: "max" }), "x", capture.callbacks, (() => proc) as any);
   proc.stdout.emit("data", Buffer.from("ordinary text\n")); proc.emit("close", 0);

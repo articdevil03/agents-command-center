@@ -11,6 +11,8 @@ import { runSeat, isRunning, runIdsForSeat } from "../server/runner.ts";
 import { validateAssignment } from "../server/fixed-crew/assignment.ts";
 import { createTaskStore } from "../server/fixed-crew/task-store.ts";
 import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
+import { SettingsService } from "../server/settings.ts";
+import { LOGIN_MESSAGES } from "../server/settings/cli-login.ts";
 
 test("FCX presence routes runtime without saving seats or imposing the legacy sixteen seat cap", () => {
   const tab = fixedTab("C:/test");
@@ -40,14 +42,38 @@ test("FCX presence routes runtime without saving seats or imposing the legacy si
 
 test("FCX every known position resolves its own assignment and a cleared position has no fallback", () => {
   const tab = fixedTab(scratchDir());
-  modules.state.setWorkspaces({ projects: [{ id: "p", name: "P", folder: tab.folder, tabs: [tab] }] });
-  for (const { slot, role } of FIXED_CREW) {
-    assert.deepEqual(modules.fixed.requireFixedAssignment(tab.id, slot), assignment, slot);
-    tab.fixedCrew!.preferences[slot].assignment = null;
-    assert.throws(() => modules.fixed.requireFixedAssignment(tab.id, slot), { message: `${role} has no model. Choose one in Settings before continuing.` });
-    tab.fixedCrew!.preferences[slot].assignment = assignment;
-  }
-  assert.deepEqual(tab.crew, []);
+  const previous = modules.state.settingsService;
+  const settings = new SettingsService({ dataRoot: scratchDir(), runCli: async () => ({ code: 0, stdout: "", stderr: "" }) });
+  Object.assign(settings.state.catalogTools.opencode, { installed: true, version: "1.0.0", supportedVersion: true });
+  modules.state.setSettingsService(settings);
+  try {
+    modules.state.setWorkspaces({ projects: [{ id: "p", name: "P", folder: tab.folder, tabs: [tab] }] });
+    for (const { slot, role } of FIXED_CREW) {
+      assert.deepEqual(modules.fixed.requireFixedAssignment(tab.id, slot), assignment, slot);
+      tab.fixedCrew!.preferences[slot].assignment = null;
+      assert.throws(() => modules.fixed.requireFixedAssignment(tab.id, slot), { message: `${role} has no model. Choose one in Settings before continuing.` });
+      tab.fixedCrew!.preferences[slot].assignment = assignment;
+    }
+    assert.deepEqual(tab.crew, []);
+  } finally { modules.state.setSettingsService(previous); }
+});
+
+test("FCX saved OpenCode assignment refuses version 2 and survives until version 1 is available", () => {
+  const { state, fixed } = modules, previous = { settings: state.settingsService, workspaces: state.workspaces };
+  const opencode = { cli: "opencode" as const, model: "vendor/custom", effort: "default" };
+  const tab = fixedTab(scratchDir(), { coder: opencode });
+  const settings = new SettingsService({ dataRoot: scratchDir(), runCli: async () => ({ code: 0, stdout: "", stderr: "" }) });
+  const facts = settings.state.catalogTools.opencode;
+  try {
+    state.setSettingsService(settings);
+    state.setWorkspaces({ projects: [{ id: "p", name: "P", folder: tab.folder, tabs: [tab] }] });
+    Object.assign(facts, { installed: true, version: "2.0.0", supportedVersion: false });
+    const saved = structuredClone(tab.fixedCrew);
+    assert.throws(() => fixed.requireFixedAssignment(tab.id, "coder"), { message: LOGIN_MESSAGES.unsupportedVersion });
+    assert.deepEqual(tab.fixedCrew, saved, "refusal preserves the saved assignment");
+    Object.assign(facts, { version: "1.0.0", supportedVersion: true });
+    assert.deepEqual(fixed.requireFixedAssignment(tab.id, "coder"), opencode);
+  } finally { state.setSettingsService(previous.settings); state.setWorkspaces(previous.workspaces); }
 });
 
 test("FCX fixed manual routes refuse an unknown position and request the leader without a worker spawn", { timeout: 60_000 }, async () => {

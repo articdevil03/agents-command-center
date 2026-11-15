@@ -18,6 +18,7 @@ config/launch-safety.json
 /example-project/
 config/client-prefs.json
 config/workspaces.json
+config/first-run.json
 # Folder paths and session ids of the owner's own sessions (folder warning), never committed or exported
 config/own-sessions.json
 config/own-sessions.json.tmp

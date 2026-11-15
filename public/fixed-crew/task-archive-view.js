@@ -160,7 +160,7 @@
     function runsPart(executions) {
       if (!executions.length) return empty("No runs were returned.");
       return executions.map((run) => {
-        const model = run.assignment ? `${page.cliLabel(run.assignment.cli)} · ${run.assignment.model} · ${run.assignment.effort}` : "Model not recorded";
+        const model = run.assignment ? `${page.cliLabel(run.assignment.cli)} · ${run.assignment.model} · ${run.assignment.effort || (run.assignment.cli === "opencode" ? "OpenCode default" : "")}` : "Model not recorded";
         const el = item(`${roleOf(run.role)} · ${kind(run.kind)}`, { text: JOURNAL_RUN[run.status] ?? String(run.status), fix: run.status === "failed" },
           node("small", "fct-why", run.taskId === null ? `${model} · before this task was created` : model),
           run.selectionReason ? node("p", "fct-ftext", run.selectionReason) : null, run.logPath ? chips([run.logPath]) : null);

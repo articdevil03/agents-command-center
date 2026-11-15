@@ -131,7 +131,10 @@ test("FCS manual assignments reject missing CLIs, unknown models, unknown effort
   const assigned = disk();
   assert.match((await ctx.dispatch("setCrewAssignment", { slot: "coder", assignment: { ...model, cli: "claude" } })).message, /Unknown crew model/);
   state.settingsService.state.tools.opencode.installed = true;
+  Object.assign(state.settingsService.state.catalogTools.opencode, { installed: true, version: "1.0.0", supportedVersion: true });
   assert.match((await ctx.dispatch("setCrewAssignment", { slot: "coder", assignment: { ...model, cli: "opencode", model: "vendor/custom" } })).message, /Unknown crew effort/);
+  Object.assign(state.settingsService.state.catalogTools.opencode, { version: "2.0.0", supportedVersion: false });
+  assert.match((await ctx.dispatch("setCrewAssignment", { slot: "coder", assignment: { ...model, cli: "opencode", model: "vendor/custom" } })).message, /unavailable/);
   assert.equal(disk(), assigned, "a saved value from a different CLI never bypasses the new CLI's model or effort list");
 });
 
@@ -182,7 +185,11 @@ test("FCS real dispatch rejects legacy editor and step routes; manual work requi
   assert.deepEqual(fixed.crew, []); assert.deepEqual(fixed.processState.seats, []);
   assert.equal(Object.keys(fixed.fixedCrew.busy).length, 18);
   assert.equal(fixed.fixedCrew.notices.reviewer1.status, "unassigned");
-  assert.doesNotMatch(JSON.stringify(payload), /Nobody reviews their own work|Default job guidance|guidance|launch authority/);
+  // Vendor onboarding guidance is public catalog metadata; crew role prompts stay private.
+  const { cliCatalog, ...withoutCatalog } = payload;
+  assert.ok(cliCatalog.length > 0);
+  assert.doesNotMatch(JSON.stringify(withoutCatalog), /Nobody reviews their own work|Default job guidance|guidance|launch authority/);
+  assert.doesNotMatch(JSON.stringify(cliCatalog), /Nobody reviews their own work|Default job guidance|launch authority/);
   const start = ctx.replies.length;
   messages.handleMessage(ctx.socket, JSON.stringify({ type: "getCrewRolePrompt", requestId: "prompt", slot: "coder" }));
   assert.match(ctx.replies[start].core, /Nobody reviews their own work/);

@@ -106,7 +106,7 @@ test("real repo: an independent walk of server/ and public/ finds every file's t
   const entries = new Set<string>();
   for (const file of physical) {
     const parts = file.split("/");
-    const entry = parts.length === 2 || (parts[1] === "fixed-crew" && parts.length === 3) ? file : parts[1] === "app" ? "public/app.js" : parts[1] === "main" ? "server/index.ts" : `server/${parts[1]}.ts`;
+    const entry = parts.length === 2 || (["fixed-crew", "first-run"].includes(parts[1]) && parts.length === 3) ? file : parts[1] === "app" ? "public/app.js" : parts[1] === "main" ? "server/index.ts" : `server/${parts[1]}.ts`;
     entries.add(entry);
     let text = repoFile(file);
     if (entry === "public/app.js" && parts.length > 2) text = text.slice(text.indexOf("\n", text.indexOf('"use strict";')) + 1);

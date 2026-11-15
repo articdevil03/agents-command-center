@@ -1,4 +1,6 @@
+import { assertCliAvailable } from "../settings/cli-availability.ts";
 import { writeAcpClis, acpKindOf } from "../config.ts";
+import { assertCatalogLeaderEligible } from "../settings/catalog-acp.ts";
 import { KILL_TIMEOUT_MS, KILL_CONFIRM_MS, SWEEP_CAP_MS } from "../leader-common/types.ts";
 import { createLeader } from "../leader.ts";
 import { leaderKindOf, type LeaderCallbacks, type LeaderHandle } from "../leader-common.ts";
@@ -15,7 +17,7 @@ import { finishLeaderTurn, handleMissedSteer, noteUnansweredSteer, settleLeaderT
 import {
   HOST, acpClis, acpSpawn, activeLeaderTurns, boundPort, chatStore, claudeCliPath, describeError, folderActivity, handoverReadTurns, lateSteers,
   leaderInstances, leaderJobs, leaderModels, leaderQuery, leaderSeats, leaderSpawn, leaderStartTimeoutMs, leaderTurnResolvers, leaderTurnTimeoutMs, leaderTurnText, leaderUsage,
-  leaders, pendingHandoverReads, setAcpClis, steeredTurns,
+  leaders, pendingHandoverReads, setAcpClis, settingsService, steeredTurns,
 } from "./state.ts";
 import { effectiveMode, leaderSeatOf, tabLocation } from "./tabs.ts";
 import { fixedCrewOf, isFixedTab } from "../fixed-crew/runtime.ts";
@@ -88,6 +90,7 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
   if (isFixedTab(location.tab)) requireFixedAssignment(tabId, "leader");
   const lead = leaderSeatOf(location.tab);
   if (!lead) throw new Error(`tab "${tabId}" has no leader slot`);
+  assertCliAvailable(lead.cli, settingsService.state);
   // Every tab is a fixed crew; a tab without one has no tools to offer.
   const toolDeps: LeaderToolDeps = { fixedSpecs: () => isFixedTab(location.tab) ? fixedLeaderSpecs(tabId, instance) : [], tabName: location.tab.name };
   // OpenCode reaches the crew tools through the bridge; its token lives exactly as long as this leader.
@@ -159,6 +162,7 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
   if (leaderKind === "acp") {
     const acp = acpClis.find((cli) => acpKindOf(cli) === lead.cli);
     if (!acp) throw new Error(`The CLI "${lead.cli.slice(4)}" was removed in Settings. Pick another leader CLI for ${lead.name}.`);
+    assertCatalogLeaderEligible(acp, settingsService.state);
     const bridge = openBridge(tabId, buildLeaderToolSpecs(toolDeps));
     revokeBridge = bridge.revoke;
     leader = createAcpLeader(seat, location.tab.folder, callbacks, { cli: acp, bridge: { url: `http://${HOST}:${boundPort}/api/leader-mcp/${encodeURIComponent(tabId)}`, token: bridge.token }, spawnFn: acpSpawn, startTimeoutMs: leaderStartTimeoutMs });

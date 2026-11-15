@@ -19,6 +19,7 @@ The client sends `{ "type": "hello" }`. The server replies with a `state` messag
 {
   "type": "state",
   "selectedTabId": "sample-development",
+  "firstRun": { "required": false },
   "projects": [
     {
       "id": "sample",
@@ -70,6 +71,8 @@ The client sends `{ "type": "hello" }`. The server replies with a `state` messag
   "releasedProcesses": []
 }
 ```
+
+`firstRun: { required }` is included in every state. `required` is true only while the validated first-run marker is pending and workspace recovery is not blocked. Missing, unreadable or completed markers do not request setup.
 
 The example omits fields for brevity. `clis` is the capability table of every CLI the server knows, `{ id, label, advisor, readOnlyEnforced, customModel, installed, models, efforts }`: one row each for `claude`, `codex` and `opencode`, and one `acp:<id>` row per CLI added in Settings. **Fixed crew (what the page uses).** Every tab has the same 18 fixed positions, in this order and with these ids (`slot`): leader, planner, researcher, coder, designCoder, helper, imageMaker, socialMaker, videoMaker, secondOpinion, reviewer1, fixer1, reviewer2, fixer2, final, designFinal, minimalFixer, minimalReviewer. The top-level `fixedCrewDefinitions` lists them as `{ slot, label, canWrite, reviews?, group }` (`group` is Planning, Making or Checking; `reviews` names the position whose work a reviewing position checks), and `crewDefaultsVersion` is the version of the built-in position instructions. A fixed tab (a tab with a `fixedCrew` field) is saved with `setupName: "Fixed crew"`, `crew: []`, `steps: []` and `lookPause: false`, and carries:
 
@@ -132,6 +135,8 @@ Fields shown are required unless marked optional. Invalid or unknown messages re
 | `type` | Fields | Effect |
 |---|---|---|
 | `hello` | none | Sends state and selected-tab transcript. |
+| `completeFirstRun` | `requestId`, `name`, `folder`, `cli`, `projectOnly?`, `acpConsent?` | Requires a pending first-run marker and ready workspace recovery. A built-in CLI must be known, installed, signed in and have a supported leader model. A registered ACP CLI is revalidated and resolved outside all project folders, including the chosen folder, requires `acpConsent: true` for Full access, and uses its default model and effort; setup never starts it or checks its connection. The trimmed name must be 1-100 characters without controls and produce a valid slug; duplicate project ids get a numeric suffix. The folder must validate. Adds the project and Development tab in one workspace publication, removing the seeded example from that draft only if it has no files, chat/task/execution history or active work. Marks setup complete after the workspace save, selects the new tab and broadcasts state. `projectOnly: true` also requests project rules after saving. Answers `actionResult` with the same action and request id. Unknown fields and a non-boolean `projectOnly` or `acpConsent` are refused. |
+| `skipFirstRun` | `requestId` | Requires a pending marker and ready workspace recovery. Marks setup complete, keeps the example project and broadcasts state, then answers `actionResult` with the same action and request id. Unknown fields are refused. |
 | `selectTab` | `tabId` | Selects a tab and returns its transcript. |
 | `addProject` | `requestId`, `id`, `name`, `folder`, `tabId?`, `tabFolder?`, `projectOnly?`, `fixedCrewVersion: 1`, `crewChoices?`, `autoAssign?` | Adds a project with one Development tab, which has the fixed crew: `crewChoices` is `{ <slot>: { cli, model, effort, advisor? } }` for the positions the user picked (each must name an installed CLI and a model and effort from its live lists; OpenCode also accepts a typed provider/model id), `autoAssign` (default `false`) fills the empty rest from the installed CLIs, and any other field is refused. A request id is required. `tabFolder` defaults to `folder`; the form requires `fixedCrewVersion: 1`. |
 | `renameProject` | `projectId`, `name` | Renames a project. |
@@ -170,9 +175,10 @@ Fields shown are required unless marked optional. Invalid or unknown messages re
 | `ackLaunchNotice` | `id` | Acknowledges one persisted launch notice. |
 | `historyList` | `seatKey` | Lists the newest 200 log runs of one tab-scoped key or old bare seat ID (only that seat's files are read). It does not require a current workspace entry. A leader's saved sessions are listed here too (see Chat storage). |
 | `historyRun` | `seatKey`, `timestamp`, `full?` | Reads a run's brief, output tail, byte count, and outcome. `full: true` is still capped. The reply echoes `full: true` when the request asked for the fuller log, `full: false` otherwise. |
-| `refreshSettings` | `requestId?` | Re-reads CLI status and Skills & MCP inventory for the selected tab. Read-only. With a `requestId` the reply is the normal `actionResult` (or `error`, also when the check fails) carrying it; `settingsRefreshed` follows a success either way. |
-| `installCli` | `requestId`, `cli`, `confirm` | Installs only a missing CLI using `npm install -g` and that CLI's fixed package. `confirm` must be `true`; Install is unavailable while installed. Gemini uses `@google/gemini-cli`. |
-| `cliLogin` | `requestId`, `cli` | Opens Claude, Codex, or OpenCode login in a new visible console and rechecks its sign-in status. Gemini sign-in is not exposed because its read-only status check and login command have not been verified. |
+| `refreshSettings` | `requestId?` | Re-reads CLI status and Skills & MCP inventory for the selected tab. Read-only. With a `requestId` the reply is the normal `actionResult` (or `error`, also when the check fails) carrying it; `settingsRefreshed` follows a success either way. It also re-reads the Windows PATH so a tool installed after the app started is found. |
+| `installCli` | exactly `type`, `requestId`, `cli`, `confirm:true` | Installs a freshly confirmed missing catalog tool using its server-owned recipe. Unknown/provider-only IDs, extra fields and installed/unknown status are refused at handler and service. One install at a time; ten-minute deadline. PATH refreshes before preflight and after exit; success requires confirmed cleanup and positive version detection. Never automatically retries, signs in or starts a chat. |
+| `cancelCliInstall` | exactly `type`, `requestId`, `cli`, `installRequestId` | Cancels only the stored owned operation matching CLI and original request. No client PID is accepted. Lock stays until strict tracked-tree cleanup is confirmed. Shutdown closes admission and drains installs; incomplete orphan cleanup blocks admission. |
+| `cliLogin` | `requestId`, `cli` | Starts the managed hidden catalog sign-in. Exact messages, private events and supported tools: [CLI settings](docs/protocol/cli-settings.md). |
 | `ghLogin` | `requestId` | Opens `gh auth login --web` in a new visible console and rechecks `gh auth status`. Only connected state and account name are retained. |
 | `setNotesVault` | `requestId`, `path` | Stores an optional absolute existing directory. Use `null` or `""` to clear it. Save continues writing to the tab folder. |
 | `setDefaultProjectFolder` | `requestId`, `folder` | Stores an absolute existing directory for new projects. |
@@ -279,6 +285,10 @@ Task list/request/byte, report and fingerprint limits remain active. Valid compl
 
 The read-only Finished tasks view initially shows 3 rows and requests pages of 50. It lists verified scope, finish date, ID and Open controls. It reads the saved plan, evidence and historical runs without restore, replay or delete. The current task page displays **No plan yet** after rollover.
 
+## CLI settings and catalog
+
+See [CLI settings and catalog](docs/protocol/cli-settings.md) for installation, managed sign-in and catalog connections.
+
 ## HTTP paste-image endpoint
 
 `POST /api/paste-image` accepts `image/png`, `image/jpeg`, or `image/webp` with a body up to 12 MiB and requires a valid `X-Request-Id`; there is no legacy route that accepts a missing id. The id is echoed in the response, and the upload status is in `state.settings.uploads` (at most 32 entries). A request refused for its Host or Origin records no status. Before writing, the server resolves the real scratch directory and data root and refuses a directory outside that root. The file is written through the resolved directory under `<data root>/scratch/`.
@@ -339,3 +349,5 @@ Pointer-down or non-repeated key-down must start after settle on the same ID
 still displayed at activation. Pointer captures belong to the pointer that
 began them; another pointer cannot activate or erase them. Multi-clicks and held
 keys cannot answer a replacement.
+
+Catalog ACP `leaderEligible` means selectable and attemptable after consent with a matching saved profile, detected installation and version. `tested` derives from qualification; `leaderLabel` is `Tested` or `Not tested yet`. See [CLI settings](docs/protocol/cli-settings.md).

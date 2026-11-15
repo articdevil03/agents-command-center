@@ -42,7 +42,7 @@ export type CliCapStatic = { id: string; label: string; advisor: boolean; readOn
 export const CLI_CAPS: Record<"claude" | "codex" | "opencode", CliCapStatic> = {
   claude: { id: "claude", label: "Claude Code", advisor: true, readOnlyEnforced: true, customModel: null },
   codex: { id: "codex", label: "Codex", advisor: false, readOnlyEnforced: false, customModel: "^gpt-[A-Za-z0-9][A-Za-z0-9._-]{0,95}$" },
-  opencode: { id: "opencode", label: "OpenCode", advisor: false, readOnlyEnforced: true, customModel: "^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$" },
+  opencode: { id: "opencode", label: "OpenCode", advisor: false, readOnlyEnforced: true, customModel: "^[A-Za-z0-9._-]+/[A-Za-z0-9._/:-]+$" },
 };
 export const isAcpCli = (value: unknown): value is `acp:${string}` => typeof value === "string" && value.length <= 40 && /^acp:[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value);
 // A CLI added in Settings by its start command: its read-only mode is not enforced (a launch counts as able to write).

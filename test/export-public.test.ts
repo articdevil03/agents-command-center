@@ -198,3 +198,13 @@ test("--working-tree scans and copies the working tree (a new file counts, an un
   assert.match(caught.err, /src\/app\.js:1: pattern #2/);
   assert.equal(existsSync(bad), false);
 });
+
+test("first-run state never exports from committed or working files", () => {
+  const repo = makeRepo({ "config/first-run.json": `${WORD} private marker` });
+  for (const flags of [[], ["--working-tree"]]) {
+    const target = newTarget();
+    const result = run(repo, target, patternFile(), ...flags);
+    assert.equal(result.code, 0, result.err);
+    assert.equal(existsSync(join(target, "config/first-run.json")), false);
+  }
+});

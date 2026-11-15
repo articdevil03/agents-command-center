@@ -57,7 +57,12 @@
       const final = actionState(sent.requestId);
       const statusNode = document.querySelector(`[data-status-for="${CSS.escape(sent.requestId)}"]`);
       const runningReceived = window.__received.some((item) => item.type === "state" && item.requestActions?.[sent.requestId]?.status === "running");
-      const statusShown = statusNode?.dataset.status === result && statusNode.textContent.includes(message);
+      const statusShown = statusNode?.dataset.status === result && statusNode.textContent.includes(message)
+        && statusNode.checkVisibility() && Boolean(statusNode.closest(`#s-${section}`))
+        && (type !== "installCli" || statusNode.closest("[data-tool-row]")?.dataset.cli === fields.cli);
+      if (type === "cliLogin") {
+        check(`managed sign-in fails closed without a vendor process at ${innerWidth}px`, window.__latestState.settings.catalogTools[fields.cli].action.reason === "launchFailed" && statusShown, { final, statusShown });
+      }
       const finalButton = requireElement(selector);
       const reenabled = !finalButton.disabled;
       const clearVaultFocusKey = type === "setNotesVault" && fields.path === null && finalButton.disabled
@@ -86,8 +91,16 @@
     window.__ccConfirmResult = true;
     check(`real Gemini remains install-only with server instruction inventory at ${innerWidth}px`, geminiSafe && installedHasNoInstall && installDenied, { gemini: { installed: gemini.installed, signedIn: gemini.signedIn }, geminiFiles, instructionScopes: settings.skills.gemini.instructionFiles.map((item) => item.scope), geminiHasGlobalInstructions, geminiHasProjectInstructions, skills: settings.skills.gemini.skills, mcp: settings.skills.gemini.mcpServers, plugins: settings.skills.gemini.plugins, geminiSafe, installedHasNoInstall, installDenied });
 
-    await serverAction({ name: "Gemini install", section: "tools", selector: '#s-tools [data-setting-action="install-cli"][data-cli="gemini"]', type: "installCli", fields: { cli: "gemini", confirm: true }, message: "CLI installation failed" });
-    await serverAction({ name: "Claude sign-in", section: "tools", selector: '#s-tools [data-setting-action="login-cli"][data-cli="claude"]', type: "cliLogin", fields: { cli: "claude" }, message: "could not open the CLI login window" });
+    await serverAction({ name: "Gemini install", section: "tools", selector: '#s-tools [data-setting-action="install-cli"][data-cli="gemini"]', type: "installCli", fields: { cli: "gemini", confirm: true }, message: "This tool needs Node.js and npm. Install Node.js from nodejs.org, then try again." });
+    // Pack 29 W5: Sign in shows only when the real server marks the tool managed (state.cliCatalog[].signIn.managed); until the server
+    // publishes that, the row must offer no Sign in, and an installed, signed-out row shows the server's unsupported words instead.
+    const claudeEntry = (window.__latestState.cliCatalog ?? []).find((entry) => entry.id === "claude"), claudeTool = window.__latestState.settings?.tools?.claude;
+    if (claudeEntry?.signIn?.managed === true) await serverAction({ name: "Claude sign-in", section: "tools", selector: '#s-tools [data-setting-action="login-cli"][data-cli="claude"]', type: "cliLogin", fields: { cli: "claude" }, message: "Could not start sign-in." });
+    else {
+      const claudeRow = requireElement('#s-tools [data-tool-row][data-cli="claude"]'), note = claudeRow.querySelector("[data-tool-signin-note]")?.textContent ?? null;
+      const noteExpected = claudeTool?.installed === true && claudeTool.signedIn !== true;
+      check(`Claude sign-in follows the server's sign-in policy at ${innerWidth}px`, !claudeRow.querySelector('[data-setting-action="login-cli"]') && (noteExpected ? Boolean(note) : note === null), { managed: claudeEntry?.signIn?.managed ?? null, installed: claudeTool?.installed ?? null, signedIn: claudeTool?.signedIn ?? null, note });
+    }
     await serverAction({ name: "GitHub connect", section: "github", selector: '#s-github [data-setting-action="github-login"]', type: "ghLogin", message: "could not open the GitHub login window" });
 
     const folder = window.__ccFolderChoice;

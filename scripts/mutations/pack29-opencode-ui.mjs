@@ -1,0 +1,34 @@
+const rows = [];
+export const pack29OpenCodeUiCatchMap = {};
+const login = "public/first-run/login.js", wizard = "pack29-opencode-key-page", settings = "pack29-opencode-key-settings";
+function row(name, file, from, to, test = wizard) {
+  const id = `p29-opencode-ui-${name}`;
+  rows.push([id, file, from, to]); pack29OpenCodeUiCatchMap[id] = `test/${test}.test.ts`;
+}
+row("masked", login, 'type="password" autocomplete="off"', 'type="text" autocomplete="off"');
+row("secret-attribute", login, 'data-secret="true"', 'data-secret="false"');
+row("clear-before-send", login, 'clearInputs(cli);\n      if (!code)', '/* clear omitted */\n      if (!code)', settings);
+row("clear-after-send", login, 'clearInputs(cli);\n      if (!code)', 'queueMicrotask(() => clearInputs(cli));\n      if (!code)', settings);
+row("clear-on-failure", "public/first-run/login.js", "clearInputs(cli);\n      if (!code) return false;\n      input.value = \"\"; input.disabled = true;", "if (!code) return false;\n      input.disabled = true;");
+row("clear-other-surface", login, 'if (panel.cli === cli) panel.parts.input.value = "";', 'if (panel.cli === cli && panel.root.contains(document.activeElement)) panel.parts.input.value = "";', settings);
+row("secret-state", "public/first-run/login.js", "mine.codeSent = event.revision; // Consume before send", "mine.event.apiKey = code; mine.codeSent = event.revision; // Consume before send");
+row("secret-storage", login, 'mine.codeSent = event.revision; // Consume before send', 'localStorage.setItem("opencode-key", code); mine.codeSent = event.revision; // Consume before send');
+row("secret-draft", login, 'mine.codeSent = event.revision; // Consume before send', 'page.state.apiKey = code; mine.codeSent = event.revision; // Consume before send');
+row("secret-focus", login, 'mine.codeSent = event.revision; // Consume before send', 'input.dataset.focusKey = code; mine.codeSent = event.revision; // Consume before send');
+row("secret-markup", login, 'mine.codeSent = event.revision; // Consume before send', 'input.setAttribute("value", code); mine.codeSent = event.revision; // Consume before send');
+row("extra-url", login, 'loginId: mine.loginId, apiKey: code });', 'loginId: mine.loginId, apiKey: code, url: "https://opencode.ai/auth" });');
+row("extra-command", login, 'loginId: mine.loginId, apiKey: code });', 'loginId: mine.loginId, apiKey: code, command: "auth login" });');
+row("ordinary-replacement", login, '&& !replaceOffered(cli);', ';', settings);
+row("replacement-confirm", login, '{ type: "replaceCliLogin", cli, confirm: true }', '{ type: "replaceCliLogin", cli, confirm: false }', settings);
+row("revision-setter", login, 'mine.codeSent = event.revision; // Consume before send', '/* setter omitted */ // Consume before send');
+row("revision-reader", login, 'event.phase !== "waitingKey" || mine.codeSent >= event.revision)', 'event.phase !== "waitingKey")');
+row("stale-revision", login, 'if (mine.event && revision <= mine.event.revision) return true;', 'if (false) return true;', "pack29-opencode-mutation-guards");
+row("enter-default", login, 'event.preventDefault(); event.stopPropagation(); submit(cli, parts);', 'submit(cli, parts);', "pack29-opencode-mutation-guards");
+row("unsupported-ready", "public/first-run/tools.js", 'if (id === "opencode" && tool.supportedVersion !== true) return "unsupported";', '/* major check omitted */');
+row("unsupported-settings", "public/app/11-settings-render.js", 'cli === "opencode" && tool?.installed === true && tool.supportedVersion !== true;', 'false;', settings);
+row("terminal-clear", login, 'if (!running || (message.cli === "opencode" && message.phase !== "waitingKey")) clearInputs(message.cli);', '', "pack29-opencode-mutation-guards");
+row("cancel-clear", login, 'function cancel(cli) {\n      clearInputs(cli);', 'function cancel(cli) {', "pack29-opencode-mutation-guards");
+row("hidden-clear", login, 'panel.cli === "opencode" && (!panel.root.isConnected || !panel.parts.input.checkVisibility())', 'false');
+row("reconnect-clear", login, 'if (mine.loginId && socket && mine.socket !== socket) {\n          clearInputs(cli);', 'if (mine.loginId && socket && mine.socket !== socket) {');
+row("r1-unavailable-saved-choice", "public/model-picker.js", "        if (cli === \"opencode\" && page.cliCaps().find((cap) => cap.id === cli)?.installed !== true) return `<div class=\"hint\">OpenCode 1 is needed. Your saved choice is kept.</div>`;", "", "pack29-opencode-eligibility-page");
+export const pack29OpenCodeUiMutations = rows;

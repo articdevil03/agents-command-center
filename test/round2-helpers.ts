@@ -38,6 +38,11 @@ import { DEFAULTS_VERSION } from "../server/fixed-crew/role-prompts.ts";
 import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
 import { unavailableWorkspace } from "../server/fixed-crew/recovery.ts";
 import { fixedDependencies, round2FixedTab } from "./round2-fixed-deps.ts";
+import { assertCatalogLeaderEligible, catalogFacts, catalogLeaderLabel, catalogLeaderEligible, eligibleAcpClis, registerCatalogConnection, validateCatalogRequest } from "../server/settings/catalog-acp.ts";
+import { catalogMetadata, catalogTool } from "../server/settings/cli-catalog-validation.ts";
+import { validateLoginRequest } from "../server/settings/cli-login.ts";
+import { validateInstallRequest } from "../server/settings/cli-install.ts";
+import { cliAvailability, assertCliAvailable } from "../server/settings/cli-availability.ts";
 
 import { fixtureTab, fixtureWorkspaces, tempWorkspaceFolders } from "./round2-workspaces.ts";
 export { fixtureTab, fixtureWorkspaces, tempWorkspaceFolders } from "./round2-workspaces.ts";
@@ -187,6 +192,8 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
   const testPathExists = (value: string) => /^C:[\\/]work(?:[\\/]|$)/i.test(value);
   const dependencies = {
     ...fixedDependencies, structuredClone,
+    // These fixtures are existing installs. The real first-run registry and state are exercised in pack29-first-run.test.ts.
+    firstRunRequired: () => false, firstRunMessages: () => [],
     createTaskStore, isFixedTab, fixedMembers, fixedState, fixedCrewOf, DEFAULTS_VERSION, FIXED_CREW,
     // The start-up recovery runs in its own tests (fixed-crew-recovery*.test.ts); here the saved workspace is the one the test gives, so recovery state is per server and starts clear.
     workspaceRecovery: () => ({ ...recoveryState }), blockWorkspaceRecovery: () => { recoveryState.blocked = true; }, unavailableWorkspace,
@@ -237,6 +244,10 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
     },
     resolveClaudeCli: () => options.claudeCli ?? null,
     isInsideFolder, setCliSkipFolders, windowsTaskkillPath, resolveCliOrThrow, leaderKindOf, keepBadCopy, USER_DENIED,
+    // Check again / Install / Sign in re-read the Windows PATH first (Pack 29 W3a); the fixture never reads the real registry.
+    refreshProcessPath: async () => ({ added: [] }),
+    cliAvailability, assertCliAvailable,
+    assertCatalogLeaderEligible, catalogFacts, catalogLeaderLabel, catalogLeaderEligible, eligibleAcpClis, registerCatalogConnection, validateCatalogRequest, catalogMetadata, catalogTool, validateInstallRequest, validateLoginRequest,
     // The start-up orphan sweep reads the real process list: the start-up test for it is in pack2-server-engine-startup.test.ts, through a real server.
     SWEEP_CAP_MS: leaderCommon.SWEEP_CAP_MS, reportStartupSweep: leaderCommon.reportStartupSweep,
     KILL_TIMEOUT_MS: leaderCommon.KILL_TIMEOUT_MS, KILL_CONFIRM_MS: leaderCommon.KILL_CONFIRM_MS,
@@ -262,7 +273,9 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
     releaseUnconfirmedRun: options.releaseUnconfirmed ?? realRunner.releaseUnconfirmedRun,
     logsDir: realRunner.logsDir,
     ChatStore: options.failAssistantAppend ? class extends ChatStore { appendMessage(tabId: string, role: any, ...rest: any[]) { if (role === "assistant") throw new Error("chat disk failed"); return (super.appendMessage as any)(tabId, role, ...rest); } } : ChatStore,
-    SettingsService, ModeBusyError, runCli, spawnSync: (fixedDependencies as { spawnSync?: typeof spawnSync }).spawnSync ?? spawnSync, writeProjectRules,
+    SettingsService: class extends SettingsService {
+      constructor(given: ConstructorParameters<typeof SettingsService>[0]) { super({ ...given, launchGitHub: async () => false }); }
+    }, ModeBusyError, runCli, spawnSync: (fixedDependencies as { spawnSync?: typeof spawnSync }).spawnSync ?? spawnSync, writeProjectRules,
     RequestsStore,
     // This harness runs the server with fake runs and a made-up clock: it never reads the tools' real records or watches a folder (pack9-folder-activity-*.test.ts covers that through real servers).
     createFolderActivity: (given: any) => createFolderActivity({ ...given, home: null }),

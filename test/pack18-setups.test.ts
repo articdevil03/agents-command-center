@@ -23,6 +23,8 @@ const ALLOWED: Record<string, string[]> = {
   "server/config.ts": ["export type SeatKind =", "const SAVED_MODELS", "const SAVED_EFFORTS", "efforts: { claude: [...EFFORT_OPTIONS.claude]"],
   "server/leader-common.ts": ["export function leaderKindOf(cli: unknown)"],
   "server/fixed-crew/assignment.ts": ['return isAcpCli(id) ? 3 : ["claude", "codex", "opencode"].indexOf(id);'],
+  // The first-run screen's rows and default-leader order: the three leader CLIs completeFirstRun accepts, each with its vendor's install page.
+  "public/first-run/cli-help.js": ['order: Object.freeze(["claude", "codex", "opencode"]),'],
 };
 function sweepText(file: string, text: string): string[] {
   const found: string[] = [];
