@@ -65,6 +65,9 @@ function withAdvisor(seat: Readonly<FixedSeat>, assignment: Assignment, cli: Cli
   return advisor ? { ...assignment, advisor } : assignment;
 }
 
+// The owner demonstrated a tool-using leader chat with this live model on 2026-11-16.
+const FIRST_RUN_OPENCODE_MODELS = ["opencode/longcat-2.5-free"] as const;
+
 const automatic = (assignment: Assignment | null): Preference => ({ assignment, source: "auto" });
 
 function cliOrder(id: string): number {
@@ -103,7 +106,7 @@ export function independenceNotice(writer: Assignment | null, reviewer: Assignme
   return { status, blocking: false, message: messages[status] };
 }
 
-export function autoFillPreferences(preferences: Partial<CrewPreferences>, catalogue: AssignmentCatalogue): CrewPreferences {
+export function autoFillPreferences(preferences: Partial<CrewPreferences>, catalogue: AssignmentCatalogue, firstRun = false): CrewPreferences {
   for (const slot of Object.keys(preferences)) {
     if (!FIXED_CREW.some((seat) => seat.slot === slot)) throw new Error(`Unknown crew slot: ${slot}`);
   }
@@ -113,7 +116,7 @@ export function autoFillPreferences(preferences: Partial<CrewPreferences>, catal
 
   function workerModels(seat: Readonly<FixedSeat>, cli: CliInventory): string[] {
     const models = modelChoices(cli, catalogue).filter((model) => !/fable/i.test(model));
-    const defaults = DEFAULT_WORKER_MODELS[cli.id] ?? [];
+    const defaults = firstRun && cli.id === "opencode" && seat.slot === "leader" ? FIRST_RUN_OPENCODE_MODELS : DEFAULT_WORKER_MODELS[cli.id] ?? [];
     const model = models.includes(seat.preferred.model) ? seat.preferred.model
       : defaults.find((candidate) => models.includes(candidate)) ?? models[0];
     return model ? [model, ...models.filter((candidate) => candidate !== model)] : [];

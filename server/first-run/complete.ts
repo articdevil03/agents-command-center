@@ -53,7 +53,7 @@ export function completeFirstRun(ws: WebSocket, message: any): void {
     if (message.acpConsent !== true) throw new Error(`Choose Full access to use ${checked.name}: it can edit files and run commands without asking.`);
   }
   const catalogue = fixedCatalogue();
-  const leader = autoFillPreferences({}, { ...catalogue, clis: catalogue.clis.filter((item) => item.id === cli) }).leader.assignment;
+  const leader = autoFillPreferences({}, { ...catalogue, clis: catalogue.clis.filter((item) => item.id === cli) }, true).leader.assignment;
   if (!leader || leader.cli !== cli) throw new Error(`${cli} is not ready: no supported leader model`);
   createProject(ws, { type: "addProject", requestId: message.requestId, id, name, folder,
     fixedCrewVersion: 1, crewChoices: { leader }, autoAssign: true, projectOnly: message.projectOnly }, {

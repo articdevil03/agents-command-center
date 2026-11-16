@@ -1,3 +1,6 @@
+import { pack36ModeLockMutations } from "./mutations/pack36-mode-lock.mjs";
+import { pack35MimoMutations } from "./mutations/pack35-mimo.mjs";
+import { pack35RemoveMutations, pack35DefaultMutations } from "./mutations/pack35-remove.mjs";
 import { pack34CopilotMutations } from "./mutations/pack34-copilot.mjs";
 import { pack33GithubMutations } from "./mutations/pack33-github.mjs";
 import { pack32KeyMutations } from "./mutations/pack32-key.mjs";
@@ -108,12 +111,14 @@ export function removeWithRetry(path, attempts = 41, delayMs = 250) {
 }
 
 export const mutations = [
+  ...pack35MimoMutations, ...pack35RemoveMutations, ...pack35DefaultMutations,
   ...pack34CopilotMutations,
   ...pack33GithubMutations,
   ...pack31VaultMutations,
   ...pack32KeyMutations,
   ...pack32UiMutations,
   ...pack30OpenCodeBypassMutations,
+  ...pack36ModeLockMutations,
   ...pack30SettingsSpacingMutations,
   ...electronMutations,
   ...pageMutations,

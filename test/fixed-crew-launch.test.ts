@@ -103,7 +103,7 @@ test("FCX a rejected real runner start leaves no stall tracker, context, notice 
   try {
     state.setWorkspaces({ projects: [{ id: "p", name: "P", folder, tabs: [tab] }] });
     state.setDataRoot(root); state.setFixedTasks(createTaskStore(root, () => folder));
-    state.setSettingsService({ permissionMode: () => "bypass" } as any);
+    state.setSettingsService({ permissionMode: () => "bypass", state: { catalogTools: {} } } as any);
     state.leaderInstances.set(tab.id, instance); state.leaders.set(tab.id, { isDead: () => false, getPermissionMode: () => "bypassPermissions" } as any);
     state.setUnconfirmedRunIds(new Set()); state.setBlockedSeatKeys(new Set());
     state.setLaunchSafety(config.readLaunchSafety(join(root, "absent.json")));

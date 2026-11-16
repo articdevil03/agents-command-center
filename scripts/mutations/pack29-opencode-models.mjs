@@ -9,7 +9,7 @@ export const pack29OpenCodeModelsMutations = [
   ["p29-opencode-models-parser-variant-shape","server/settings/opencode/models.ts","if (variants.some((variant) => !isSafeShape(variant)","if (false && variants.some((variant) => !isSafeShape(variant)"],
   ["p29-opencode-models-refresh-install","server/settings/cli-install.ts","if (op.id === \"opencode\") await this.deps.refreshModels?.().catch(() => {});",""],
   ["p29-opencode-models-refresh-key","server/settings/cli-login.ts","await this.deps.refreshModels?.().catch(() => {});",""],
-  ["p29-opencode-models-refresh-check-again","server/settings/service.ts","await Promise.all([this.models.refresh(), refreshCatalog(this.state, this.run),","await Promise.all([refreshCatalog(this.state, this.run),"],
+  ["p29-opencode-models-refresh-check-again","server/settings/service.ts","await Promise.all([this.models.refresh(), refreshCatalog(this.state, this.run, this.env),","await Promise.all([refreshCatalog(this.state, this.run, this.env),"],
   ["p29-opencode-models-refresh-check-handler","server/main/messages/settings.ts","await settingsService.refreshAll(folder);","await Promise.resolve();"],
   ["p29-opencode-models-refresh-picker-handler","server/main/messages/settings.ts","() => settingsService.models.refresh()","() => Promise.resolve()"],
   ["p29-opencode-models-refresh-picker-click","public/model-picker.js","() => page.refreshModels?.()","() => {}"],

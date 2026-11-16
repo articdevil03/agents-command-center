@@ -10,7 +10,7 @@ import { CLI_KEY_PROFILES, keyProfile } from "../server/settings/cli-key-profile
 
 const KEY = "ccTEST-KEY-" + randomUUID();
 const NONE = { claude: [false, null], codex: [false, null], opencode: [false, null] } as const;
-const fieldsFor = (cli: string) => Object.fromEntries(CLI_KEY_PROFILES[cli].map((field) => [field.id, field.kind === "secret" ? KEY : field.kind === "choice" ? field.choices![0].value : "provider/model-1 "]));
+const fieldsFor = (cli: string) => Object.fromEntries(CLI_KEY_PROFILES[cli].map((field) => [field.id, field.kind === "secret" ? KEY : field.kind === "choice" ? field.choices![0].value : cli === "mimo" ? "model-1 " : "provider/model-1 "]));
 const profiles = (saved: boolean) => catalogChange(Object.fromEntries(Object.keys(CLI_KEY_PROFILES).map((cli) => [cli, { installed: true, version: "1.0.0", signedIn: null, registered: false, keySaved: saved, keyProfile: keyProfile(cli) }])));
 
 test("shared catalog key panel through real wizard and Settings listeners, clearing and action states", { timeout: editorTestMs(240_000) }, async (t) => {

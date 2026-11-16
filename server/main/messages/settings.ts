@@ -1,10 +1,11 @@
 import { WebSocket } from "ws";
+import { managedToolInUse } from "../managed-tool-use.ts";
 import { refreshProcessPath } from "../../leader-common/path-refresh.ts";
 import { writeAcpClis, validateAcpCli, parseAcpStartCommand, acpKindOf, ACP_MAX_CLIS } from "../../config.ts";
 import { resolveCliOrThrow, type LeaderHandle } from "../../leader-common.ts";
 import { readChatRequestId } from "../../chat-store.ts";
 import { ModeBusyError } from "../../settings.ts";
-import { validateInstallRequest } from "../../settings/cli-install.ts";
+import { validateInstallRequest, validateRemoveRequest } from "../../settings/cli-install.ts";
 import { broadcast, sendError, stateMessage } from "../broadcast.ts";
 import { stopLeaderSession } from "../leader-session.ts";
 import type { MessageHandler } from "./types.ts";
@@ -158,6 +159,12 @@ export function settingsMessages(): Array<[string, MessageHandler]> {
     ["refreshOpenCodeModels", (ws, message) => { runAsyncAction(ws, message.type, requiredRequestId(message.requestId), () => settingsService.models.refresh()); }],
     ["installCli", onInstallCli],
     ["cancelCliInstall", onCancelCliInstall],
+    ["removeCliInstall", (ws, message) => {
+      runAsyncAction(ws, message.type, requiredRequestId(message.requestId), () => {
+        validateRemoveRequest(message);
+        return settingsService.removeCliInstall(message, () => managedToolInUse(message.cli));
+      }, { cli: message.cli });
+    }],
     ["ghLogin", onGhLogin],
     ["setNotesVault", onSetNotesVault],
     ["setDefaultProjectFolder", onSetDefaultProjectFolder],

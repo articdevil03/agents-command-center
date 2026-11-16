@@ -10,6 +10,16 @@ import { installManagedRelease } from "./opencode/install.ts";
 import { RELEASE_TOOLS } from "./opencode/release-tools.ts";
 import { sweepCopilotInstalls } from "./opencode/sweep.ts";
 import { managedCli } from "./opencode/paths.ts";
+import { removeManagedInstall } from "./opencode/remove.ts";
+
+export function validateRemoveRequest(message: unknown): asserts message is Record<string, any> {
+  if (!message || typeof message !== "object" || Array.isArray(message)) throw new Error("Invalid removal request.");
+  const value = message as Record<string, unknown>;
+  if (Object.keys(value).some((key) => !["type", "requestId", "cli", "confirm"].includes(key))
+    || value.type !== "removeCliInstall" || !isSafeRequestId(value.requestId)
+    || !["opencode", "copilot"].includes(value.cli as string)) throw new Error("This tool has no managed removal.");
+  if (true !== value.confirm) throw new Error("Removal confirmation is required.");
+}
 
 export function validateInstallRequest(message: unknown, cancel = false): asserts message is Record<string, any> {
   if (!message || typeof message !== "object" || Array.isArray(message)) throw new Error("Invalid install request");
@@ -20,7 +30,7 @@ export function validateInstallRequest(message: unknown, cancel = false): assert
   catalogTool(value.cli);
   if (cancel ? !isSafeRequestId(value.installRequestId) : value.confirm !== true) throw new Error(cancel ? "Invalid install request id" : "install confirmation is required");
 }
-type Operation = { id: string; requestId: string; abort: AbortController; done: Promise<void>; result?: CliResult };
+type Operation = { removing?: boolean; id: string; requestId: string; abort: AbortController; done: Promise<void>; result?: CliResult };
 type InstallerDeps = { state: SettingsState; run: RunCli; env: NodeJS.ProcessEnv; publish: () => void;
   refreshModels?: () => Promise<void>; refreshPath?: () => Promise<unknown>; admission?: () => boolean; installOptions?: OpenCodeInstallOptions };
 
@@ -55,6 +65,31 @@ export class CliInstaller {
     op.done = this.execute(op);
     return op.done;
   }
+  remove(message: unknown, inUse: () => boolean): Promise<void> {
+    validateRemoveRequest(message);
+    if (this.active || this.deps.admission?.() === false || this.closed) return Promise.reject(new Error("Another installation or removal is running."));
+    if (inUse()) return Promise.reject(new Error("Stop the chats and seats that use it first, then try again."));
+    const op: Operation = { id: message.cli, requestId: message.requestId, abort: new AbortController(), done: Promise.resolve() };
+    this.active = op;
+    op.removing = true;
+    this.update(op, { requestId: op.requestId, kind: "remove", status: "running", message: "Removing..." });
+    op.done = (async () => {
+      let failure: string | undefined;
+      try { await removeManagedInstall(this.deps.env, op.id as "opencode" | "copilot"); }
+      catch (error) {
+        failure = error instanceof Error && ["Nothing installed by Command Center to remove.", "Some files could not be removed. Close programs that use them and try again."].includes(error.message)
+          ? error.message : "Could not remove this installation safely.";
+      }
+      try { await detectCatalogTool(op.id, this.deps.state, this.deps.run, this.deps.env); }
+      catch { failure ??= "Could not check the installation after removal. Check again."; }
+      finally {
+        if (this.active === op) this.active = null;
+        this.update(op, { requestId: op.requestId, kind: "remove", status: failure ? "failed" : "done", message: failure ?? "Removed" });
+      }
+      if (failure) throw new Error(failure);
+    })();
+    return op.done;
+  }
   private async execute(op: Operation): Promise<void> {
     let cleanupConfirmed = true;
     let transaction: InstallTransaction | undefined;
@@ -63,7 +98,7 @@ export class CliInstaller {
       const deadline = Date.now() + (op.id === "copilot" ? RELEASE_TOOLS.copilot.timeoutMs : INSTALL_TIMEOUT_MS);
       if (op.id === "copilot") await sweepCopilotInstalls(this.deps.env);
       await this.refresh();
-      await detectCatalogTool(op.id, this.deps.state, this.deps.run);
+      await detectCatalogTool(op.id, this.deps.state, this.deps.run, this.deps.env);
       const facts = this.deps.state.catalogTools[op.id];
       previousFacts = { installed: facts.installed, version: facts.version, signedIn: facts.signedIn, supportedVersion: facts.supportedVersion, credentialSource: facts.credentialSource };
       const installed = this.deps.state.catalogTools[op.id].installed;
@@ -94,7 +129,7 @@ export class CliInstaller {
         op.result = checked;
         if (checked.cleanupConfirmed !== true) { cleanupConfirmed = false; throw new InstallFailure("cleanupUnconfirmed"); }
         return checked;
-      } : this.deps.run);
+      } : this.deps.run, this.deps.env);
       if (op.abort.signal.aborted || result.cancelled) throw new InstallFailure("cancelled");
       if (result.code === 124) throw new InstallFailure("timeout");
       if (result.code !== 0) throw new InstallFailure("installFailed");
@@ -105,6 +140,8 @@ export class CliInstaller {
         await transaction.commit?.();
         if (op.abort.signal.aborted) throw new InstallFailure("cancelled");
         if (managedCli(this.deps.env, op.id as "opencode" | "copilot") !== transaction.candidate) throw new InstallFailure("notFoundAfterInstall");
+        this.deps.state.catalogTools[op.id].managedInstall = true;
+
       }
       this.update(op, { requestId: op.requestId, kind: "install", status: "done", phase: null, reason: null, message: "Installed" });
       if (op.id === "opencode") await this.deps.refreshModels?.().catch(() => {});
@@ -135,7 +172,7 @@ export class CliInstaller {
   async cancel(message: unknown): Promise<void> {
     validateInstallRequest(message, true);
     const op = this.active;
-    if (!op || op.id !== message.cli || op.requestId !== message.installRequestId) throw new Error("No matching active installation");
+    if (!op || op.removing || op.id !== message.cli || op.requestId !== message.installRequestId) throw new Error("No matching active installation");
     this.phase(op, "cancelling");
     op.abort.abort();
     await op.done.catch(() => {});
@@ -146,7 +183,7 @@ export class CliInstaller {
         throw new InstallFailure("cleanupUnconfirmed");
       }
       await this.refresh();
-      await detectCatalogTool(op.id, this.deps.state, this.deps.run);
+      await detectCatalogTool(op.id, this.deps.state, this.deps.run, this.deps.env);
       this.active = null;
       this.update(op, { requestId: op.requestId, kind: "install", status: "failed", phase: null, reason: "cancelled", message: INSTALL_MESSAGES.cancelled });
     }
@@ -155,6 +192,7 @@ export class CliInstaller {
     this.close();
     const op = this.active;
     if (!op) return true;
+    if (op.removing) { await op.done.catch(() => {}); return !this.busy; }
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([this.cancel({ type: "cancelCliInstall", requestId: "shutdown", cli: op.id, installRequestId: op.requestId }).then(() => !this.busy, () => false),

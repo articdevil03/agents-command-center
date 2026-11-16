@@ -26,6 +26,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
   let stopped = false;
   let dead = false;
   let turnOpen = false;
+  let modePatch: Promise<void> | null = null; // the mode change still being applied: a turn starts after it, because OpenCode reads the session rules once when a turn starts
   let turnGeneration = 0;
   let idleSeq = 0; // every session.idle takes the next number; only the newest one may end the turn (an older one is still waiting for the usage lookup)
   // The steers of this turn, counted. A steer that reached OpenCode after its loop ended starts a second run with its own idle: until every steer was either refused or
@@ -326,10 +327,13 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     return api("POST", `/session/${sessionId}/prompt_async`, { model: splitOpencodeModel(model), ...(seat.effort ? { variant: seat.effort } : {}), parts });
   }
 
+  // A mode change that is still being applied finishes first; nothing is posted once the leader has stopped or died meanwhile.
+  const afterModePatch = (run: () => Promise<any>): Promise<any> => (modePatch ?? Promise.resolve()).then(() => (stopped || dead ? undefined : run()));
+
   function startTurn(text: string, images: string[]): Promise<void> {
     turnModel = model;
     lastTokens = null;
-    return prompt(text, images).then(() => {}, (error: Error) => {
+    return afterModePatch(() => prompt(text, images)).then(() => {}, (error: Error) => {
       if (!stopped && !dead && turnOpen) die(`leader turn failed: ${error.message}`);
     });
   }
@@ -353,7 +357,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     flushSafeTail();
     steersPosted++;
     const generation = turnGeneration;
-    void ready.then(() => prompt(text, images)).then(() => {}, () => {
+    void ready.then(() => afterModePatch(() => prompt(text, images))).then(() => {}, () => {
       if (generation === turnGeneration) steersRefused++;
       if (!stopped && !dead) cb.onSteerMissed?.(text, images);
       if (generation === turnGeneration && idleHeld && turnOpen && !steerPending()) void onIdle();
@@ -379,7 +383,10 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     const previous = mode; mode = next;
     try {
       await ready;
-      await api("PATCH", `/session/${sessionId}`, { permission: opencodeRules(next, deps.vaultPath?.()) });
+      const patch = api("PATCH", `/session/${sessionId}`, { permission: opencodeRules(next, deps.vaultPath?.()) });
+      const own: Promise<void> = patch.then(() => {}, () => {}).then(() => { if (modePatch === own) modePatch = null; });
+      modePatch = own;
+      await patch;
       if (stopped || dead) { mode = previous; return false; }
       return true;
     } catch {
@@ -389,5 +396,5 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     }
   }
 
-  return { send, steer, stop, isDead: () => stopped || dead, setModel, setPermissionMode, getPermissionMode: () => permissionModeForSdk(mode), process: () => leaderProcessState(child, killFailed) };
+  return { send, steer, stop, isDead: () => stopped || dead, modeLocked: () => turnOpen, setModel, setPermissionMode, getPermissionMode: () => permissionModeForSdk(mode), process: () => leaderProcessState(child, killFailed) };
 }

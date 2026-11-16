@@ -17,7 +17,7 @@ export function catalogProfile(entry: CatalogEntry): AcpCli {
   return validateAcpCli({ name: entry.leader.registrationName, ...entry.leader.start });
 }
 const sameProfile = (a: AcpCli, b: AcpCli) => a.id === b.id && a.name === b.name && a.program === b.program && JSON.stringify(a.args) === JSON.stringify(b.args);
-export function catalogOwner(cli: AcpCli): CatalogEntry | undefined {
+export function catalogOwner(cli: Pick<AcpCli, "id">): CatalogEntry | undefined {
   return CLI_CATALOG.find((entry) => entry.leader.kind === "acp" && acpIdFromName(entry.leader.registrationName!) === cli.id);
 }
 export function catalogLeaderEligible(cli: AcpCli, facts: Record<string, CatalogToolFacts> = {}): boolean {
@@ -33,12 +33,16 @@ export function catalogLeaderEligible(cli: AcpCli, facts: Record<string, Catalog
 export function catalogLaunchAllowed(cli: AcpCli, facts: Record<string, CatalogToolFacts> = {}): boolean {
   const entry = catalogOwner(cli);
   if (!entry) return true;
+  if (facts[entry.id]?.action?.kind === "remove" && facts[entry.id].action?.status === "running") return false;
   return sameProfile(cli, catalogProfile(entry)) && facts[entry.id]?.installed !== false;
 }
 export function eligibleAcpClis(clis: AcpCli[], state: SettingsState): AcpCli[] {
   return clis.filter((cli) => catalogLeaderEligible(cli, state.catalogTools));
 }
+export const REMOVING_MESSAGE = "This tool is being removed. Try again when it finishes.";
 export function assertCatalogLeaderEligible(cli: AcpCli, state: SettingsState): void {
+  const owner = catalogOwner(cli);
+  if (owner && state.catalogTools[owner.id]?.action?.kind === "remove" && state.catalogTools[owner.id].action?.status === "running") throw new Error(REMOVING_MESSAGE);
   if (!catalogLaunchAllowed(cli, state.catalogTools)) throw new Error("This tool is unavailable or its saved connection does not match. Check installation and add its connection again.");
 }
 export function catalogLeaderLabel(cli: AcpCli) {

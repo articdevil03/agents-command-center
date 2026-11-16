@@ -1,6 +1,8 @@
 import { isSafeRequestId } from "../chat-store.ts";
 import { catalogOwner, catalogLaunchAllowed } from "./catalog-acp.ts";
 import type { AcpCli } from "../config-acp.ts";
+import { acpKindOf } from "../config-acp.ts";
+import { assertCliNotRemoving } from "./cli-availability.ts";
 import { CLI_KEY_PROFILES, keyEnvFor, validateKeyRecord, type KeyRecord } from "./cli-key-profiles.ts";
 import { CredentialChangeUnconfirmed, IpcCredentialStore, UNSAFE_KEY_REMOVAL, UNSAFE_KEY_STORE, type CredentialStore } from "./cli-key-store.ts";
 import type { SettingsState } from "./types.ts";
@@ -58,6 +60,7 @@ export class CliKeys {
   }
   launch(cli: AcpCli): KeyLaunch {
     if (this.#closed) throw new Error("Key storage is closed.");
+    assertCliNotRemoving(acpKindOf(cli), this.state);
     const tool = catalogOwner(cli);
     if (!tool || !catalogLaunchAllowed(cli) || !Object.hasOwn(CLI_KEY_PROFILES, tool.id)) return { env: {}, secrets: [] };
     if (this.#busy.has(tool.id) || this.#loading.has(tool.id)) throw new Error("A key action is already running for this tool.");

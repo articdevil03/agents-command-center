@@ -91,8 +91,9 @@ for (const next of ["ask", "plan"] as PermissionMode[]) for (const answer of [tr
     await waitPatch();
     try {
       assert.equal(settled, false, "PATCH is still held before permission");
+      assert.notEqual(leader.getPermissionMode!(), "bypassPermissions", "the label already shows the new mode while the PATCH is held");
       await run([{ bash: "echo during switch" }], 1, [answer ? "once" : "reject"]);
-      assert.equal(settled, false, "permission answered while PATCH is still held");
+      assert.equal(settled, true, "the turn waited for the PATCH, then asked under the new mode");
     } finally { assert.equal(await switching, true); }
   }, answer, 2500));
 }

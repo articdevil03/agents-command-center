@@ -17,6 +17,20 @@ export const sleep = (ms: number) => new Promise((ok) => setTimeout(ok, ms));
 // A crew run is reported over only after its cleanup sweep, which the runner caps: a wait for a run's end outlasts that cap.
 export const RUN_END_MS = LIST_TIMEOUT_MS + KILL_TIMEOUT_MS + 1000 + 7000;
 
+export async function attemptRequest(messages: any[], send: (payload: any) => void, wait: (fn: () => any, label: string) => Promise<any>, payload: any, barrier: string): Promise<{ error?: string }> {
+  const from = messages.length;
+  send(payload);
+  send({ type: barrier.slice("unknown message type: ".length) });
+  const reply = await wait(() => messages.slice(from).find((m) => m.type === "error" && m.message === barrier), "attempt barrier");
+  const findError = () => messages.slice(from).find((m) => m !== reply && m.type === "error" && (payload.requestId === undefined || m.requestId === payload.requestId));
+  // The barrier only drains synchronous handlers. Give asynchronous refusals a bounded chance to arrive too.
+  const until = Date.now() + 300;
+  let error = findError();
+  while (!error && Date.now() < until) { await sleep(20); error = findError(); }
+  messages.splice(messages.indexOf(reply), 1);
+  return error ? { error: error.message as string } : {};
+}
+
 export type Server = { port: number; key: string; temp: string; data: string; work: string; child: ChildProcess; log: () => string; stop: () => Promise<void> };
 // extra runs after the default fake CLIs are written and before the server starts: a test may replace a CLI .cmd (bin) or add files (temp).
 export type BootOptions = { tabs: (work: string) => any[]; acpClis?: any[]; env?: Record<string, string>; fakeLeader?: boolean; extra?: (paths: { temp: string; bin: string; work: string; data: string }) => void };
@@ -80,17 +94,7 @@ export async function client(server: Server) {
   const send = (payload: any) => socket.send(JSON.stringify(payload));
   const state = () => messages.filter((m) => m.type === "state").at(-1);
   const tab = (id: string) => state().projects.flatMap((project: any) => project.tabs).find((item: any) => item.id === id);
-  // The unknown message answers after the preceding synchronous handler, so late refusals cannot be missed.
-  const attempt = async (payload: any): Promise<{ error?: string }> => {
-    const from = messages.length;
-    send(payload);
-    const barrier = `unknown message type: p18-barrier-${++n}`;
-    send({ type: barrier.slice("unknown message type: ".length) });
-    const reply = await wait(() => messages.slice(from).find((m) => m.type === "error" && m.message === barrier), "attempt barrier");
-    const error = messages.slice(from, messages.indexOf(reply)).find((m) => m.type === "error");
-    messages.splice(messages.indexOf(reply), 1);
-    return error ? { error: error.message as string } : {};
-  };
+  const attempt = (payload: any) => attemptRequest(messages, send, wait, payload, `unknown message type: p18-barrier-${++n}`);
   // A request with a requestId answers with actionResult or an error.
   const request = async (payload: any): Promise<{ ok: boolean; message?: string }> => {
     const requestId = `p18r${++n}`; const from = messages.length;

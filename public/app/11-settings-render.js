@@ -98,13 +98,18 @@
     const unsupportedVersion = cli === "opencode" && tool?.installed === true && tool.supportedVersion !== true;
     const signing = ["running", "orphan", "stuck"].includes(cliLoginUi?.viewOf(cli).state), held = Boolean(cliLoginUi?.busy());
     const needsConnect = settingsCanConnect(cli, tool), connectKey = `connect-${cli}`;
-    const subtitle = installing ? window.CC_FIRST_RUN_CATALOG?.phaseText(progress.phase, toolName(cli), progress.message) ?? "Installing…" : signing ? "Signing in…" : unsupportedVersion ? "OpenCode 1 is needed" : cli === "opencode" && tool?.credentialSource === "environment" ? "A key is set outside Command Center. Its connection is not checked." : tool?.installed === false ? "Not installed." : needsConnect ? `Installed · Not connected yet${version}` : tool?.installed === true
+    const removing = progress?.kind === "remove" && progress.status === "running";
+    const subtitle = removing ? "Removing..." : installing ? window.CC_FIRST_RUN_CATALOG?.phaseText(progress.phase, toolName(cli), progress.message) ?? "Installing…" : signing ? "Signing in…" : unsupportedVersion ? "OpenCode 1 is needed" : cli === "opencode" && tool?.credentialSource === "environment" ? "A key is set outside Command Center. Its connection is not checked." : tool?.installed === false ? "Not installed." : needsConnect ? `Installed · Not connected yet${version}` : tool?.installed === true
       ? `${tool.keySaved === true && tool.signedIn !== true ? "Installed · Key saved" : tool.signedIn === true ? "Signed in" : tool.signedIn === false ? "Installed · Not signed in" : cli === "gemini" ? "Installed · Gemini checks its own sign-in" : "Installed · Sign-in status unknown"}${version}`
       : `Install status unknown${version}`;
     const install = (tool?.installed === false || unsupportedVersion) && !(cli === "copilot" && (installing || stuckInstall)) ? `<button type="button" class="btn primary sm" data-setting-action="install-cli" data-cli="${cli}" data-focus-key="${key}" ${settingsActionRunning(key) || installing || held ? "disabled" : ""}>${unsupportedVersion ? "Install OpenCode 1" : cli === "copilot" && progress?.status === "failed" ? "Try again" : "Install"}</button>` : "";
     const cancelInstall = cli === "copilot" && (installing || stuckInstall) ? `<button type="button" class="btn sm" data-setting-action="cancel-cli-install" data-cli="${cli}" data-focus-key="cancel-install-${cli}" ${settingsActionRunning(`cancel-install-${cli}`) ? "disabled" : ""}>${stuckInstall ? "Stop again" : "Cancel"}</button>` : "";
     const installNote = cli === "copilot" && progress?.kind === "install" && progress.status === "failed" ? `<small class="wrap" data-tool-install-note>${esc(window.CC_FIRST_RUN_CATALOG.reasonText(progress.reason, toolName(cli), cli))}</small>` : "";
     const connect = needsConnect ? `<button type="button" class="btn primary sm" data-setting-action="connect-cli" data-cli="${esc(cli)}" data-focus-key="${connectKey}" ${settingsActionRunning(connectKey) ? "disabled" : ""}>Connect</button>` : "";
+    const retryRemove = progress?.kind === "remove" && progress.status === "failed" && progress.message === "Some files could not be removed. Close programs that use them and try again.";
+    const removeKey = `remove-install-${cli}`;
+    const remove = ["opencode", "copilot"].includes(cli) && ((tool?.installed === true && tool.managedInstall === true) || removing || retryRemove) ? `<button type="button" class="btn sm" data-setting-action="remove-cli-install" data-cli="${esc(cli)}" data-focus-key="${removeKey}" ${removing || installing || held || settingsActionRunning(removeKey) ? "disabled" : ""}>Remove</button>` : "";
+    const removeNote = progress?.kind === "remove" && progress.status === "failed" ? `<small class="wrap" data-tool-remove-note>${esc(progress.message)}</small>` : "";
     const loginKey = `login-${cli}`;
     // Sign in only for a tool with a managed sign-in; any other installed tool says why in the server's words. The panel goes in the slot.
     const login = cliLoginUi?.offered(cli) && !tool?.keySaved ? `<button type="button" class="btn sm" data-setting-action="login-cli" data-cli="${cli}" data-focus-key="${loginKey}" ${settingsActionRunning(loginKey) || signing || held ? "disabled" : ""}>${signing ? "Signing in…" : "Sign in"}</button>` : "";
@@ -114,7 +119,7 @@
     const connected = tool?.signedIn === true && !unsupportedVersion && !needsConnect ? `<span class="tool-connected" data-tool-status="connected"><i></i>${cli === "opencode" ? "Ready" : "Connected"}</span>` : "";
     const guide = cli !== "copilot" && tool?.installed === false ? window.CC_FIRST_RUN_HELP?.tools?.[cli]?.page ?? catalogEntry(cli)?.sources?.[0] ?? "" : "";
     const copy = guide ? `<details class="settings-install-by-hand"><summary>Install by hand</summary><p>Visit the official setup guide, then return here and press Check again.</p><div class="cmd"><code>${esc(guide)}</code><button type="button" data-copy-address="${esc(guide)}">Copy address</button></div></details>` : "";
-    return `<div class="crow tool-row" data-tool-row data-cli="${esc(cli)}"><span class="logo">${logo(cli, 18, 0)}</span><div class="d"><b>${esc(toolName(cli))}</b><small data-tool-subtitle title="${esc(subtitle)}">${esc(subtitle)}</small>${note}${installNote}${copy}</div><div class="tool-row-action" data-tool-row-action>${connected}${install}${cancelInstall}${connect}${login}${actionStatusMarkup(key)}${actionStatusMarkup(connectKey)}${actionStatusMarkup(loginKey)}</div>${slot}</div>`;
+    return `<div class="crow tool-row" data-tool-row data-cli="${esc(cli)}"><span class="logo">${logo(cli, 18, 0)}</span><div class="d"><b>${esc(toolName(cli))}</b><small data-tool-subtitle title="${esc(subtitle)}">${esc(subtitle)}</small>${note}${installNote}${removeNote}${copy}</div><div class="tool-row-action" data-tool-row-action>${connected}${install}${cancelInstall}${remove}${connect}${login}${actionStatusMarkup(key)}${actionStatusMarkup(connectKey)}${actionStatusMarkup(loginKey)}${actionStatusMarkup(removeKey)}</div>${slot}</div>`;
   }
   function skillBlock(cli, inventory = {}) {
     const skillCount = Array.isArray(inventory.skills) ? inventory.skills.length : 0;
@@ -313,6 +318,13 @@
           if (cliLoginUi?.busy() || active || settingsActionRunning(`install-${cli}`) || (tool?.installed !== false && !(tool?.installed === true && tool.supportedVersion !== true))) return;
         }
         key = `install-${cli}`; payload = { type: "installCli", cli, confirm: true }; confirmation = { title: `Install ${toolName(cli)}?`, body: `${installConsent(cli)} Signing in comes after.`, ok: "Install" };
+      }
+      if (action === "remove-cli-install") {
+        const tool = settingsToolFacts(cli);
+        const retry = tool?.action?.kind === "remove" && tool.action.status === "failed" && tool.action.message === "Some files could not be removed. Close programs that use them and try again.";
+        if (!["opencode", "copilot"].includes(cli) || (!(tool?.installed === true && tool.managedInstall === true) && !retry) || settingsActionRunning(`remove-install-${cli}`)) return;
+        key = `remove-install-${cli}`; payload = { type: "removeCliInstall", cli, confirm: true };
+        confirmation = { title: `Remove ${toolName(cli)} from this PC?`, body: "Command Center installed it for your Windows account. This removes that copy only. Your sign-in and settings stay.", ok: "Remove", danger: true };
       }
       if (action === "connect-cli") {
         if (!settingsCanConnect(cli, settingsToolFacts(cli)) || settingsActionRunning(`connect-${cli}`)) return;

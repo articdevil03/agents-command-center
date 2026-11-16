@@ -17,7 +17,7 @@ import { createAcpLeader } from "../server/leader-acp.ts";
 
 const { modules: runner } = await importWithTempDataRoot(() => import("../server/runner.ts"));
 const KEY = 'ccTEST-KEY-' + randomUUID() + '"/+\\';
-const record = (tool: string) => Object.fromEntries(CLI_KEY_PROFILES[tool].map((f) => [f.id, f.kind === "secret" ? KEY : f.kind === "choice" ? f.choices![0].value : "provider/model-1"]));
+const record = (tool: string) => Object.fromEntries(CLI_KEY_PROFILES[tool].map((f) => [f.id, f.kind === "secret" ? KEY : f.kind === "choice" ? f.choices![0].value : tool === "mimo" ? "model-1" : "provider/model-1"]));
 async function until(fn: () => boolean) {
   for (let n = 0; n < 400; n++) { if (fn()) return; await new Promise((r) => setTimeout(r, 10)); }
   assert.fail("Synthetic launch did not settle");

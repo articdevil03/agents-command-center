@@ -1,5 +1,7 @@
 # CLI settings and catalog
 
+The permission mode cannot change while an OpenCode or Codex turn is running: "Finish or stop <name>'s current turn first, then change the mode." OpenCode reads its permission rules when a turn starts, so a change must wait until that turn ends. In Bypass, the leader also auto-answers OpenCode permission requests.
+
 Canonical install progress survives page refresh/reconnect in `state.settings.catalogTools[id].action`:
 `{requestId, kind:"install", status:"running"|"done"|"failed", phase:"checking"|"installing"|"verifying"|"cancelling"|null, reason:null|"needsNode"|"needsGit"|"needsWinget"|"needsPowerShell"|"downloadFailed"|"blockedByWindows"|"notFoundAfterInstall"|"cancelled"|"cleanupUnconfirmed"|"timeout"|"installFailed", message}`.
 Messages are static server strings. `installed`, `version` and `signedIn` use catalog detection profiles (unknown is null, Copilot uses `copilot version`).
@@ -79,10 +81,15 @@ Replacement is explicit and opens empty fields. Removal deletes the stored recor
 | Kimi | key, model | KIMI_MODEL_API_KEY, KIMI_MODEL_NAME |
 | Copilot | key (GitHub token) | COPILOT_GITHUB_TOKEN |
 | Qwen | key, endpoint (China or International), model | OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL |
+| MiMo | key, model (required, no default) | MIMO_API_KEY, derived MIMOCODE_CONFIG_CONTENT |
 
 Qwen choices are `https://coding.dashscope.aliyuncs.com/v1` and
 `https://coding-intl.dashscope.aliyuncs.com/v1`; the model has no default.
-MiMo and MiniMax have no key profile. A saved key does not establish Signed in or
+MiMo has key and model fields, with no default model. The model is trimmed and must use 1-64 letters, digits, dots, underscores or hyphens. Its private launch environment contains `MIMO_API_KEY` and `MIMOCODE_CONFIG_CONTENT`. The latter is server-built JSON with the fixed MiMo provider, `options.baseURL` set to `https://api.xiaomimimo.com/v1`, `options.headers` containing the literal `{"api-key":"{env:MIMO_API_KEY}"}`, exactly the selected model in `models`, and top-level `model` set to `mimo/<model>`. The key never enters that JSON. `MIMO_API_KEY` works through this placeholder, not as a built-in vendor variable.
+
+NOT VERIFIED 2026-11-16, because no released MiMo binary or account was used: the exact nesting of `headers` (provider `options` versus provider level) in the live schema, how `MIMOCODE_CONFIG_CONTENT` ranks against a project `mimocode.json`, and whether a project config can override the `baseURL`.
+
+MiniMax is not offered: its official examples show `mcode provider add --api-key-env` storing the key value in plaintext in `config.yaml`. That breaks the rule that a key never reaches a file the app does not encrypt. Its API base URL and model IDs are not published on the vendor pages read. A saved key does not establish Signed in or
 Connected. Success says `Key saved. Connection checked when you first chat.`
 Matching installed catalog ACP tools can be registered and selected without
 `signedIn`; Start still requires the saved profile, executable and Full access consent.
@@ -243,3 +250,29 @@ managed OpenCode installation; this pack adds no uninstaller deletion.
 NOT VERIFIED 2026-11-16: real release download, native execution on x64 or arm64,
 real sign-in and ACP sessions, vendor-created windows, and whether Copilot shell
 tools require PowerShell 6+ on a PC. No real vendor session was run for this pack.
+
+## Removing an app-installed tool
+
+`removeCliInstall` accepts exactly `{type, requestId, cli, confirm:true}` with
+`cli` equal to `opencode` or `copilot`, through the existing Settings action handler.
+`managedInstall` is a server-detected boolean. Settings offers Remove for an
+installed managed copy, and offers retry after partial removal. Other tools have
+no in-app removal. The wizard has no Remove action.
+
+Removal shares the installer and sign-in admission lock. A live leader or running
+crew process using the tool refuses removal. Built-in and catalog-owned ACP leader,
+crew-seat and key launches are refused while the owner's removal action is running.
+Progress uses `kind:"remove"`, `status:"running"`,
+and `message:"Removing..."`; errors use static, non-secret text.
+
+Paths come only from the selected tool's managed root, never from the descriptor
+or request. Links are refused. Removal deletes `active.json` first, then only
+directories matching `^install-[a-f0-9-]+$`, files before verified-empty folders,
+without recursive deletion. Unrelated names and sibling tools survive. Locked
+files leave partial cleanup and a retry message. Detection refreshes before the
+action completes. Saved connections, encrypted keys, sign-in and vendor data stay.
+
+First-run OpenCode auto-selection prefers `opencode/longcat-2.5-free` only when
+present in the supplied model list, based on the owner's tool-using demo on
+2026-11-16. With no match, the prior selection is unchanged. Regular automatic
+assignment and user-selected seat models are unchanged.

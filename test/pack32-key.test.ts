@@ -10,7 +10,7 @@ import { catalogProfile } from "../server/settings/catalog-acp.ts";
 import { catalogTool } from "../server/settings/cli-catalog-validation.ts";
 
 export const KEY = 'ccTEST-KEY-' + randomUUID() + '"/+\\';
-export const fieldsFor = (tool: string, key = KEY) => Object.fromEntries(CLI_KEY_PROFILES[tool].map((f) => [f.id, f.kind === "secret" ? key : f.kind === "choice" ? f.choices![0].value : "provider/model-1"]));
+export const fieldsFor = (tool: string, key = KEY) => Object.fromEntries(CLI_KEY_PROFILES[tool].map((f) => [f.id, f.kind === "secret" ? key : f.kind === "choice" ? f.choices![0].value : tool === "mimo" ? "model-1" : "provider/model-1"]));
 const message = (cli = "gemini", fields: any = fieldsFor(cli)) => ({ type: "submitCliKey", requestId: randomUUID(), cli, fields });
 function fixture() {
   const store = new MemoryCredentialStore(); let spawns = 0;
@@ -71,7 +71,7 @@ test("all invalid fields are refused and consumed before store calls or vendor s
       await assert.rejects(f.service.cliKey(m, {})); assert.equal(Object.hasOwn(m, "fields"), false);
     }
     assert.deepEqual(f.store.calls, []); assert.equal(f.spawns(), 0);
-    assert.equal(keyProfile("mimo"), null); assert.equal(keyProfile("minimax"), null);
+    assert.deepEqual(keyProfile("mimo")!.fields.map((field) => field.id), ["key", "model"]); assert.equal(keyProfile("minimax"), null);
     assert.equal(JSON.stringify(keyProfile("qwen")).includes("OPENAI_API_KEY"), false);
   } finally { f.service.cliKeys.close(); }
 });

@@ -16,9 +16,9 @@ export type RunKey = (options: KeyRunOptions) => Promise<KeyRunResult>;
 export type PermissionMode = "ask" | "accept" | "plan" | "bypass";
 export type ActionStatus = "running" | "done" | "failed";
 export type InstallReason = "needsNode" | "needsGit" | "needsWinget" | "needsPowerShell" | "downloadFailed" | "blockedByWindows" | "notFoundAfterInstall" | "cancelled" | "cleanupUnconfirmed" | "timeout" | "installFailed";
-export type ActionState = { requestId: string; status: ActionStatus; message: string; kind?: "install" | "login"; phase?: "checking" | "installing" | "verifying" | "cancelling" | LoginPhase; reason?: InstallReason | LoginReason | null };
+export type ActionState = { requestId: string; status: ActionStatus; message: string; kind?: "install" | "login" | "remove"; phase?: "checking" | "installing" | "verifying" | "cancelling" | LoginPhase; reason?: InstallReason | LoginReason | null };
 
-export type InstalledTool = { installed: boolean | null; version: string | null; signedIn: boolean | null; supportedVersion?: boolean | null; credentialSource?: CredentialSource; action?: ActionState };
+export type InstalledTool = { managedInstall?: boolean; installed: boolean | null; version: string | null; signedIn: boolean | null; supportedVersion?: boolean | null; credentialSource?: CredentialSource; action?: ActionState };
 export type CatalogToolFacts = InstalledTool & {
   keyProfile?: { fields: import("./cli-key-profiles.ts").KeyField[] } | null; keySaved?: boolean;
   registered: boolean; leaderEligible: boolean; tested: boolean; leaderLabel: "Tested" | "Not tested yet"; connection: "unknown" | "verified" | "failed";

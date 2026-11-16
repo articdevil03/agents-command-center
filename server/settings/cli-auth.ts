@@ -1,3 +1,4 @@
+import { managedCli } from "./opencode/paths.ts";
 import { stripVTControlCharacters } from "node:util";
 import { CLI_CATALOG } from "./cli-catalog.ts";
 import { catalogTool } from "./cli-catalog-validation.ts";
@@ -7,7 +8,7 @@ import type { CliId, CliResult, RunCli, SettingsState } from "./types.ts";
 
 // No documented read-only auth probe exists in the catalog for the other tools.
 // Opening their login window never manufactures a signed-in result.
-export async function detectCatalogTool(id: string, state: SettingsState, run: RunCli): Promise<void> {
+export async function detectCatalogTool(id: string, state: SettingsState, run: RunCli, env: NodeJS.ProcessEnv = process.env): Promise<void> {
   const entry = catalogTool(id), profile = entry.detection!;
   const result = await run(profile.program, profile.args, { timeoutMs: CLI_TIMEOUT_MS, ...(id === "opencode" ? { env: { OPENCODE_DISABLE_AUTOUPDATE: "1" } } : {}) });
   const version = result.code === 0 ? parseVersion(result.stdout || result.stderr) : null;
@@ -21,8 +22,9 @@ export async function detectCatalogTool(id: string, state: SettingsState, run: R
     signedIn = knownAuthStatus(id as CliId, result);
     if (id === "opencode") credentialSource = openCodeCredentialSource(result);
   }
+  const managedInstall = (id === "opencode" || id === "copilot") && managedCli(env, id) !== null;
   const facts = { installed, version, signedIn, supportedVersion, ...(id === "opencode" ? { credentialSource } : {}) };
-  Object.assign(state.catalogTools[id], facts);
+  Object.assign(state.catalogTools[id], facts, { managedInstall });
   if (Object.hasOwn(state.tools, id)) Object.assign(state.tools[id as CliId], facts);
 }
 
@@ -35,8 +37,8 @@ export function openCodeCredentialSource(result: CliResult): import("./types.ts"
   return count === "0" ? "none" : "unknown";
 }
 
-export async function refreshCatalog(state: SettingsState, run: RunCli): Promise<void> {
-  await Promise.all(CLI_CATALOG.filter((entry) => entry.recipe).map((entry) => detectCatalogTool(entry.id, state, run)));
+export async function refreshCatalog(state: SettingsState, run: RunCli, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  await Promise.all(CLI_CATALOG.filter((entry) => entry.recipe).map((entry) => detectCatalogTool(entry.id, state, run, env)));
 }
 
 

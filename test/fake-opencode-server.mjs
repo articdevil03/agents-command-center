@@ -53,7 +53,9 @@ const server = createServer(async (req, res) => {
     // Dies mid-request without answering it: the event stream ends first (the leader sees the death), the process goes later.
     if (process.env.FAKE_OPENCODE_PATCH_EXITS === "1") { for (const res of streams) res.end(); await sleep(300); process.exit(1); }
     if (process.env.FAKE_OPENCODE_PATCH_DELAY_MS) await sleep(Number(process.env.FAKE_OPENCODE_PATCH_DELAY_MS));
+    if (process.env.FAKE_OPENCODE_PATCH_FAILS === "1") { log({ patchFailed: true }); return json(res, 500, { message: "patch refused by fake" }); }
     rules = rules.concat(body?.permission ?? []);
+    log({ patchApplied: true });
     return json(res, 200, { id: "ses_fake1" });
   }
   if (url.pathname === "/config/providers" && process.env.FAKE_OPENCODE_PROVIDERS_DELAY_MS) await sleep(Number(process.env.FAKE_OPENCODE_PROVIDERS_DELAY_MS));

@@ -146,7 +146,7 @@ export class SettingsService {
     this.state.vault.status = checkVaultStatus(this.state.vault.path);
     this.refreshProjectInstructions(folder);
     this.refreshLocalSkills();
-    await Promise.all([this.models.refresh(), refreshCatalog(this.state, this.run), ...CLI_IDS.map((cli) => this.refreshCliInventory(cli))]);
+    await Promise.all([this.models.refresh(), refreshCatalog(this.state, this.run, this.env), ...CLI_IDS.map((cli) => this.refreshCliInventory(cli))]);
     if (!this.login.busy) {
       const gh = await this.run("gh", ["auth", "status", "--active", "--hostname", "github.com"], { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true })
         .catch(() => ({ code: -1, stdout: "", stderr: "" }));
@@ -177,6 +177,7 @@ export class SettingsService {
     return this.installer.install(typeof cliOrMessage === "string" ? { type: "installCli", cli: cliOrMessage, requestId, confirm } : cliOrMessage);
   }
   cancelCliInstall(message: unknown): Promise<void> { return this.installer.cancel(message); }
+  removeCliInstall(message: unknown, inUse: () => boolean): Promise<void> { return this.installer.remove(message, inUse); }
 
   loginCli(cli: string, requestId: string, _folder: string | null): Promise<void> {
     return this.login.start({ type: "cliLogin", cli, requestId });
@@ -318,7 +319,7 @@ export class SettingsService {
 
   recordFailure(action: string, cli: unknown, tabId: unknown, requestId: string, message: string): void {
     if (!isSafeRequestId(requestId)) return;
-    if (["installCli", "cancelCliInstall", "cliLogin", "replaceCliLogin", "submitCliLoginKey", "getCliLoginState", "openCliLogin", "submitCliLoginCode", "cancelCliLogin", "ghLogin"].includes(action)) return; // Installer owns its canonical state, including a retained cleanup lock.
+    if (["installCli", "cancelCliInstall", "removeCliInstall", "cliLogin", "replaceCliLogin", "submitCliLoginKey", "getCliLoginState", "openCliLogin", "submitCliLoginCode", "cancelCliLogin", "ghLogin"].includes(action)) return; // Installer owns its canonical state, including a retained cleanup lock.
     const target: { action?: ActionState } | null = action === "installCli" || action === "cliLogin"
       ? CLI_IDS.includes(cli as CliId) ? this.state.tools[cli as CliId] : null
       : action === "mcpAdd" || action === "mcpRemove" || action === "pluginInstall" || action === "pluginUninstall"
