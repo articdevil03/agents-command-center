@@ -35,7 +35,7 @@ Command Center is local mission control for the AI coding tools you already use.
 
 Download `Command Center Setup <version>.exe` when the owner publishes a release. It is built with `npm run dist:installer`. The installer is unsigned, so Windows SmartScreen may show "Windows protected your PC". Choose **More info**, then **Run anyway** if you trust the download. SmartScreen appearance on another PC: **NOT VERIFIED**.
 
-No Node, npm, git or terminal is needed to install Command Center. It installs for your Windows user, without admin rights, under `%LOCALAPPDATA%\Programs\command-center`. Uninstalling never deletes your data in `%APPDATA%\command-center`.
+No Node, npm, git or terminal is needed to install Command Center. It installs for your Windows user, without admin rights, under `%LOCALAPPDATA%\Programs\command-center`. Uninstalling never deletes your data in `%APPDATA%\command-center`; it does remove the AI tools Command Center installed itself, in `%LOCALAPPDATA%\Command Center\tools`.
 
 To work with agents, at least one of Claude Code, Codex or OpenCode must be installed and signed in. On first open, setup shows **Welcome**, **Folder**, **AI tool**, then **Ready**. The wizard checks your AI tools and explains what to install or sign in to.
 

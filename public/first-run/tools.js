@@ -34,6 +34,8 @@
       if (!legacy) return facts;
       return { ...(facts ?? {}), installed: legacy.installed ?? facts?.installed ?? null, signedIn: legacy.signedIn ?? facts?.signedIn ?? null, version: legacy.version ?? facts?.version ?? null };
     }
+    // An OpenCode whose version was read and is not 1 needs OpenCode 1; one whose version could not be read says that instead.
+    const unsupportedText = (tool) => tool?.supportedVersion === false ? "OpenCode 1 is needed" : "The OpenCode version could not be read";
     function statusOf(id) {
       const tool = toolOf(id);
       if (tool?.installed === false) return "missing";
@@ -69,7 +71,7 @@
       if (sign.state === "refused") return { text: sentence(sign.text || "Could not start sign-in"), bad: true };
       if (link?.status === "running") return { text: `Adding ${name}'s connection…` };
       if (link?.status === "failed" || link?.status === "unknown") return { text: sentence(link.status === "unknown" ? "The connection dropped before the server answered. Try again" : link.message), bad: true };
-      if (status === "unsupported") return { text: "OpenCode 1 is needed" };
+      if (status === "unsupported") return { text: unsupportedText(tool) };
       if (id === "opencode" && tool?.credentialSource === "environment") return { text: "A key is set outside Command Center. Its connection is not checked." };
       if (status === "ready") return { text: `Found on this computer, signed in${tool?.version ? ` · ${tool.version}` : ""}` };
       if (status === "untested") return { text: UNTESTED };
@@ -112,7 +114,7 @@
       const shown = current?.state === "stuck" || sign === "stuck" ? "stuck" : busy ? "installing" : sign === "running" || sign === "orphan" ? "signingin" : running(refreshKey) && status === "unknown" ? "checking" : status;
       const detail = detailOf(id, status, current), act = actionOf(id, status, current), name = nameOf(id);
       const spin = ["checking", "installing", "signingin"].includes(shown) ? '<i class="spin" aria-hidden="true"></i>' : "";
-      const chip = `<span class="frun-chip" data-state="${shown}">${spin}${shown === "unsupported" ? "OpenCode 1 is needed" : CHIP[shown]}</span>`;
+      const chip = `<span class="frun-chip" data-state="${shown}">${spin}${shown === "unsupported" ? unsupportedText(tool) : CHIP[shown]}</span>`;
       const bar = busy && current.state === "running" ? `<span class="frun-bar" role="progressbar" aria-label="${esc(detail.text)}"><i></i></span>` : "";
       const line = act.line ? `<small class="wrap frun-consent-line" id="frunWhy-${id}">${esc(act.line)}</small>` : "";
       // An installed tool without a managed sign-in says so in its own words and has no Sign in button; the slot holds login.js's panel.

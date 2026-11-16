@@ -97,6 +97,24 @@ export async function proveInstaller({ launch = false, once = false } = {}) {
   const running = ps(`@(Get-CimInstance Win32_Process | Where-Object { $_.Name -eq '${product}.exe' }).Count`);
   assert.equal(running, "0", "scratch app must not be running");
   const temp = mkdtempSync(join(tmpdir(), "cc-p29-install-"));
+  // The installer and uninstaller get their own LOCALAPPDATA, so the tools folder they remove is a scratch one, never the real one.
+  const scratchLocal = join(temp, "localappdata"); mkdirSync(scratchLocal);
+  const scratchEnv = { ...process.env, LOCALAPPDATA: scratchLocal };
+  const runScratch = (command, args) => run(command, args, { env: scratchEnv });
+  const appLocal = join(scratchLocal, "Command Center"), toolsDir = join(appLocal, "tools"), toolsLink = join(toolsDir, "linked"), outside = join(temp, "outside-target"), outsideLinked = join(temp, "outside-linked");
+  const seedTools = () => {
+    mkdirSync(join(toolsDir, "opencode"), { recursive: true }); writeFileSync(join(toolsDir, "opencode", "opencode.exe"), "tool");
+    writeFileSync(join(appLocal, "other.txt"), "not ours"); mkdirSync(outside); writeFileSync(join(outside, "canary.txt"), "keep");
+    symlinkSync(outside, toolsLink, "junction");
+  };
+  const toolsKept = (step) => { assert.ok(existsSync(join(toolsDir, "opencode", "opencode.exe")), `${step}: the installed tools were removed`); console.log(`PASS ${step}: installed tools kept`); };
+  const toolsRemoved = (step) => {
+    assert.equal(existsSync(toolsDir), false, `${step}: the tools folder is still there`);
+    assert.ok(existsSync(join(outside, "canary.txt")), `${step}: a link inside the tools folder was followed and its target emptied`);
+    assert.equal(readFileSync(join(outside, "canary.txt"), "utf8"), "keep", `${step}: a link inside the tools folder was followed`);
+    assert.equal(readFileSync(join(appLocal, "other.txt"), "utf8"), "not ours", `${step}: another file in the app folder was removed`);
+    console.log(`PASS ${step}: tools folder removed, link target and sibling file untouched`);
+  };
   const junction = join(temp, "junction"), junctionTarget = join(temp, "junction-target");
   let junctionCreated = false;
   let install = join(temp, "installed"), defaultOwned = false;
@@ -110,7 +128,7 @@ export async function proveInstaller({ launch = false, once = false } = {}) {
   };
   const installVersion = async (setup, useDefault = false) => {
     installed = true;
-    await run(setup, useDefault ? ["/S"] : ["/S", `/D=${install}`]);
+    await runScratch(setup, useDefault ? ["/S"] : ["/S", `/D=${install}`]);
     assert.ok(existsSync(join(install, product + ".exe")), "installed variant exe exists");
     assert.equal(registryKeys().length, 1, "one variant uninstall registry key");
     for (const link of shortcuts) assert.ok(existsSync(link), `installed shortcut exists: ${link}`);
@@ -137,7 +155,7 @@ export async function proveInstaller({ launch = false, once = false } = {}) {
     assert.ok(registration, `unexpected scratch uninstall command: ${command}`);
     const registered = registration[1];
     assert.equal(registered.toLowerCase(), file.toLowerCase(), "registered uninstaller belongs to owned install");
-    await run(registered, ["/S", ...(registration[2] ? [registration[2]] : [])]);
+    await runScratch(registered, ["/S", ...(registration[2] ? [registration[2]] : [])]);
     await waitUntil(() => !existsSync(install) && registryKeys().length === 0 && shortcuts.every((f) => !existsSync(f)), "variant uninstall left files, shortcuts or registry");
     installed = false;
   };
@@ -161,7 +179,7 @@ export async function proveInstaller({ launch = false, once = false } = {}) {
     mkdirSync(junctionTarget); symlinkSync(junctionTarget, junction, "junction"); junctionCreated = true;
     install = join(junction, "installed"); installed = true;
     let junctionExit = 0;
-    try { await run(setups[0], ["/S", `/D=${install}`]); }
+    try { await runScratch(setups[0], ["/S", `/D=${install}`]); }
     catch (error) { assert.match(error.message, /exit=3/); junctionExit = 3; }
     assert.equal(junctionExit, 3, "junction install exit code must be 3");
     assert.equal(manifest(junctionTarget).filter((entry) => entry.hash !== null).length, 0, "junction target must contain no files");
@@ -188,7 +206,7 @@ export async function proveInstaller({ launch = false, once = false } = {}) {
     // Never attempt APPDATA itself: a broken guard could affect unrelated applications.
     for (const target of [data, join(data, "empty")]) {
       let refused = false;
-      try { await run(setups[0], ["/S", `/D=${target}`]); } catch (e) { assert.match(e.message, /exit=3/); refused = true; }
+      try { await runScratch(setups[0], ["/S", `/D=${target}`]); } catch (e) { assert.match(e.message, /exit=3/); refused = true; }
       assert.ok(refused, `protected install directory accepted: ${target}`); compare("protected directory rejection");
     }
     install = defaultInstall; defaultOwned = true;
@@ -200,17 +218,26 @@ export async function proveInstaller({ launch = false, once = false } = {}) {
     await uninstall(); compare("spaced-path uninstall");
     install = join(temp, "installed");
     await installVersion(setups[0]); compare("install v1");
+    seedTools();
     if (launch) await launchInstalled(join(install, product + ".exe"), temp);
-    if (!once) { await installVersion(setups[1]); compare("upgrade v2"); }
-    await uninstall(); compare("uninstall default");
+    // An install over an existing one runs the old uninstaller the way the updater does (--updated, /KEEP_APP_DATA): the tools must survive it.
+    { const update = once ? "reinstall over v1" : "upgrade v2"; await installVersion(setups[once ? 0 : 1]); compare(update); toolsKept(update); }
+    await uninstall(); compare("uninstall default"); toolsRemoved("uninstall default");
     await installVersion(setups.at(-1)); compare("reinstall");
+    // A link in place of the tools folder is left alone: the folder stays and nothing behind it is touched.
+    mkdirSync(outsideLinked); writeFileSync(join(outsideLinked, "canary.txt"), "keep"); symlinkSync(outsideLinked, toolsDir, "junction");
     let rejected = false;
     // _?= keeps this rejection check in the process we await. Without it NSIS's
     // copy-to-temp bootstrap returns 0 before the real uninstaller rejects the switch.
-    try { await run(join(install, `Uninstall ${product}.exe`), ["/S", "--delete-app-data", `_?=${install}`]); }
+    try { await runScratch(join(install, `Uninstall ${product}.exe`), ["/S", "--delete-app-data", `_?=${install}`]); }
     catch (e) { assert.match(e.message, /exit=2/); rejected = true; }
     assert.ok(rejected, "--delete-app-data was not rejected"); compare("uninstall destructive switch rejected");
     await uninstall(); compare("final uninstall");
+    assert.ok(existsSync(join(outsideLinked, "canary.txt")), "a linked tools folder was followed and its target emptied");
+    assert.equal(readFileSync(join(outsideLinked, "canary.txt"), "utf8"), "keep", "a linked tools folder was followed");
+    const stillLinked = (() => { try { return lstatSync(toolsDir).isSymbolicLink(); } catch { return false; } })();
+    assert.ok(stillLinked, "a linked tools folder was removed instead of being left alone"); rmdirSync(toolsDir);
+    console.log("PASS final uninstall: a link in place of the tools folder was left alone");
   } catch (e) { failure = e; }
   finally {
     try {
@@ -226,6 +253,8 @@ export async function proveInstaller({ launch = false, once = false } = {}) {
       assert.deepEqual(registryKeys(), [], "variant registry cleanup");
       for (const link of shortcuts) assert.equal(existsSync(link), false, `variant shortcut remains: ${link}`);
       assert.equal(existsSync(install), false, "variant install folder remains");
+      // A link left in the scratch tools folder is removed as a link before the tree is, so the tree removal never reaches its target.
+      for (const link of [toolsLink, toolsDir]) { try { if (lstatSync(link).isSymbolicLink()) rmdirSync(link); } catch { /* no link */ } }
       removeOwnedTree(temp); console.log(`REMOVED owned build temp ${temp}; variant registry and shortcuts absent`);
     } catch (e) { failure = failure ? new AggregateError([failure, e], "lifecycle and cleanup failed") : e; }
   }

@@ -244,8 +244,12 @@ Install, progress, Cancel, Installed and Try again states with no shell instruct
 Copilot offers no manual installation button or setup-guide link.
 The obsolete Copilot prerequisites were removed: installation needs neither
 WinGet nor PowerShell. PowerShell 6+ is not consumed as catalog data and was removed.
-Uninstalling Command Center retains the managed Copilot folder, like the existing
-managed OpenCode installation; this pack adds no uninstaller deletion.
+Uninstalling Command Center removes `%LOCALAPPDATA%\Command Center\tools` (the managed
+OpenCode and Copilot installations); an update keeps it (the old uninstaller runs with
+`--updated` and `/KEEP_APP_DATA`). The folder is removed with `rd /s` through an
+environment variable, never `RMDir /r`, which follows a link inside the folder and
+empties its target. A link at the folder or its parent leaves it where it is. Copilot's own
+runtime folder `%LOCALAPPDATA%\copilot` is Copilot's and stays.
 
 NOT VERIFIED 2026-11-16: real release download, native execution on x64 or arm64,
 real sign-in and ACP sessions, vendor-created windows, and whether Copilot shell

@@ -82,6 +82,8 @@ test("launch.ts keyLaunch and fixed-task-tools.ts prepareConnection: a fixed wor
     assert.ok(fx.store.calls.includes("get:gemini"), "the credential store was read");
     await wait(() => existsSync(fx.seenFile), "the stub program never recorded its environment");
     await wait(() => !isRunning(result.runId), "the stub run did not end");
+    // The run is reported over (journal and launch-safety writes) after it stops being "running": wait for that last write, or it lands after the folder is removed.
+    await wait(() => !api.state.launchSafety.live.some((row) => row.runId === result.runId), "the run was never reported over");
     assert.equal(readFileSync(fx.seenFile, "utf8").trim(), KEY, "the worker's spawn env carries the saved key");
   } finally { fx.close(); }
 });

@@ -14,10 +14,19 @@ import { cliSkipFolders, isInsideFolder, resolveCliOrThrow, resolveCliPath } fro
 import { CLI_CATALOG } from "./cli-catalog.ts";
 import { INSTALL_OUTPUT_CAP } from "./cli-installers.ts";
 
-// Installers receive only OS/runtime locations, never app or provider credentials.
+// Installers receive only OS/runtime locations (plus a plain proxy address and Kimi's Git Bash path), never app or provider credentials.
 export function installEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const allowed = /^(?:path|pathext|systemroot|windir|comspec|temp|tmp|userprofile|home|appdata|localappdata|programfiles|programfiles\(x86\)|programdata|homedrive|homepath|processor_architecture|number_of_processors)$/i;
-  return Object.fromEntries(Object.entries(env).filter(([key]) => allowed.test(key)));
+  return Object.fromEntries(Object.entries(env).filter(([key, value]) => allowed.test(key) || networkSetting(key, value) || gitBashSetting(key, value)));
+}
+// A proxied PC needs its proxy to reach a vendor's download host. Only an address with no sign-in details in it goes on (user:password@host is a credential).
+function networkSetting(key: string, value: string | undefined): boolean {
+  if (/^no_proxy$/i.test(key)) return typeof value === "string";
+  return /^(?:https?|all)_proxy$/i.test(key) && typeof value === "string" && /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[a-z0-9._-]+|\[[0-9a-f:.]+\])(?::\d{1,5})?\/?$/i.test(value);
+}
+// Kimi's own setting for a Git Bash in a custom place: a path to a bash.exe, nothing else.
+function gitBashSetting(key: string, value: string | undefined): boolean {
+  return key === "KIMI_CODE_GIT_BASH_PATH" && typeof value === "string" && /(?:^|[\\/])bash\.exe$/i.test(value);
 }
 export function posixCli(name: string, env: NodeJS.ProcessEnv, includeProjects = false): string | null {
   for (const dir of (env.PATH ?? "").split(":")) {

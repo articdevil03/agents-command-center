@@ -125,6 +125,10 @@ test("P29 O3 Settings surface closure, terminal static reasons and unknown text,
       assert.equal(await ev(`document.querySelector(${J(`${PANEL} .cli-login-status`)}).textContent`), expected, `${reason}: static words`);
       assert.doesNotMatch(await text(ev), /\bpaid\b|\bfree\b|pricing|subscription|\$\d/i);
     }
+    // A version the app could not read is not "OpenCode 1 is needed" (the launch is still allowed); the card says what is true.
+    await state(ev, seed, { installed: true, signedIn: true, supportedVersion: null, version: null, action: shared(request.requestId, "failed", null, "keyFailed") });
+    assert.match(await text(ev), /The OpenCode version could not be read/);
+    assert.doesNotMatch(await text(ev), /OpenCode 1 is needed/);
     await state(ev, seed, { installed: true, signedIn: true, supportedVersion: false, version: "2.0.0", action: shared(request.requestId, "failed", null, "keyFailed") });
     assert.match(await text(ev), /OpenCode 1 is needed/);
     assert.doesNotMatch(await text(ev), /Ready/);

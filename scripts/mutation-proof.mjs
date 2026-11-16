@@ -1,3 +1,4 @@
+import { pack37SmallFixesMutations } from "./mutations/pack37-small-fixes.mjs";
 import { pack36ModeLockMutations } from "./mutations/pack36-mode-lock.mjs";
 import { pack35MimoMutations } from "./mutations/pack35-mimo.mjs";
 import { pack35RemoveMutations, pack35DefaultMutations } from "./mutations/pack35-remove.mjs";
@@ -118,6 +119,7 @@ export const mutations = [
   ...pack32KeyMutations,
   ...pack32UiMutations,
   ...pack30OpenCodeBypassMutations,
+  ...pack37SmallFixesMutations,
   ...pack36ModeLockMutations,
   ...pack30SettingsSpacingMutations,
   ...electronMutations,

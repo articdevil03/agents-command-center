@@ -169,28 +169,27 @@ test("config.ts: a partial package seed completes the workspaces (example projec
 // ---- call-site guard: runner.ts's logsDir must route through the SAME
 // resolveDataRoot, not a second, independent mechanism ----------------------
 
-const runnerPackagedCopy = tempRoot(["server", "config"]);
-const runnerPackagedUserDir = scratchDir();
-const runnerPackaged = await withDataDir(runnerPackagedUserDir, () => importAsPackaged(join(runnerPackagedCopy, "server/runner.ts")));
-
-test("runner.ts: a packaged data root actually drives logsDir", () => {
-  assert.equal(runnerPackaged.logsDir, join(runnerPackagedUserDir, "logs"));
+// Each import runs inside its own test (not as top-level await): a top-level import can finish after the file-level cleanup has already
+// removed the copy, and runner.ts then recreates its logs folder behind the cleanup and leaves a stray folder in the repo or TEMP.
+test("runner.ts: a packaged data root actually drives logsDir", async () => {
+  const copy = tempRoot(["server", "config"]);
+  const userDir = scratchDir();
+  const runnerPackaged = await withDataDir(userDir, () => importAsPackaged(join(copy, "server/runner.ts")));
+  assert.equal(runnerPackaged.logsDir, join(userDir, "logs"));
 });
 
-const runnerUnderTestCopy = tempRoot(["server", "config"]);
-const runnerUnderTestDecoyDir = scratchDir();
-const runnerUnderTest = await withDataDir(runnerUnderTestDecoyDir, () => import(pathToFileURL(join(runnerUnderTestCopy, "server/runner.ts")).href));
-
-test("runner.ts: P1 -- under the real test runner, a set CC_DATA_DIR is ignored; logsDir stays under the repo/temp copy, never the decoy", () => {
-  assert.equal(runnerUnderTest.logsDir, join(runnerUnderTestCopy, "logs"));
-  assert.notEqual(runnerUnderTest.logsDir, join(runnerUnderTestDecoyDir, "logs"));
+test("runner.ts: P1 -- under the real test runner, a set CC_DATA_DIR is ignored; logsDir stays under the repo/temp copy, never the decoy", async () => {
+  const copy = tempRoot(["server", "config"]);
+  const decoyDir = scratchDir();
+  const runnerUnderTest = await withDataDir(decoyDir, () => import(pathToFileURL(join(copy, "server/runner.ts")).href));
+  assert.equal(runnerUnderTest.logsDir, join(copy, "logs"));
+  assert.notEqual(runnerUnderTest.logsDir, join(decoyDir, "logs"));
 });
 
-const runnerSourceCopy = tempRoot(["server", "config"]);
-const runnerSource = await import(pathToFileURL(join(runnerSourceCopy, "server/runner.ts")).href);
-
-test("runner.ts: running from source (no CC_DATA_DIR) keeps logs under the repo copy, unchanged", () => {
-  assert.equal(runnerSource.logsDir, join(runnerSourceCopy, "logs"));
+test("runner.ts: running from source (no CC_DATA_DIR) keeps logs under the repo copy, unchanged", async () => {
+  const copy = tempRoot(["server", "config"]);
+  const runnerSource = await import(pathToFileURL(join(copy, "server/runner.ts")).href);
+  assert.equal(runnerSource.logsDir, join(copy, "logs"));
 });
 
 // Both decisions are pure. In particular, testing the false result performs no IO.

@@ -89,7 +89,9 @@ setInterval(()=>{},1000);`);
       if (mode === "shutdown") { service.login.close(); assert.equal(await service.login.drain(), true); }
       await result;
       await until(() => gone(descendant), `descendant ${descendant} ended on ${mode}`, 5000);
-      assert.ok(rootPid && gone(rootPid), `owned root ${rootPid} gone`);
+      // The root has exited by now, but Windows can still list its pid for a moment under load: wait for it like the descendant.
+      assert.ok(rootPid, "owned root pid");
+      await until(() => gone(rootPid!), `owned root ${rootPid} gone`, 5000);
       assert.equal(service.login.busy, false);
       console.log(`owned tree ${mode}: root ${rootPid}, descendant ${descendant}, confirmed gone`);
     } finally { assert.equal(await service.login.drain(), true); fx.close(); }

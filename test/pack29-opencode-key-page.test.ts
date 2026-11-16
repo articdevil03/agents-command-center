@@ -160,6 +160,9 @@ test("P29 O3 OpenCode missing, installation phases, version 2, environment and c
       assert.match(await shown(ev), /Installing/); assert.ok((await shown(ev)).includes(message));
     }
     await deliver(ev, { type: "actionResult", action: "installCli", requestId: install.requestId });
+    // A version that could not be read is said as that, not as "OpenCode 1 is needed".
+    await showFirstRun(ev, seed, TOOLS, facts({ signedIn: true, supportedVersion: null, version: null, action: null }));
+    assert.match(await shown(ev), /The OpenCode version could not be read/); assert.doesNotMatch(await shown(ev), /OpenCode 1 is needed/);
     await showFirstRun(ev, seed, TOOLS, facts({ signedIn: true, supportedVersion: false, version: "2.0.0", action: null }));
     assert.match(await shown(ev), /OpenCode 1 is needed/); assert.doesNotMatch(await shown(ev), /Ready/);
     mark = await sentCount(ev);

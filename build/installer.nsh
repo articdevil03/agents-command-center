@@ -98,3 +98,65 @@
   Pop $R1
   Pop $R0
 !macroend
+
+!macro customUnInstall
+  ; A real uninstall removes the AI tools Command Center installed itself (LOCALAPPDATA\Command Center\tools). An update runs
+  ; this uninstaller with --updated and /KEEP_APP_DATA and keeps them. Saved data (APPDATA) is never touched here.
+  Push $R0
+  Push $R1
+  Push $R2
+  Push $R3
+  Push $R4
+  ; $R3 is 1 when the updater is running this uninstaller (the tools stay).
+  StrCpy $R3 0
+  ${GetParameters} $R0
+  ClearErrors
+  ${GetOptions} $R0 "--updated" $R1
+  ${IfNot} ${Errors}
+    StrCpy $R3 1
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $R0 "/KEEP_APP_DATA" $R1
+  ${IfNot} ${Errors}
+    StrCpy $R3 1
+  ${EndIf}
+  ClearErrors
+  ${If} $R3 == 0
+    ReadEnvStr $R0 LOCALAPPDATA
+    ; An absolute drive path only; anything else is left alone.
+    StrCpy $R1 $R0 2 1
+    ${If} $R1 == ":\"
+      StrCpy $R1 "$R0\Command Center"
+      StrCpy $R2 "$R0\Command Center\tools"
+      ${If} ${FileExists} "$R2\*.*"
+        ; A link at either level is never followed: the folder is left where it is.
+        StrCpy $R4 0
+        System::Call 'kernel32::GetFileAttributesW(w R1) i.R0'
+        IntOp $R0 $R0 & 0x400
+        ${If} $R0 != 0
+          StrCpy $R4 1
+        ${EndIf}
+        System::Call 'kernel32::GetFileAttributesW(w R2) i.R0'
+        IntOp $R0 $R0 & 0x400
+        ${If} $R0 != 0
+          StrCpy $R4 1
+        ${EndIf}
+        ${If} $R4 == 0
+          ; Not RMDir /r: it follows a link inside the folder and empties the link's target. rd /s removes the link itself.
+          ; The path goes through an environment variable so no character of it is read as a command.
+          System::Call 'kernel32::SetEnvironmentVariableW(w "CC_UNINSTALL_TOOLS", w R2)'
+          nsExec::Exec '"$SYSDIR\cmd.exe" /d /c rd /s /q "%CC_UNINSTALL_TOOLS%"'
+          Pop $R0
+          ; Only when it is now empty: anything else in the folder is not ours.
+          RMDir "$R1"
+        ${EndIf}
+      ${EndIf}
+    ${EndIf}
+  ${EndIf}
+  ClearErrors
+  Pop $R4
+  Pop $R3
+  Pop $R2
+  Pop $R1
+  Pop $R0
+!macroend

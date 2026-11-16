@@ -25,6 +25,8 @@ function exampleUntouched(project: typeof workspaces.projects[number]): boolean 
   try { return chatStore.snapshotOrEmpty("example-development").messages.length === 0; }
   catch { return false; }
 }
+// The tool is named the way the wizard shows it (an added tool by its own name), never by its internal id such as "acp:qwen".
+export function notReadyMessage(cli: string, registered?: { name: string }): string { return `${registered?.name ?? cli} is not ready: no supported leader model`; }
 export function completeFirstRun(ws: WebSocket, message: any): void {
   assertFirstRunPending();
   const cli = message.cli;
@@ -54,7 +56,7 @@ export function completeFirstRun(ws: WebSocket, message: any): void {
   }
   const catalogue = fixedCatalogue();
   const leader = autoFillPreferences({}, { ...catalogue, clis: catalogue.clis.filter((item) => item.id === cli) }, true).leader.assignment;
-  if (!leader || leader.cli !== cli) throw new Error(`${cli} is not ready: no supported leader model`);
+  if (!leader || leader.cli !== cli) throw new Error(notReadyMessage(cli, registered));
   createProject(ws, { type: "addProject", requestId: message.requestId, id, name, folder,
     fixedCrewVersion: 1, crewChoices: { leader }, autoAssign: true, projectOnly: message.projectOnly }, {
     prepareDraft(draft) { draft.projects = draft.projects.filter((project) => !exampleUntouched(project)); },

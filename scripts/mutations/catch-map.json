@@ -573,5 +573,13 @@
   "p35-remove-install-provenance": "test/pack35-remove.test.ts",
   "p35-remove-owner-mapping": "test/pack35-remove.test.ts",
   "p35-remove-saved-signature": "test/pack35-remove.test.ts",
-  "p35-mimo-reserved-model": "test/pack35-mimo.test.ts"
+  "p35-mimo-reserved-model": "test/pack35-mimo.test.ts",
+  "p37-env-proxy-host": "test/pack37-small-fixes.test.ts",
+  "p37-env-kimi-bash": "test/pack37-small-fixes.test.ts",
+  "p37-not-ready-name": "test/pack37-small-fixes.test.ts",
+  "p37-settings-unreadable": "test/pack29-opencode-key-settings.test.ts",
+  "p37-wizard-unreadable": "test/pack29-opencode-key-page.test.ts",
+  "p37-uninstall-keep-on-update": "test/pack29-packaging.test.ts",
+  "p37-uninstall-link-guard": "test/pack29-packaging.test.ts",
+  "p37-uninstall-follows-links": "test/pack29-packaging.test.ts"
 }
