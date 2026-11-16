@@ -2,6 +2,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 export function query({ prompt, options }: any) {
+  if (process.env.FAKE_VAULT_CAPTURE === "1" && process.env.FAKE_LEADER_LOG) appendFileSync(process.env.FAKE_LEADER_LOG, JSON.stringify({ cli: "claude", options: { cwd: options.cwd, permissionMode: options.permissionMode, ...(options.additionalDirectories ? { additionalDirectories: options.additionalDirectories } : {}) } }) + "\n");
   const output: any[] = []; let wake: (() => void) | undefined; let stopped = false;
   let mode = options.permissionMode;
   const controller = new AbortController();
@@ -85,6 +86,10 @@ export function query({ prompt, options }: any) {
           : await options.hooks?.PreToolUse?.[0]?.hooks[0]({ hook_event_name: "PreToolUse", tool_name: request.tool, tool_input: request.input, tool_use_id: "measured-id", permission_mode: request.permissionMode ?? mode }, "measured-id", { signal: controller.signal }) ?? {};
         if (request.handover) await new Promise((resolve) => setTimeout(resolve, Number(process.env.CC_TEST_SAVE_WRITE_DELAY_MS ?? 0)));
         if (request.handover && result?.hookSpecificOutput?.permissionDecision !== "deny") { mkdirSync(dirname(request.handover), { recursive: true }); writeFileSync(request.handover, "handover"); }
+        if (request.handover && result?.hookSpecificOutput?.permissionDecision !== "deny" && process.env.FAKE_CLAUDE_VAULT_WRITE === "1") {
+          const vaultCopy = userText.match(/Also write the same handover as a note at (.+)\. Create folders/)?.[1];
+          if (vaultCopy) { mkdirSync(dirname(vaultCopy), { recursive: true }); writeFileSync(vaultCopy, "---\ntype: command-center-handover\n---\nhandover"); }
+        }
         process.send?.({ type: "hookResult", tool: request.tool, result });
       }));
       await play(requests.filter(isStep));

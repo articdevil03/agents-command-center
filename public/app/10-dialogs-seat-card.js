@@ -40,9 +40,10 @@
   // reaches it from onMessage (04-messages.js); it holds the sign-in capability in its own memory only.
   const cliLoginUi = window.CC_CLI_LOGIN?.create?.({ send: (message) => send(message), newRequestId, sendSettingsAction, settingsActionId, actionStateFor, showToast,
     socket: () => socket, get state() { return serverState; } }) ?? null;
+  const cliKeyUi = window.CC_KEY_PANEL?.create?.({ sendSettingsAction, actionStateFor, get state() { return serverState; } }) ?? null;
   // The first-run screen (public/first-run/view.js) reaches the page through these names; null in a page without it.
   const firstRunUi = window.CC_FIRST_RUN?.init?.({ esc, logo, cliLabel, sendSettingsAction, settingsActionId, actionStateFor, retireAction, showToast, refreshWaitMs: REFRESH_WAIT_MS, cliLogin: cliLoginUi,
-    pickFolder: (callback) => pickFolder(callback), confirmAction: (...args) => confirmAction(...args), connected: () => connState === "on", get state() { return serverState; } }) ?? null;
+    cliKeys: cliKeyUi, pickFolder: (callback) => pickFolder(callback), confirmAction: (...args) => confirmAction(...args), connected: () => connState === "on", get state() { return serverState; } }) ?? null;
   function ensureTicker() {
     if (tickerTimer) return;
     if (!needsTicker()) return;

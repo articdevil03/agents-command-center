@@ -9,7 +9,7 @@ import { broadcast, sendError, stateMessage } from "../broadcast.ts";
 import { stopLeaderSession } from "../leader-session.ts";
 import type { MessageHandler } from "./types.ts";
 import {
-  acpClis, activeLeaderTurns, describeError, leaders, pendingHandoverReads, selectedTabId, setAcpClis, settingsService, workspaces,
+  acpClis, activeLeaderTurns, describeError, leaders, pendingHandoverReads, selectedTabId, setAcpClis, settingsService, workspaces, vaultCopyAttention, vaultSaveRetries,
 } from "../state.ts";
 import { acpLeaderOf, hasAcpLeader, leaderSeatOf, tabLocation } from "../tabs.ts";
 import { readCliId, requiredRequestId, runAsyncAction } from "../workspace.ts";
@@ -39,12 +39,15 @@ function onCancelCliInstall(ws: WebSocket, message: any): void {
 }
 function onGhLogin(ws: WebSocket, message: any): void {
   const requestId = requiredRequestId(message.requestId);
-  runAsyncAction(ws, message.type, requestId, () => settingsService.loginGitHub(requestId));
+  runAsyncAction(ws, message.type, requestId, () => settingsService.loginGitHub(requestId, (event) => { if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(event)); }));
   return;
 }
 function onSetNotesVault(ws: WebSocket, message: any): void {
   const requestId = requiredRequestId(message.requestId);
-  runAsyncAction(ws, message.type, requestId, () => settingsService.setNotesVault(requestId, message.path));
+  runAsyncAction(ws, message.type, requestId, async () => {
+    await settingsService.setNotesVault(requestId, message.path);
+    if (!settingsService.state.vault.path) { vaultCopyAttention.clear(); vaultSaveRetries.clear(); }
+  });
   return;
 }
 function onSetDefaultProjectFolder(ws: WebSocket, message: any): void {

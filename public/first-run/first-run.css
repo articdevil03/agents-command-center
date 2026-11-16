@@ -183,3 +183,14 @@ body.first-run :is(#ptabs,#pmore,#addProj){visibility:hidden}
 .frun-link:disabled{opacity:.5}
 @media (max-height:720px),(max-width:1040px){.frun-stage{padding:20px 32px 14px}.frun-step{gap:12px}.frun-hero{gap:9px;margin-bottom:4px}.frun-hero .mark{width:44px;height:44px}.frun-parts li{padding:8px 0}}
 @media (prefers-reduced-motion:reduce){.frun-opt,.frun-more svg{transition:none}.frun-bar i,.cli-login-bar i{animation:none;width:100%;opacity:.45}}
+/* Shared catalog key fields in setup and Settings. */
+[data-cli-key-slot] { grid-column: 1 / -1; min-width: 0; }
+.cli-key-panel { padding: 0 0 8px; }
+.cli-key-status { color: var(--muted); font-size: 12px; margin: 4px 0 8px; max-width: 65ch; }
+.cli-key-status:empty { display: none; }
+.cli-key-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cli-key-fields { display: grid; gap: 12px; max-width: 440px; margin: 12px 0; }
+.cli-key-fields[hidden] { display: none; }
+.cli-key-fields .field { display: grid; gap: 6px; min-width: 0; }
+.cli-key-fields .settings-input { width: 100%; min-width: 0; box-sizing: border-box; }
+.cli-key-fields .btn { justify-self: start; }

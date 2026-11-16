@@ -9,9 +9,9 @@ import { setProcessTreeForTests } from "../server/leader-common/process-tree.ts"
 import { fixture, injectedRunner } from "./pack29-cli-install.setup.ts";
 
 test("every real catalog recipe dispatches exact fixed argv through production runner", async () => {
-  const entries = CLI_CATALOG.filter((entry) => entry.recipe && entry.id !== "opencode");
+  const entries = CLI_CATALOG.filter((entry) => entry.recipe && entry.id !== "opencode" && entry.id !== "copilot");
   assert.ok(entries.length > 0, "catalog recipe list must be found");
-  assert.equal(entries.length, 10);
+  assert.equal(entries.length, 9);
   for (const entry of entries) {
     console.log(`RECIPE ${entry.id} ${entry.recipe!.kind}`);
     const fx = fixture(), calls: any[] = [], errors: unknown[] = [];
@@ -97,10 +97,11 @@ test("missing prerequisites do not install Node, Git, WinGet or PowerShell", asy
   const fx = fixture();
   try {
     const noRun = async () => assert.fail("no process expected");
-    for (const id of ["kimi", "copilot"]) {
-      await assert.rejects(checkInstallPrerequisites(CLI_CATALOG.find((entry) => entry.id === id)!, noRun, fx.env), id === "kimi" ? /Git Bash/ : /WinGet/);
+    for (const id of ["kimi"]) {
+      await assert.rejects(checkInstallPrerequisites(CLI_CATALOG.find((entry) => entry.id === id)!, noRun, fx.env), /Git Bash/);
     }
     await assert.rejects(runInstallRecipe(CLI_CATALOG.find((entry) => entry.id === "gemini")!.recipe!, noRun, fx.env, new AbortController().signal, async () => {}), /Node.js/);
+    await assert.doesNotReject(checkInstallPrerequisites(CLI_CATALOG.find((entry) => entry.id === "copilot")!, noRun, fx.env));
     fx.write("git.exe");
     await assert.rejects(checkInstallPrerequisites(CLI_CATALOG.find((entry) => entry.id === "kimi")!, noRun, fx.env), /Git Bash/, "git.exe is insufficient");
   } finally { fx.close(); }

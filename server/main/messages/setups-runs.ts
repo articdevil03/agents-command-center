@@ -3,14 +3,16 @@ import { isSafeSeatId } from "../../config.ts";
 import { isRunning, stopAllRunning } from "../../runner.ts";
 import { stopAll as stopProcessAll } from "../../process.ts";
 import { denyRunApprovals } from "../approvals.ts";
-import { broadcast, stateMessage } from "../broadcast.ts";
+import { broadcast, sendError, stateMessage } from "../broadcast.ts";
+import { chatRequestErrorDetails } from "../../chat-store.ts";
 import { launchWorker, revokeRunBridge } from "../launch.ts";
 import { folderBusyMessage, pendingFor, refuseIfFolderBusy } from "../launch-gates.ts";
 import { persistLaunchSafety } from "../launch-safety.ts";
 import { leadersAndWaitingTurns, stopLeaderSession } from "../leader-session.ts";
 import type { MessageHandler } from "./types.ts";
 import { applyRunKill, stopRunsForSeat } from "../runs.ts";
-import { blockedSeatKeys, describeError, runContexts, tabs } from "../state.ts";
+import { acpClis, settingsService, blockedSeatKeys, describeError, runContexts, tabs } from "../state.ts";
+import { acpKindOf } from "../../config-acp.ts";
 import { crewDefinition, tabLocation } from "../tabs.ts";
 import { isFixedTab } from "../../fixed-crew/runtime.ts";
 import { requestFixedRun } from "../fixed-tasks.ts";
@@ -27,9 +29,18 @@ function onRun(ws: WebSocket, message: any): void {
   const runLocation = tabLocation(message.tabId);
   if (runLocation && isFixedTab(runLocation.tab)) return requestFixedRun(ws, message);
   if (runLocation && typeof message.prompt === "string" && message.prompt.trim() && crewDefinition(runLocation.tab, message.slot)?.isLeader === false && refuseIfFolderBusy(ws, message, "run", runLocation.tab.folder)) return;
-  const result = launchWorker(message.tabId, message.slot, message.prompt, "client");
-  if (!result.ok) throw new Error(result.error);
-  ws.send(JSON.stringify({ type: "runAccepted", tabId: message.tabId, runId: result.runId })); return;
+  const member = runLocation && crewDefinition(runLocation.tab, message.slot);
+  const keyConnection = acpClis.find((cli) => acpKindOf(cli) === member?.cli);
+  const launch = (): void => {
+    const result = launchWorker(message.tabId, message.slot, message.prompt, "client");
+    if (!result.ok) throw new Error(result.error);
+    ws.send(JSON.stringify({ type: "runAccepted", tabId: message.tabId, runId: result.runId }));
+  };
+  if (!keyConnection) { launch(); return; }
+  // The dispatcher only catches synchronous throws, so every error after the key read is reported here with the request details.
+  void settingsService.cliKeys.prepareConnection(keyConnection).then(launch).catch((err) => {
+    try { sendError(ws, describeError(err), chatRequestErrorDetails(message)); } catch { /* the page left before the answer */ }
+  });
 }
 function onKillRun(ws: WebSocket, message: any): void {
   const result = applyRunKill(message.runId); if (!result.ok) throw new Error(result.error);

@@ -175,7 +175,7 @@ test("server shutdown closes login admission synchronously, waits for login drai
     const loginDrain = new Promise<boolean>((resolve) => { release = resolve; });
     const exits: number[] = [], noop = () => {};
     const shutdown = runInNewContext(`(() => { ${stripTypeScriptTypes(source.slice(first, last))}; return shutdown; })()`, {
-      settingsService: { models: { close: noop, drain: async () => {} }, installer: { close: noop, drain: async () => true }, login: { close: () => { closed++; }, drain: () => { drains++; return loginDrain; } } },
+      settingsService: { cliKeys: { close: () => {} }, models: { close: noop, drain: async () => {} }, installer: { close: noop, drain: async () => true }, login: { close: () => { closed++; }, drain: () => { drains++; return loginDrain; } } },
       fixedGitOperations: { close: noop, drain: async () => true }, closeWorkerAdmission: noop,
       console: { log: noop, error: noop }, folderActivity: { endAllOwn: noop, closeWatchers: noop }, leadersAndWaitingTurns: () => [],
       stopLeaderSession: noop, stopAllRunning: noop, drainWorkers: async () => true,

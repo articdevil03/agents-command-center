@@ -1,6 +1,6 @@
 import type { LeaderCallbacks } from "../leader-common.ts";
 
-export function createSecretStream(secrets: string[], cb: LeaderCallbacks) {
+export function createSecretStream(secrets: string[], cb: Pick<LeaderCallbacks, "onDelta">) {
   // Streamed text is redacted too (a command the leader runs can print its own environment). A secret can be split across two deltas,
   // so the last few characters wait for the next delta and are released when the turn ends.
   // Redaction always sees the text exactly as OpenCode sent it: a paragraph break between two parts is only a mark (an index into the held text, shown before that character)

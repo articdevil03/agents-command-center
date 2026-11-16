@@ -58,8 +58,7 @@ export async function checkInstallPrerequisites(entry: CatalogEntry, run: RunCli
     const pwsh = resolved("pwsh", env, "needsPowerShell");
     const version = await run(pwsh, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"], { timeoutMs: 8_000, cwd: windowsSystem32() });
     if (version.code !== 0 || !/^\s*(?:[6-9]|\d{2,})\s*$/.test(version.stdout)) throw new InstallFailure("needsPowerShell");
-    // Copilot's current WinGet manifest has not been qualified for a user-only,
-    // non-elevated install. Do not let WinGet fall back to an elevated route.
+    // Unqualified WinGet recipes must not fall back to an elevated route.
     throw new InstallFailure("blockedByWindows");
   }
 }
@@ -71,6 +70,7 @@ export async function runInstallRecipe(recipe: CatalogRecipe, run: RunCli, env: 
   if (timeoutMs <= 0) throw new InstallFailure("timeout");
   const options = { timeoutMs, cwd: process.platform === "win32" ? windowsSystem32() : "/", installer: { signal } };
   switch (recipe.kind) {
+    case "copilot":
     case "opencode": throw new InstallFailure("installFailed"); // Transactional route is owned by CliInstaller.
     case "powershell": {
       const program = windowsPowerShellPath();

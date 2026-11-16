@@ -9,7 +9,8 @@ function httpsAddress(address: string): void {
 function validateRecipe(recipe: CatalogRecipe, depth = 0): void {
   if (!recipe || depth > 1 || typeof recipe.command !== "string" || !recipe.command) throw new Error("Invalid catalog recipe");
   switch (recipe.kind) {
-    case "opencode": break;
+    case "opencode":
+    case "copilot": break;
     case "powershell": httpsAddress(recipe.url); break;
     case "npm":
     case "uv": if (!/^(?:@[a-z0-9-]+\/)?[a-z0-9][a-z0-9._-]*$/.test(recipe.package)) throw new Error("Invalid catalog package"); break;

@@ -1,4 +1,11 @@
+import { pack34CopilotMutations } from "./mutations/pack34-copilot.mjs";
+import { pack33GithubMutations } from "./mutations/pack33-github.mjs";
+import { pack32KeyMutations } from "./mutations/pack32-key.mjs";
+import { pack32UiMutations } from "./mutations/pack32-ui.mjs";
 import { pack29OpenCodeModelsMutations } from "./mutations/pack29-opencode-models.mjs";
+import { pack30OpenCodeBypassMutations } from "./mutations/pack30-opencode-bypass.mjs";
+import { pack31VaultMutations } from "./mutations/pack31-vault.mjs";
+import { pack30SettingsSpacingMutations } from "./mutations/pack30-settings-spacing.mjs";
 import { pack29CliInstallMutations } from "./mutations/pack29-cli-install.mjs";
 import { pack29OpenCodeInstallMutations } from "./mutations/pack29-opencode-install.mjs";
 import { pack29OpenCodeKeyMutations } from "./mutations/pack29-opencode-key.mjs";
@@ -101,6 +108,13 @@ export function removeWithRetry(path, attempts = 41, delayMs = 250) {
 }
 
 export const mutations = [
+  ...pack34CopilotMutations,
+  ...pack33GithubMutations,
+  ...pack31VaultMutations,
+  ...pack32KeyMutations,
+  ...pack32UiMutations,
+  ...pack30OpenCodeBypassMutations,
+  ...pack30SettingsSpacingMutations,
   ...electronMutations,
   ...pageMutations,
   ...serverIndexMutations,
@@ -116,18 +130,16 @@ export const mutations = [
   ...pack27AdvisorMutations,
   ...pack28ClosingNoticeMutations,
   ...pack29ScanMutations,
-  // O4 cannot edit runtime.mjs. Preserve its three isolation rows while including
-  // O1's added auto-update setting in both sides of the original mutation.
+  // Preserve runtime isolation mutations at the current launch boundaries.
   ...pack29RuntimeMutations.map((entry) => {
-    if (!["p29-env-worker", "p29-env-settings", "p29-env-git"].includes(entry[0])) return entry;
-    const [name, file, from, to] = entry;
-    const updated = (text) => file.endsWith("cli-path.ts")
-      ? text.replace("...extra });", '...extra, OPENCODE_DISABLE_AUTOUPDATE: "1" });')
-      : text.replace('...options.env, NoDefault', '...options.env, OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefault');
-    const replacement = name === "p29-env-git"
-      ? 'return Object.keys(extra).length ? stripElectronNodeEnv({ ...childEnv, ...extra, OPENCODE_DISABLE_AUTOUPDATE: "1" }) : { ...childEnv, NoDefaultCurrentDirectoryInExePath: "1", OPENCODE_DISABLE_AUTOUPDATE: "1" };'
-      : updated(to);
-    return [name, file, updated(from), replacement];
+    const [name, file] = entry;
+    if (["p29-env-worker", "p29-env-git"].includes(name)) return [name, file,
+      'return stripElectronNodeEnv(disableCopilotUpdate(env, executable));',
+      name === "p29-env-git" ? 'return Object.keys(extra).length ? stripElectronNodeEnv(disableCopilotUpdate(env, executable)) : disableCopilotUpdate(env, executable);' : 'return disableCopilotUpdate(env, executable);'];
+    if (name === "p29-env-settings") return [name, file,
+      'stripElectronNodeEnv(disableCopilotUpdate({ ...inherited, ...options.env, OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefaultCurrentDirectoryInExePath: "1" }, launcher, env))',
+      'disableCopilotUpdate({ ...inherited, ...options.env, OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefaultCurrentDirectoryInExePath: "1" }, launcher, env)'];
+    return entry;
   }),
   ...pack29InstallerMutations,
   ...pack29FirstRunMutations,

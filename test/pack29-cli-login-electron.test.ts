@@ -84,3 +84,14 @@ test("OpenCode Electron opener permits only the exact server-owned key page", as
   await fx.send({ type: "openCliLogin", id, cli: "opencode", url: "https://opencode.ai/auth" });
   assert.deepEqual(fx.opened, ["https://opencode.ai/auth"]);
 });
+
+test("GitHub Electron opener allows only the exact device page", async () => {
+  const fx = openerHarness(), id = "d".repeat(48);
+  for (const url of ["http://github.com/login/device", "https://github.com.evil.example/login/device", "https://user" + "@github.com/login/device", "https://github.com:443/login/device", "https://github.com/login/device/extra"]) {
+    await fx.send({ type: "openCliLogin", id, cli: "github", url });
+    assert.equal(fx.replies.at(-1).ok, false, url);
+  }
+  assert.deepEqual(fx.opened, []);
+  await fx.send({ type: "openCliLogin", id, cli: "github", url: "https://github.com/login/device" });
+  assert.deepEqual(fx.opened, ["https://github.com/login/device"]);
+});

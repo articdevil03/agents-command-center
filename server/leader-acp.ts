@@ -1,3 +1,5 @@
+import { secretVariants, redactSecrets } from "./secret-redaction.ts";
+import type { KeyLaunch } from "./settings/cli-key.ts";
 import { readFileSync } from "node:fs";
 import { extname } from "node:path";
 import { IMAGE_EXT_TO_MIME } from "./config.ts";
@@ -25,6 +27,8 @@ export const acpToolStep = (kind: unknown): ActivityStep => ({ label: (typeof ki
 
 export type AcpLeaderDeps = {
   cli: { name: string; program: string; args: string[] };
+  keyLaunch?: KeyLaunch;
+  loadKey?: () => Promise<KeyLaunch>;
   // The crew tools. Optional: a worker run (a crew seat) has none unless it runs the process.
   bridge?: { url: string; token: string };
   // Worker runs (a crew seat, not a leader): a read-only seat answers every permission request "cancelled"; needHttp fails the start, before any prompt, when the CLI cannot take the crew tools over HTTP.
@@ -54,17 +58,17 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
   const paragraphs = createParagraphs();
 
   // The bridge token is this leader's own secret: it never reaches the chat. A token split across two chunks is found because the last characters wait for the next chunk.
-  const secret = deps.bridge?.token ?? "";
+  let secrets = secretVariants([deps.bridge?.token ?? "", ...(deps.keyLaunch?.secrets ?? [])]);
   const HIDDEN = "[hidden]";
-  const hold = Math.max(0, secret.length - 1);
+  let hold = Math.max(0, ...secrets.map((value) => value.length - 1));
   let held = "";
-  const redact = (text: string): string => (secret ? text.split(secret).join(HIDDEN) : text);
+  const redact = (text: string): string => redactSecrets(text, secrets);
   // Every string the CLI supplies that leaves this adapter (model, sign-in text, error and stop texts) goes through here: redacted BEFORE it is cut short, so a cut never leaves part of the token.
   const safe = (value: unknown, max: number): string => clean(redact(typeof value === "string" || typeof value === "number" ? String(value) : ""), max);
   // `gap` is the paragraph break put before a new message. `held` is the raw text (no breaks); each break waits in `gaps` at its place in `held` and is written out with the text before it.
   // It is dropped only when the token really spans it (the token is then shown as [hidden]); text that is not the token never loses or moves its break.
   let gaps: { at: number; gap: string }[] = [];
-  const tokenSpans = (raw: string): [number, number][] => { const found: [number, number][] = []; if (secret) for (let i = raw.indexOf(secret); i >= 0; i = raw.indexOf(secret, i + secret.length)) found.push([i, i + secret.length]); return found; };
+  const tokenSpans = (raw: string): [number, number][] => { const found: [number, number][] = []; for (const secret of secrets) for (let i = raw.indexOf(secret); i >= 0; i = raw.indexOf(secret, i + secret.length)) found.push([i, i + secret.length]); return found; };
   // The raw text up to `upto`, redacted, with every break at or before it that no token spans.
   function weave(raw: string, upto: number): string {
     const spans = tokenSpans(raw);
@@ -91,7 +95,9 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
   function flushTail(): void {
     let raw = held, mark = "";
     held = "";
-    for (let n = Math.min(secret.length - 1, raw.length); n >= 4; n--) if (secret.startsWith(raw.slice(raw.length - n))) { raw = raw.slice(0, raw.length - n); mark = HIDDEN; break; }
+    let prefix = 0;
+    for (const secret of secrets) for (let n = Math.min(secret.length - 1, raw.length); n >= 4; n--) if (secret.startsWith(raw.slice(raw.length - n))) { prefix = Math.max(prefix, n); break; }
+    if (prefix) { raw = raw.slice(0, raw.length - prefix); mark = HIDDEN; }
     const out = weave(raw, raw.length) + mark;
     gaps = [];
     if (out) cb.onDelta(out);
@@ -195,7 +201,11 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
   }
 
   const ready = deadline((async () => {
-    child = (deps.spawnFn ?? spawnAcpChild)(deps.cli.program, deps.cli.args, { cwd: tabFolder, env: leaderChildEnv(), stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+    const key = deps.loadKey ? await deps.loadKey() : deps.keyLaunch;
+    if (stopped || dead) return;
+    secrets = secretVariants([deps.bridge?.token ?? "", ...(key?.secrets ?? [])]);
+    hold = Math.max(0, ...secrets.map((value) => value.length - 1));
+    child = (deps.spawnFn ?? spawnAcpChild)(deps.cli.program, deps.cli.args, { cwd: tabFolder, env: leaderChildEnv(key?.env, deps.cli.program, tabFolder), stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
     trackLeaderChild(child, watchesLeaderChild(deps.spawnFn), unconfirmedKill);
     child.stderr?.resume();
     const gone = (): void => die(sessionId ? `${name} stopped unexpectedly; a new one will start on the next message` : `${name} exited before it started; is it installed?`);

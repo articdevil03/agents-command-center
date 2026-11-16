@@ -98,7 +98,7 @@ export function fakeParallelState(state: any) {
   return copy;
 }
 
-export function proxyServer(backendPort: number, options: { folder: string; mode: string; seed?: any; fixedTasks?: Record<string, any>; storageBlocked?: boolean; windowButtons?: boolean; oldMe?: { saved: string; expected: string } }, auditScript: string) {
+export function proxyServer(backendPort: number, options: { folder: string; vaultFolder?: string; mode: string; seed?: any; fixedTasks?: Record<string, any>; storageBlocked?: boolean; windowButtons?: boolean; oldMe?: { saved: string; expected: string } }, auditScript: string) {
   // The window-button bridge only the real Electron window has (electron/preload.cjs): this page records each call, starts maximized,
   // and window.__ccWinEmit(true|false) plays the main process telling the page the window was maximized or restored.
   // window.__ccWinAskClose() plays the main process asking the page about a close; window.__ccWin.answers records each answer.
@@ -115,7 +115,7 @@ export function proxyServer(backendPort: number, options: { folder: string; mode
   const bootstrap = `
 window.__ccErrors=[];window.__sent=[];window.__states=[];window.__received=[];window.__latestState=null;window.__ccHoldChatDone=false;window.__ccPendingChatDone=null;window.__ccDelaySelect=false;window.__ccDelayedSelect=null;window.__ccRejectHeldAction=null;window.__ccHoldNextRemoveState=false;window.__ccHeldRemoveState=null;window.__ccHistoryOverride=null;window.__ccChatHistory={};
 window.__ccXss=()=>window.__ccErrors.push("escaped text ran as HTML");
-window.__ccConfirms=[];window.__ccConfirmResult=true;window.confirm=(message)=>{window.__ccConfirms.push(String(message));return window.__ccConfirmResult};window.__ccOpenedObsidian=[];window.__ccFolderChoice=${JSON.stringify(options.folder)};window.cc={appKey:async()=>${JSON.stringify(APP_KEY)},pickFolder:async()=>window.__ccFolderChoice,openObsidian:async(url)=>{window.__ccOpenedObsidian.push(String(url));return {ok:true}}};${seedScript}${taskScript}${storageScript}${windowScript}
+window.__ccConfirms=[];window.__ccConfirmResult=true;window.confirm=(message)=>{window.__ccConfirms.push(String(message));return window.__ccConfirmResult};window.__ccOpenedObsidian=[];window.__ccFolderChoice=${JSON.stringify(options.folder)};window.__ccVaultFolder=${JSON.stringify(options.vaultFolder ?? options.folder)};window.cc={appKey:async()=>${JSON.stringify(APP_KEY)},pickFolder:async()=>window.__ccFolderChoice,openObsidian:async(url)=>{window.__ccOpenedObsidian.push(String(url));return {ok:true}}};${seedScript}${taskScript}${storageScript}${windowScript}
 window.__ccAuditFinished=false;
 const __ccSetTimeout=window.setTimeout.bind(window);
 window.setTimeout=(fn,delay,...args)=>window.__ccAuditFinished?0:__ccSetTimeout(fn,delay,...args);

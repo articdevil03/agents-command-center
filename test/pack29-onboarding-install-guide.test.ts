@@ -19,6 +19,12 @@ test("every catalogue fallback offers its official guide, address copy and Check
     await toToolStep(ev, "C:\\work\\My App"); await stubClipboard(ev);
     for (const entry of entries) {
       const id = entry.id;
+      if (id === "copilot") {
+        assert.equal((await guide(ev, id)).found, false, "Copilot has no manual guide");
+        assert.equal(await ev(`Boolean(document.querySelector('[data-frun-help="copilot"],[data-frun-copy="copilot"]'))`), false);
+        assert.equal(await ev(`document.querySelector('[data-frun-install="copilot"]').checkVisibility()`), true);
+        continue;
+      }
       assert.equal((await guide(ev, id)).shown, false, id + " starts collapsed");
       await click(ev, `[data-frun-help="${id}"]`);
       const shown = await guide(ev, id);
@@ -54,7 +60,7 @@ test("every catalogue fallback offers its official guide, address copy and Check
     await openOnly(ev, "opencode");
     await ev("document.querySelector('#frunH-tools').focus()");
     const order: string[] = [], expected = ["frunCheck", "frunGuideCopy", "frunSearch",
-      ...entries.flatMap((entry: any) => [`frun-install-${entry.id}`, `frun-help-${entry.id}`, ...(entry.id === "opencode" ? ["frun-copy-opencode"] : [])]),
+      ...entries.flatMap((entry: any) => [`frun-install-${entry.id}`, ...(entry.id === "copilot" ? [] : [`frun-help-${entry.id}`]), ...(entry.id === "opencode" ? ["frun-copy-opencode"] : [])]),
       "frun-to-opencode", "frunOtherToggle", "frunSkip"];
     for (let i = 0; i < expected.length; i++) { await press(page, "Tab"); order.push(await ev("(()=>{const a=document.activeElement;return a.id||a.dataset.focusKey||a.tagName})()")); }
     assert.deepEqual(order, expected);

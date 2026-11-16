@@ -39,8 +39,9 @@
         && Object.keys(sent).length === Object.keys(expectedFields).length + 1
         && Object.entries(expectedFields).every(([key, value]) => sent[key] === value)
         && Object.keys(sent).every((key) => key === "requestId" || Object.hasOwn(expectedFields, key)));
+      const github = type === "cliLogin" && fields.cli === "github";
       const statusNode = sent?.requestId ? document.querySelector(`[data-status-for="${CSS.escape(sent.requestId)}"]`) : null;
-      const runningShown = statusNode?.dataset.status === "running";
+      const runningShown = github ? document.querySelector("#s-github .cli-login")?.dataset.state === "running" : statusNode?.dataset.status === "running";
       const pendingButton = requireElement(selector);
       const disabledWhileRunning = pendingButton.disabled;
       if (sent?.requestId && type === "setNotesVault" && result === "done") {
@@ -48,10 +49,15 @@
         next.settings.vault.path = fields.path ?? null;
         next.requestActions = { ...(next.requestActions ?? {}), [sent.requestId]: { requestId: sent.requestId, status: result, message } };
         deliver(next);
+      } else if (sent?.requestId && github) {
+        const next = structuredClone(window.__latestState);
+        next.settings.github.action = { requestId: sent.requestId, kind: "login", status: result, phase: null, reason: "loginFailed" };
+        next.requestActions = { ...(next.requestActions ?? {}), [sent.requestId]: { requestId: sent.requestId, status: result, message } };
+        deliver(next);
       } else if (sent?.requestId) deliverAction(sent.requestId, result, message);
       const finalStatus = sent?.requestId ? document.querySelector(`[data-status-for="${CSS.escape(sent.requestId)}"]`) : null;
       const finalButton = requireElement(selector);
-      const statusShown = finalStatus?.dataset.status === result && finalStatus.textContent.includes(message);
+      const statusShown = github ? document.querySelector("#s-github .cli-login")?.dataset.state === result && document.querySelector("#s-github .cli-login-status")?.textContent === message : finalStatus?.dataset.status === result && finalStatus.textContent.includes(message);
       const reenabled = !finalButton.disabled;
       const focusRestored = document.activeElement?.dataset.focusKey === button.dataset.focusKey;
       check(`${name} sends its exact request, shows that id's ${result} status, restores focus, and re-enables`, Boolean(sent) && exactMessage && runningShown && disabledWhileRunning && statusShown && reenabled && focusRestored, { sent: sent ?? null, expectedFields: { ...expectedFields, requestId: "<fresh unique request id>" }, exactMessage, buttonDisabledBeforeClick, buttonType: button.type, formValues, idGood, runningShown, disabledWhileRunning, finalStatus: finalStatus ? { id: finalStatus.dataset.statusFor, status: finalStatus.dataset.status, message: finalStatus.textContent } : null, statusShown, reenabled, focusRestored, activeFocusKey: document.activeElement?.dataset.focusKey });

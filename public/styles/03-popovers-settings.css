@@ -181,9 +181,13 @@ textarea.inp,.field textarea{resize:vertical;min-height:84px;line-height:1.5}
 .dialog-close{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:var(--text-3);flex:none}
 .dialog-close:hover{background:var(--hv-sf);color:var(--text)}
 .settings-help,.help{font-size:12.5px;color:var(--text-3);margin:8px 2px 0;overflow-wrap:anywhere}
+.sbody .settings-help,.sbody .help,.sbody .sintro{margin:12px 14px 0;line-height:1.45}
+.sbody .settings-help.fc-intro{margin-top:-10px}
+.sbody .sblock .settings-help{margin:8px 8px 0}
 .settings-help code,.sbody code{font-family:var(--mono);font-size:12px}
 .card{background:var(--sf);border-radius:16px;box-shadow:var(--card);overflow:hidden;min-width:0}
 .crow{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);min-width:0}
+.sbody .crow{padding:14px}
 .crow:last-child{border-bottom:0}
 .crow.note{grid-template-columns:minmax(0,1fr)}
 .crow > img{width:34px;height:34px;border-radius:10px}

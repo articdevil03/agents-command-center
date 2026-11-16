@@ -12,7 +12,7 @@
     const revision = Number.isSafeInteger(meta.revision) ? meta.revision : tab.chatRevision;
     const savedRevision = Number.isSafeInteger(meta.savedRevision) ? meta.savedRevision : tab.savedRevision;
     if (!Number.isSafeInteger(revision) || !Number.isSafeInteger(savedRevision)) return "";
-    if (revision === savedRevision) return revision === 0 ? "Nothing to save yet" : "Saved";
+    if (revision === savedRevision) return revision === 0 ? "Nothing to save yet" : tab.vaultCopyNeedsAttention ? "Saved · vault copy needs attention" : "Saved";
     const at = meta.lastAt ?? transcript(tab).at(-1)?.at;
     if (Number.isFinite(at) && at > 0) return `Not saved since ${clockTime(at)}`;
     return "Not saved yet";

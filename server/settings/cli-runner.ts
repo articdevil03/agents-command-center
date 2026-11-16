@@ -1,3 +1,6 @@
+import { disableCopilotUpdate } from "./opencode/launch-env.ts";
+import { managedCli } from "./opencode/paths.ts";
+import { resolveGitHub, githubUnavailable } from "./github-login.ts";
 import { stripElectronNodeEnv } from "../runtime-env.ts";
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
@@ -71,7 +74,7 @@ async function runTrackedInstaller(spawnProcess: typeof spawn, bin: string, args
     let finished = false, stopping = false, timedOut = false, closed = false, endedAt: number | undefined;
     let child: ReturnType<typeof spawn>;
     try { child = spawnProcess(bin, args, { shell: false, windowsHide: true, detached: false, windowsVerbatimArguments: shim,
-      stdio: ["ignore", "pipe", "pipe"], cwd: options.cwd, env: { ...installEnv(env), OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefaultCurrentDirectoryInExePath: "1" } }); }
+      stdio: ["ignore", "pipe", "pipe"], cwd: options.cwd, env: disableCopilotUpdate({ ...installEnv(env), ...installEnv(options.env ?? {}), OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefaultCurrentDirectoryInExePath: "1" }, bin, env, true) }); }
     catch { done({ code: -1, stdout: "", stderr: "", cleanupConfirmed: true }); return; }
     trackLeaderChild(child);
     const tree = child.pid ? installerTree(child.pid, env) : null;
@@ -156,15 +159,19 @@ export function createCliRunner(spawnProcess: typeof spawn = spawn, env: NodeJS.
     let resolved: string;
     const catalogProgram = CLI_CATALOG.some((entry) => entry.detection?.program === bin);
     try {
-      if (process.platform !== "win32" && catalogProgram) {
-        const found = posixCli(bin, env);
+      if (bin === "gh") {
+        const github = resolveGitHub(env);
+        if (!github) return githubUnavailable();
+        resolved = github;
+      } else if (process.platform !== "win32" && catalogProgram) {
+        const found = (bin === "copilot" ? managedCli(env, "copilot") : null) ?? posixCli(bin, env);
         if (!found) return { code: posixCli(bin, env, true) ? -1 : 127, stdout: "", stderr: "CLI is unavailable" };
         resolved = found;
       } else resolved = catalogProgram ? resolveCliOrThrow(bin, env, process.cwd(), options.directExecutable === true) : withResolvedCli(bin, env, process.cwd());
     } catch (err) { return { code: catalogProgram && resolveCliPath(bin, env, process.cwd(), true) ? -1 : 127, stdout: "", stderr: err instanceof Error ? err.message : String(err) }; }
     const launcher = resolveLauncher(resolved.replace(/^"(.*)"$/, "$1"), env);
     const { CC_APP_KEY: _appKey, CC_DATA_DIR: _dataRoot, OPENCODE_SERVER_PASSWORD: _password, ...inherited } = env === process.env ? leaderChildEnv() : env;
-    const childEnv: NodeJS.ProcessEnv = stripElectronNodeEnv({ ...inherited, ...options.env, OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefaultCurrentDirectoryInExePath: "1" });
+    const childEnv: NodeJS.ProcessEnv = stripElectronNodeEnv(disableCopilotUpdate({ ...inherited, ...options.env, OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefaultCurrentDirectoryInExePath: "1" }, launcher, env));
     const viaCmd = /\.(?:cmd|bat)$/i.test(launcher);
     if (viaCmd && ([launcher, ...args].some((part) => CMD_UNSAFE.test(part)) || launcher.includes("%"))) {
       return { code: -1, stdout: "", stderr: "unsupported characters in command arguments" };

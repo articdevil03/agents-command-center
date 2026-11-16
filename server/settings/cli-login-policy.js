@@ -1,6 +1,7 @@
 export const UNSUPPORTED_MESSAGE = "This tool has no verified sign-in flow in Command Center yet.";
 const unsupported = Object.freeze({ managed: false, hosts: [], paths: [], prompt: null, codePrompt: null, code: null, paste: false });
 const profiles = Object.freeze({
+  github: { managed: true, hosts: ["github.com"], paths: ["/login/device"], prompt: null, codePrompt: null, code: /^[A-Z0-9]{4}-[A-Z0-9]{4}$/, paste: false },
   opencode: { managed: true, hosts: ["opencode.ai"], paths: ["/auth"], prompt: null, codePrompt: null, code: null, paste: false },
   claude: { managed: true, hosts: ["claude.com", "platform.claude.com"], paths: ["/oauth/", "/cai/oauth/"],
     prompt: /(?:Opening browser to sign in|If the browser didn't open, visit:)/i, codePrompt: null, code: null, paste: true },
@@ -17,6 +18,7 @@ export function loginProfile(cli) { return Object.hasOwn(profiles, cli) ? profil
 export function validateLoginUrl(cli, value) {
   if (typeof value !== "string" || value.length > 4096 || /[\s\u0000-\u001f\u007f\\]/.test(value)) return null;
   try {
+    if (cli === "github") return value === "https://github.com/login/device" ? value : null;
     if (cli === "opencode") return value === "https://opencode.ai/auth" ? value : null;
     const url = new URL(value), policy = loginProfile(cli);
     if (!policy.managed || url.protocol !== "https:" || url.username || url.password || url.port || url.hash) return null;

@@ -20,6 +20,7 @@ export type ActionState = { requestId: string; status: ActionStatus; message: st
 
 export type InstalledTool = { installed: boolean | null; version: string | null; signedIn: boolean | null; supportedVersion?: boolean | null; credentialSource?: CredentialSource; action?: ActionState };
 export type CatalogToolFacts = InstalledTool & {
+  keyProfile?: { fields: import("./cli-key-profiles.ts").KeyField[] } | null; keySaved?: boolean;
   registered: boolean; leaderEligible: boolean; tested: boolean; leaderLabel: "Tested" | "Not tested yet"; connection: "unknown" | "verified" | "failed";
 };
 export type InstructionFile = { path: string; scope: "global" | "project" };
@@ -36,7 +37,7 @@ export type SettingsState = {
   catalogTools: Record<string, CatalogToolFacts>;
   tools: Record<CliId, InstalledTool>;
   github: { connected: boolean | null; account: string | null; action?: ActionState };
-  vault: { path: string | null };
+  vault: { path: string | null; status?: import("./vault.ts").VaultStatus };
   folders: { defaultProjectFolder: string };
   skills: Record<CliId, CliInventory>;
   permissionModes: Record<string, PermissionMode>;
@@ -54,6 +55,7 @@ export type PersistedSettings = {
 };
 
 export type SettingsServiceOptions = {
+  credentialStore?: import("./cli-key-store.ts").CredentialStore;
   dataRoot: string;
   env?: NodeJS.ProcessEnv;
   runCli?: RunCli;
@@ -67,7 +69,6 @@ export type SettingsServiceOptions = {
   refreshPath?: () => Promise<unknown>;
   installAdmission?: () => boolean;
   runLogin?: RunLogin;
-  launchGitHub?: () => Promise<boolean>;
   loginTimeoutMs?: number;
   openLogin?: (cli: string, url: string) => Promise<boolean>;
 };

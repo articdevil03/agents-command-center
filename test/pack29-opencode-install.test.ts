@@ -5,11 +5,19 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
-import { installOpenCode } from "../server/settings/opencode/install.ts";
-import { managedCli, managedRoot, publishCandidate, createCandidate } from "../server/settings/opencode/paths.ts";
-import { extractExecutable, EXPANDED_LIMIT } from "../server/settings/opencode/archive.ts";
-import { ReleaseFailure } from "../server/settings/opencode/releases.ts";
-import { installFixture, release, zipBytes, ok, npmFiles } from "./pack29-opencode-install.setup.ts";
+import { importWithTempDataRoot } from "./temp-root.ts";
+const { modules: imports } = await importWithTempDataRoot(async () => ({
+  install: await import("../server/settings/opencode/install.ts"),
+  paths: await import("../server/settings/opencode/paths.ts"),
+  archive: await import("../server/settings/opencode/archive.ts"),
+  releases: await import("../server/settings/opencode/releases.ts"),
+  fixture: await import("./pack29-opencode-install.setup.ts"),
+}));
+const { installOpenCode } = imports.install;
+const { managedCli, managedRoot, publishCandidate, createCandidate } = imports.paths;
+const { extractExecutable, EXPANDED_LIMIT } = imports.archive;
+const { ReleaseFailure } = imports.releases;
+const { installFixture, release, zipBytes, ok, npmFiles } = imports.fixture;
 
 test("candidate links and non-files are refused before the verification runner", async (t) => {
   for (const kind of ["link", "nonfile", "healthy"]) {

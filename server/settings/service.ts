@@ -1,3 +1,6 @@
+import { CLI_KEY_PROFILES } from "./cli-key-profiles.ts";
+import { CliKeys } from "./cli-key.ts";
+import { IpcCredentialStore } from "./cli-key-store.ts";
 import type { OpenCodeModelRefresh } from "./opencode/models.ts";
 import { createSetupActions } from "./setup-actions.ts";
 import { readdirSync, statSync } from "node:fs";
@@ -8,12 +11,15 @@ import { isSafeRequestId } from "../chat-store.ts";
 import { CliInstaller } from "./cli-install.ts";
 import { refreshCatalog } from "./cli-auth.ts";
 import { CliLogin, type LoginSend } from "./cli-login.ts";
-import { createDetachedLoginLauncher } from "./cli-login-runner.ts";
 import { ACTION_TIMEOUT_MS, CLI_IDS, CLI_TIMEOUT_MS, MCP_NAME, PERMISSION_MODES, PLUGIN_NAME } from "./constants.ts";
 import { applyBounded, LIVE_TIMEOUT, ModeBusyError, serializePermissionMode } from "./permissions.ts";
 import { parseGitHubAuthStatus, parseMcpCommand, parseMcpList, parsePluginList } from "./parse.ts";
 import { freshState, persist, readPersisted } from "./store.ts";
+import { checkVaultStatus } from "./vault.ts";
+import { BROAD_VAULT_MESSAGE, isBroadVault } from "../vault.ts";
 import type { ActionState, CliId, CliResult, PermissionMode, PersistedSettings, RunCli, SettingsServiceOptions, SettingsState } from "./types.ts";
+
+const KEY_READ_WAIT_MS = 1500;
 
 export class SettingsActionError extends Error {
   readonly requestId: string;
@@ -33,14 +39,12 @@ export class SettingsService {
   private recoveryNotice: string | null = null;
   private readonly env: NodeJS.ProcessEnv;
   private readonly run: RunCli;
-  private readonly launchGitHub: () => Promise<boolean>;
   private onChange: () => void;
   private readonly permissionTimeoutMs: number;
-  private readonly loginRecheckMs: number;
-  private readonly loginWatchers = new Map<string, ReturnType<typeof setTimeout>>();
   readonly models: OpenCodeModelRefresh;
   readonly installer: CliInstaller;
   readonly login: CliLogin;
+  readonly cliKeys: CliKeys;
   private readonly permissionModeSequences = new Map<string, number>();
   private readonly permissionModeTails = new Map<string, Promise<void>>();
 
@@ -50,31 +54,12 @@ export class SettingsService {
     this.saved = read.settings;
     if (read.recovered) this.recoveryNotice = "The settings file was damaged, so your saved permission modes were lost. A copy was kept beside it. Every tab without a saved mode now asks before changing files; pick a mode for each tab to change that.";
     this.state = freshState(this.saved);
+    this.cliKeys = new CliKeys(options.credentialStore ?? new IpcCredentialStore(), this.state, () => this.publish());
     this.env = options.env ?? process.env;
-    this.launchGitHub = options.launchGitHub ?? createDetachedLoginLauncher(undefined, this.env);
     this.onChange = options.onChange ?? (() => {});
     this.permissionTimeoutMs = options.permissionTimeoutMs ?? 15_000;
-    this.loginRecheckMs = options.loginRecheckMs ?? 3_000;
     const setup = createSetupActions(options, this.state, this.env, () => this.publish());
     this.models = setup.models; this.run = setup.run; this.installer = setup.installer; this.login = setup.login;
-  }
-
-  // A login window opens and the user takes a while: read the status again every few seconds until it says signed in (or 3 minutes pass).
-  private watchSignIn(key: string, read: () => Promise<boolean | null>): void {
-    clearTimeout(this.loginWatchers.get(key));
-    const deadline = Date.now() + 180_000;
-    const step = (): void => {
-      const timer = setTimeout(() => {
-        void read().then((signedIn) => {
-          this.publish();
-          if (signedIn === true || Date.now() >= deadline || this.loginWatchers.get(key) !== timer) { if (this.loginWatchers.get(key) === timer) this.loginWatchers.delete(key); return; }
-          step();
-        }, () => { this.loginWatchers.delete(key); });
-      }, this.loginRecheckMs);
-      timer.unref();
-      this.loginWatchers.set(key, timer);
-    };
-    step();
   }
 
   setOnChange(onChange: () => void): void { this.onChange = onChange; }
@@ -157,11 +142,16 @@ export class SettingsService {
   }
 
   async refreshAll(folder: string | null): Promise<void> {
+    await this.cliKeys.prepareAllBounded(Object.keys(CLI_KEY_PROFILES), KEY_READ_WAIT_MS);
+    this.state.vault.status = checkVaultStatus(this.state.vault.path);
     this.refreshProjectInstructions(folder);
     this.refreshLocalSkills();
     await Promise.all([this.models.refresh(), refreshCatalog(this.state, this.run), ...CLI_IDS.map((cli) => this.refreshCliInventory(cli))]);
-    const gh = await this.call("gh", ["auth", "status"]);
-    Object.assign(this.state.github, parseGitHubAuthStatus(gh));
+    if (!this.login.busy) {
+      const gh = await this.run("gh", ["auth", "status", "--active", "--hostname", "github.com"], { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true })
+        .catch(() => ({ code: -1, stdout: "", stderr: "" }));
+      Object.assign(this.state.github, { ...parseGitHubAuthStatus(gh, "settings"), account: null });
+    }
     this.publish();
   }
 
@@ -193,17 +183,10 @@ export class SettingsService {
   }
   cliLogin(message: unknown, send: LoginSend): Promise<void> { return this.login.request(message, send); }
 
-  async loginGitHub(requestId: string): Promise<void> {
-    return this.action(this.state.github, requestId, async () => {
-      const launched = await this.launchGitHub();
-      if (!launched) throw new Error("could not open the GitHub login window");
-      this.watchSignIn("gh", async () => {
-        const parsed = parseGitHubAuthStatus(await this.call("gh", ["auth", "status"]));
-        this.state.github.connected = parsed.connected;
-        this.state.github.account = parsed.account;
-        return parsed.connected;
-      });
-    });
+  cliKey(message: unknown, owner: object): Promise<void> { return this.cliKeys.request(message, owner); }
+
+  loginGitHub(requestId: string, send: LoginSend = () => {}): Promise<void> {
+    return this.login.start({ type: "cliLogin", cli: "github", requestId }, send);
   }
 
   async addMcp(cli: CliId, requestId: string, name: unknown, commandOrUrl: unknown): Promise<void> {
@@ -274,9 +257,16 @@ export class SettingsService {
     const state = this.state;
     const target = { get action() { return state.preferenceAction; }, set action(value: ActionState | undefined) { state.preferenceAction = value; } };
     return this.action(target, requestId, async () => {
+      if (typeof value === "string" && isAbsolute(value.trim()) && isBroadVault(resolve(value.trim()))) throw new Error(BROAD_VAULT_MESSAGE);
       const path = value === null || value === "" ? null : await this.canonicalDirectory(value, "Notes vault");
+      if (path && isBroadVault(path)) throw new Error(BROAD_VAULT_MESSAGE);
+      const status = checkVaultStatus(path);
+      if (status === "readonly") throw new Error("Command Center can read this folder but cannot save notes here.");
+      if (status === "missing") throw new Error("This folder is missing. Choose its new location.");
+      if (status === "broad") throw new Error(BROAD_VAULT_MESSAGE);
       this.save({ ...this.saved, notesVaultPath: path });
       this.state.vault.path = path;
+      this.state.vault.status = status;
     });
   }
 
@@ -328,10 +318,9 @@ export class SettingsService {
 
   recordFailure(action: string, cli: unknown, tabId: unknown, requestId: string, message: string): void {
     if (!isSafeRequestId(requestId)) return;
-    if (["installCli", "cancelCliInstall", "cliLogin", "replaceCliLogin", "submitCliLoginKey", "getCliLoginState", "openCliLogin", "submitCliLoginCode", "cancelCliLogin"].includes(action)) return; // Installer owns its canonical state, including a retained cleanup lock.
+    if (["installCli", "cancelCliInstall", "cliLogin", "replaceCliLogin", "submitCliLoginKey", "getCliLoginState", "openCliLogin", "submitCliLoginCode", "cancelCliLogin", "ghLogin"].includes(action)) return; // Installer owns its canonical state, including a retained cleanup lock.
     const target: { action?: ActionState } | null = action === "installCli" || action === "cliLogin"
       ? CLI_IDS.includes(cli as CliId) ? this.state.tools[cli as CliId] : null
-      : action === "ghLogin" ? this.state.github
       : action === "mcpAdd" || action === "mcpRemove" || action === "pluginInstall" || action === "pluginUninstall"
         ? CLI_IDS.includes(cli as CliId) ? this.state.skills[cli as CliId] : null
         : action === "setNotesVault" || action === "setDefaultProjectFolder" ? this.preferenceTarget()

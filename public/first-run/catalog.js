@@ -43,7 +43,8 @@
     installFailed: "The installation did not finish. Try again, or use Install by hand.",
   });
   const isPrereq = (reason) => Object.hasOwn(PREREQ, reason);
-  function reasonText(reason, name) {
+  function reasonText(reason, name, id) {
+    if (id === "copilot" && (reason === "installFailed" || !Object.hasOwn(FAILURE, reason))) return "The installation did not finish. Try again.";
     if (isPrereq(reason)) return PREREQ[reason](name);
     return FAILURE[Object.hasOwn(FAILURE, reason) ? reason : "installFailed"];
   }
@@ -54,6 +55,7 @@
   // The consent shown next to Install, before it is pressed. Pressing Install is the consent; the page sends only the tool's id.
   function consentText(entry) {
     if (entry?.id === "opencode") return "Downloads and checks OpenCode 1 from its official releases, then installs it for your Windows account.";
+    if (entry?.id === "copilot") return "Downloads and checks GitHub Copilot CLI from its official releases, then installs it for your Windows account.";
     const command = String(entry?.command ?? ""), owner = possessive(entry?.vendor);
     const urls = command.match(/https:\/\/[^\s"'|,]+/g) ?? [];
     const npm = /^npm install -g (\S+)$/.exec(command);
@@ -82,6 +84,7 @@
     // The fallback guide for a catalog tool without a built-in guide: the maker's command (display text only) and the maker's page.
     function guideInfo(id) {
       const item = entry(id);
+      if (id === "copilot") return null;
       if (!item?.sources?.[0]) return null;
       return { about: `${item.displayName} is ${possessive(item.vendor)} AI coding tool.`, page: item.sources[0] };
     }

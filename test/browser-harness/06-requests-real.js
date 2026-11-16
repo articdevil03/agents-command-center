@@ -6,7 +6,7 @@
     window.__socket.send(JSON.stringify({ type: "refreshSettings" }));
     await waitFor(() => window.__received.slice(settingsRefreshStart).some((item) => item.type === "settingsRefreshed"), "read-only settings refresh from the fake-runner server");
     const refreshedSettings = window.__latestState.settings;
-    check("the real browser server probes Gemini and GitHub through its scripted fake runner", refreshedSettings.tools.gemini.installed === false && refreshedSettings.tools.gemini.signedIn === null && refreshedSettings.github.connected === false, { gemini: refreshedSettings.tools.gemini, github: refreshedSettings.github, acknowledgment: window.__received.slice(settingsRefreshStart).find((item) => item.type === "settingsRefreshed") });
+    check("the real browser server probes Gemini and GitHub through its scripted fake runner", refreshedSettings.tools.gemini.installed === false && refreshedSettings.tools.gemini.signedIn === null && refreshedSettings.github.connected === null && refreshedSettings.github.account == null, { gemini: refreshedSettings.tools.gemini, github: refreshedSettings.github, acknowledgment: window.__received.slice(settingsRefreshStart).find((item) => item.type === "settingsRefreshed") });
     const tabById = (id) => window.__latestState.projects.flatMap((project) => project.tabs).find((tab) => tab.id === id);
     const beta = window.__latestState.projects.find((project) => project.id === "beta");
     // A fixed crew tab: the creation message carries the fixed crew version, the picked positions and the auto-assign choice, never a kind or a template.

@@ -6,7 +6,9 @@ import { detectCatalogTool } from "./cli-auth.ts";
 import { checkInstallPrerequisites, InstallFailure, INSTALL_MESSAGES, INSTALL_TIMEOUT_MS, runInstallRecipe } from "./cli-installers.ts";
 import type { ActionState, CliId, CliResult, RunCli, SettingsState } from "./types.ts";
 import type { OpenCodeInstallOptions, InstallTransaction } from "./types.ts";
-import { installOpenCode } from "./opencode/install.ts";
+import { installManagedRelease } from "./opencode/install.ts";
+import { RELEASE_TOOLS } from "./opencode/release-tools.ts";
+import { sweepCopilotInstalls } from "./opencode/sweep.ts";
 import { managedCli } from "./opencode/paths.ts";
 
 export function validateInstallRequest(message: unknown, cancel = false): asserts message is Record<string, any> {
@@ -58,7 +60,8 @@ export class CliInstaller {
     let transaction: InstallTransaction | undefined;
     let previousFacts: Pick<import("./types.ts").InstalledTool, "installed" | "version" | "signedIn" | "supportedVersion" | "credentialSource"> | undefined;
     try {
-      const deadline = Date.now() + INSTALL_TIMEOUT_MS;
+      const deadline = Date.now() + (op.id === "copilot" ? RELEASE_TOOLS.copilot.timeoutMs : INSTALL_TIMEOUT_MS);
+      if (op.id === "copilot") await sweepCopilotInstalls(this.deps.env);
       await this.refresh();
       await detectCatalogTool(op.id, this.deps.state, this.deps.run);
       const facts = this.deps.state.catalogTools[op.id];
@@ -71,12 +74,12 @@ export class CliInstaller {
       await checkInstallPrerequisites(entry, this.deps.run, this.deps.env);
       if (op.abort.signal.aborted) throw new InstallFailure("cancelled");
       this.phase(op, "installing");
-      transaction = op.id === "opencode" ? await installOpenCode(this.deps.run, this.deps.env, op.abort.signal, deadline, {
+      transaction = op.id === "opencode" || op.id === "copilot" ? await installManagedRelease(this.deps.run, this.deps.env, op.abort.signal, deadline, {
         ...this.deps.installOptions, phase: (message) => {
           this.deps.installOptions?.phase?.(message);
           this.update(op, { requestId: op.requestId, kind: "install", status: "running", phase: "installing", reason: null, message });
         },
-      }) : undefined;
+      }, op.id) : undefined;
       const result = transaction ? transaction.result : await runInstallRecipe(entry.recipe!, this.deps.run, this.deps.env, op.abort.signal, this.refresh, deadline);
       op.result = result;
       cleanupConfirmed = result.cleanupConfirmed === true;
@@ -84,7 +87,8 @@ export class CliInstaller {
       this.phase(op, op.abort.signal.aborted ? "cancelling" : "verifying");
       await this.refresh();
       await detectCatalogTool(op.id, this.deps.state, transaction?.candidate ? async (bin, args, options) => {
-        const checked = await this.deps.run(bin === "opencode" ? transaction!.candidate! : bin, args,
+        if (op.id === "copilot") return transaction!.result; // Reuse the isolated, exact-version candidate probe.
+        const checked = await this.deps.run(bin === op.id ? transaction!.candidate! : bin, args,
           // The tracked installer runner refuses a run without a working folder, which read as "not found".
           { ...options, cwd: process.platform === "win32" ? windowsSystem32() : "/", installer: { signal: op.abort.signal }, timeoutMs: Math.max(1, deadline - Date.now()) });
         op.result = checked;
@@ -100,7 +104,7 @@ export class CliInstaller {
         if (Date.now() >= deadline) throw new InstallFailure("timeout");
         await transaction.commit?.();
         if (op.abort.signal.aborted) throw new InstallFailure("cancelled");
-        if (managedCli(this.deps.env) !== transaction.candidate) throw new InstallFailure("notFoundAfterInstall");
+        if (managedCli(this.deps.env, op.id as "opencode" | "copilot") !== transaction.candidate) throw new InstallFailure("notFoundAfterInstall");
       }
       this.update(op, { requestId: op.requestId, kind: "install", status: "done", phase: null, reason: null, message: "Installed" });
       if (op.id === "opencode") await this.deps.refreshModels?.().catch(() => {});
@@ -114,10 +118,10 @@ export class CliInstaller {
         op.result.retryCleanup = async () => { if (!await retry?.()) return false; await transaction!.rollback!(); return true; };
       }
       const reason = !cleanupConfirmed ? "cleanupUnconfirmed" : error instanceof InstallFailure ? error.reason : "installFailed";
-      if (op.id === "opencode" && previousFacts) {
+      if ((op.id === "opencode" || op.id === "copilot") && previousFacts) {
         const facts = cleanupConfirmed ? previousFacts : { installed: null, version: null, signedIn: null, supportedVersion: null, credentialSource: "unknown" };
         Object.assign(this.deps.state.catalogTools[op.id], facts);
-        Object.assign(this.deps.state.tools.opencode, facts);
+        if (op.id === "opencode") Object.assign(this.deps.state.tools.opencode, facts);
       }
       // Only known preflight messages are retained. No exception/vendor text crosses state.
       const message = error instanceof Error && ["CLI is already installed", "CLI installation status is unknown"].includes(error.message) ? error.message : INSTALL_MESSAGES[reason];

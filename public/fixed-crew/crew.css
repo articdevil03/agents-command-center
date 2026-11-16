@@ -4,7 +4,6 @@
 .fc{display:grid;gap:14px;min-width:0}
 .fc h3{flex-wrap:wrap}
 .fc h3 .fc-title{min-width:0;flex:1 1 220px}
-.fc-intro{margin:-10px 2px 0}
 .fc-status{margin:0 2px;font-size:12.5px;color:var(--text-2);overflow-wrap:anywhere}
 .fc-status:empty{display:none}
 .fc-recovery{margin:0;padding:9px 12px;border-radius:11px;background:var(--t-orange);color:var(--warn-text);font-size:13px;overflow-wrap:anywhere}

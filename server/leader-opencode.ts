@@ -8,11 +8,11 @@ import {
   createActivityTracker, createParagraphs, deadline, killProcessTree, leaderChildEnv, leaderProcessState, spawnLeaderChild, toolActivity, trackLeaderChild, watchesLeaderChild, LEADER_START_TIMEOUT_MS,
   type LeaderCallbacks, type LeaderHandle, type LeaderSeat, type LeaderSpawn,
 } from "./leader-common.ts";
-import { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, decideByRules, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
+import { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, opencodePermissionVerdict, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
 import { createSecretStream } from "./leader-opencode/secret-stream.ts";
 import { trimOldest } from "./leader-opencode/maps.ts";
 import type { OpencodeLeaderDeps } from "./leader-opencode/types.ts";
-export { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, decideByRules, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
+export { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, decideByRules, opencodePermissionVerdict, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
 const HOST = "127.0.0.1";
 const KILL_GRACE_MS = 200;
 
@@ -124,8 +124,8 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     const id = String(p.id);
     openPermissions.add(id);
     const patterns = Array.isArray(p.patterns) ? p.patterns.map(String) : [];
-    // The main session asks only what its rules say to ask. A sub-agent's request is decided here by the tab's mode (its own rules are OpenCode's defaults).
-    const verdict = subagent ? decideByRules(opencodeRules(deps.savedAsks?.() ? "ask" : mode), String(p.permission), patterns) : "ask";
+    // Bypass answers every request here too, even if OpenCode asks anyway; other modes preserve main-session asks and sub-agent rules.
+    const verdict = opencodePermissionVerdict(deps.savedAsks?.() ? "ask" : mode, subagent, String(p.permission), patterns, deps.vaultPath?.());
     const { tool, input } = opencodeApprovalRequest(String(p.permission), patterns, (p.metadata && typeof p.metadata === "object" ? p.metadata : {}) as Record<string, unknown>);
     const allow = verdict === "ask" ? await approve(tool, input) : verdict === "allow";
     if (!openPermissions.has(id)) return;
@@ -304,7 +304,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     const added = await api("POST", "/mcp", { name: OPENCODE_CREW_SERVER, config: { type: "remote", url: deps.bridge.url, headers: { Authorization: `Bearer ${deps.bridge.token}` }, oauth: false } });
     if (added?.[OPENCODE_CREW_SERVER]?.status !== "connected") throw new Error("OpenCode could not reach the crew tools");
     const effective = deps.savedAsks?.() ? "ask" : mode;
-    const session = await api("POST", "/session", { title: "Command Center leader", permission: opencodeRules(effective) });
+    const session = await api("POST", "/session", { title: "Command Center leader", permission: opencodeRules(effective, deps.vaultPath?.()) });
     if (!session?.id) throw new Error("OpenCode did not return a session");
     sessionId = String(session.id);
     cb.onSession?.(sessionId);
@@ -376,13 +376,14 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
   const setModel = (next: string): Promise<boolean> => { if (stopped || dead) return Promise.resolve(false); model = next; return Promise.resolve(true); };
   async function setPermissionMode(next: PermissionMode): Promise<boolean> {
     if (stopped || dead) return false;
+    const previous = mode; mode = next;
     try {
       await ready;
-      await api("PATCH", `/session/${sessionId}`, { permission: opencodeRules(next) });
-      if (stopped || dead) return false;
-      mode = next;
+      await api("PATCH", `/session/${sessionId}`, { permission: opencodeRules(next, deps.vaultPath?.()) });
+      if (stopped || dead) { mode = previous; return false; }
       return true;
     } catch {
+      mode = previous;
       // The caller reports the failed change once (and stops the chat); a second error here would fail a turn that is not ours.
       return false;
     }

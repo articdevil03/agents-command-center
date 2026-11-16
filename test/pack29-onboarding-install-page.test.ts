@@ -24,6 +24,11 @@ test("every Settings fallback is a collapsed official guide, with address copy, 
     await ev("openSettings(undefined,'tools');true"); await stubClipboard(ev);
     for (const entry of entries) {
       const selector = `#s-tools [data-tool-row][data-cli="${entry.id}"]`;
+      if (entry.id === "copilot") {
+        assert.equal(await ev(`Boolean(document.querySelector(${J(selector + " details")}))`), false, "Copilot has no manual guide");
+        assert.equal(await ev(`document.querySelector(${J(selector + ' [data-setting-action="install-cli"]')}).checkVisibility()`), true);
+        continue;
+      }
       assert.equal(await ev(`document.querySelector(${J(selector + " details")}).open`), false);
       await click(ev, selector + " summary");
       const text = await ev(`document.querySelector(${J(selector + " details")}).innerText`);
@@ -44,7 +49,7 @@ const CONSENT = {
   claude: "Downloads and runs Anthropic's installer from https://claude.ai/install.ps1 on this PC.",
   codex: "Downloads and runs OpenAI's installer from https://chatgpt.com/codex/install.ps1 on this PC.",
   opencode: "Downloads and checks OpenCode 1 from its official releases, then installs it for your Windows account.",
-  copilot: "Downloads and runs GitHub's installer (GitHub.Copilot) through Windows Package Manager on this PC.",
+  copilot: "Downloads and checks GitHub Copilot CLI from its official releases, then installs it for your Windows account.",
   mistral: "Downloads and runs the uv installer from https://astral.sh/uv/install.ps1, then installs Mistral AI's mistral-vibe with uv on this PC. uv may also download Python.",
 } as const;
 // Every failure reason the server may publish, and the page's fixed words for Claude Code. [text, the row's one action]

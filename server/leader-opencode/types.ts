@@ -6,6 +6,7 @@ export type OpencodeLeaderDeps = {
   mode: PermissionMode;
   ask: AskApproval;
   savedAsks?: () => boolean;
+  vaultPath?: () => string | null;
   spawnFn?: LeaderSpawn;
   startTimeoutMs?: number;
   // Tests only: a fixed port for a fake server. Otherwise OpenCode binds a port itself and says which (no probe-then-reuse race for another process to win).

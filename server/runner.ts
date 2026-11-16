@@ -1,3 +1,6 @@
+import { createSecretStream } from "./leader-opencode/secret-stream.ts";
+import { secretVariants, redactSecrets } from "./secret-redaction.ts";
+import type { KeyLaunch } from "./settings/cli-key.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { writeFileSync, mkdirSync, appendFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -139,7 +142,7 @@ export function releaseUnconfirmedRun(runId: string): boolean {
   return true;
 }
 
-export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spawnFn: Spawn = spawn, boundary: { priority?: (pid: number) => void; watch?: TreeWatch } = {}): { ok: true; timestamp: number } | { ok: false; error: string } {
+export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spawnFn: Spawn = spawn, boundary: { priority?: (pid: number) => void; watch?: TreeWatch; keyLaunch?: KeyLaunch } = {}): { ok: true; timestamp: number } | { ok: false; error: string } {
   run = Object.freeze({ ...run });
   // Shutdown has begun: nothing may start, even a launch that was waiting for an approval.
   if (workerAdmissionClosed()) return { ok: false, error: "Worker admission is closed for shutdown." };
@@ -152,6 +155,10 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
   const briefPath = join(logsDir, `${run.seatKey}-${timestamp}.brief.txt`);
   const command = acp ? "" : buildCommand(run, briefPath);
   const opencode = opencodeConfig(run);
+  const keyLaunch = acp ? boundary.keyLaunch : undefined;
+  const secrets = secretVariants(keyLaunch?.secrets ?? []);
+  const output = cb.onOutput;
+  cb = { ...cb, onOutput: (started, text) => output(started, redactSecrets(text, secrets)) };
   const env = leaderChildEnv({ ...commandEnv(run, briefPath), ...(run.cli === "opencode" && opencode ? { OPENCODE_CONFIG_CONTENT: opencode } : {}) });
   // The CLI is spawned by absolute path from PATH, never found in the project folder (see resolveCliPath); no resolved path means nothing is spawned.
   let resolvedCommand = "";
@@ -161,6 +168,7 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
   // A failed log write (disk full, folder gone) must never stop the run from reporting its end; the first one per run is said on screen, once.
   let logFailed = false;
   function appendLog(text: string): void {
+    text = redactSecrets(text, secrets);
     try { appendFileSync(logPath, text); }
     catch (err) {
       if (logFailed) return;
@@ -168,9 +176,8 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
       try { cb.onOutput(run, `\n[log] could not save this run's output to disk (${(err as Error).message}); History will be missing it\n`); } catch { /* the run still reports its end */ }
     }
   }
-  function emit(text: string): void {
-    if (text) { appendLog(text); cb.onOutput(run, text); }
-  }
+  const stream = createSecretStream(secrets, { onDelta: (text) => { appendLog(text); cb.onOutput(run, text); } });
+  function emit(text: string): void { if (text) stream.emitDelta(text); }
 
   let entry!: RunningEntry;
   let leader: LeaderHandle | null = null;
@@ -183,7 +190,7 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
       catch (error) { started.error = error as Error; throw error; }
     };
     const live = (): boolean => entry !== undefined && ownsRun(run.runId, entry);
-    const note = (text: string): void => { appendLog(text); cb.onOutput(run, text); };
+    const note = (text: string): void => emit(text);
     const events: LeaderCallbacks = {
       onDelta: (text) => { if (live()) note(text); },
       // A normal end of the prompt is "done", whatever exit code the killed process then gives.
@@ -194,9 +201,9 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
     };
     writeFileSync(briefPath, prompt, "utf8");
     leader = createAcpLeader({ model: "default", effort: "default" }, run.folder, events, {
-      cli: run.acp!, denyPermissions: !run.canWrite, spawnFn: acpSpawn,
+      cli: run.acp!, keyLaunch, denyPermissions: !run.canWrite, spawnFn: acpSpawn,
     });
-    if (!started.child) { leader.stop(); unlinkSync(briefPath); return { ok: false, error: describeSpawnError(started.error ?? new Error(`${run.acp!.name} could not start`), run.folder) }; }
+    if (!started.child) { leader.stop(); unlinkSync(briefPath); return { ok: false, error: redactSecrets(describeSpawnError(started.error ?? new Error(`${run.acp!.name} could not start`), run.folder), secrets) }; }
     proc = started.child;
   } else {
     writeFileSync(briefPath, prompt, "utf8");
@@ -235,6 +242,7 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
     }
     if (claudeState) emitClaudeEvents(flushClaudeOutput(claudeState));
     if (codexState) emitCodexTokenDeltas(flushCodexTokens(codexState));
+    stream.flushTail();
   }
 
   entry = { run, proc, cb, logPath, flush, watch };
@@ -266,7 +274,7 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
     removeRun(run.runId, entry);
     try { flush(); } catch { /* the end is still reported below */ }
     if (spawnError) {
-      const message = `\n[spawn error] ${describeSpawnError(spawnError, run.folder)}\n`;
+      const message = redactSecrets(`\n[spawn error] ${describeSpawnError(spawnError, run.folder)}\n`, secrets);
       appendLog(message); cb.onOutput(run, message);
     }
     const report = (confirmed = false): void => {

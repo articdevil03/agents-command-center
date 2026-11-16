@@ -1,4 +1,5 @@
-import { app, shell } from "electron";
+import { app, shell, safeStorage } from "electron";
+import { createCliCredentialStore, handleCliCredentialMessage } from "./cli-credentials.js";
 import { validateLoginUrl } from "../server/settings/cli-login-policy.js";
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -89,7 +90,14 @@ export async function startServer(onFailure = () => {}) {
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
   const ownedServer = serverProcess;
+  let credentialStore;
   ownedServer.on("message", (message) => {
+    if (message?.type === "cliCredentialRequest") {
+      credentialStore ??= createCliCredentialStore({ safeStorage, dir: join(app.getPath("userData"), "credentials") });
+      void handleCliCredentialMessage(message, (result) => {
+        if (ownedServer.connected) ownedServer.send(result, () => {});
+      }, credentialStore);
+    }
     void handleLoginOpen(message, (result) => {
       if (ownedServer.connected) ownedServer.send(result, () => {});
     });

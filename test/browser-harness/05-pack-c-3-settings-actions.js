@@ -37,7 +37,7 @@
     openSettingsSection("tools");
     const loginMessage = await settingsAction({ name: `CLI login at ${innerWidth}px`, section: "tools", selector: '#s-tools [data-setting-action="login-cli"][data-cli="claude"]', type: "cliLogin", fields: { cli: "claude" } });
 
-    const githubMessage = await settingsAction({ name: `GitHub connect at ${innerWidth}px`, section: "github", selector: '#s-github [data-setting-action="github-login"]', type: "ghLogin", message: "GitHub login refused in fake state" });
+    const githubMessage = await settingsAction({ name: `GitHub connect at ${innerWidth}px`, section: "github", selector: '#s-github [data-setting-action="github-login"]', type: "cliLogin", fields: { cli: "github" }, message: "Could not connect. Try again." });
     const vaultInput = requireElement("#vaultPath"); vaultInput.value = "C:\\vault with spaces";
     const vaultMessage = await settingsAction({ name: `Notes vault save at ${innerWidth}px`, section: "vault", selector: '#s-vault [data-setting-action="vault-toggle"]', type: "setNotesVault", fields: { path: "C:\\vault with spaces" }, result: "done", message: "Done" });
     const folderBrowse = requireElement('#s-folders [data-setting-action="folder-browse"]'); folderBrowse.click(); await settleMicrotasks();

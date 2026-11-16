@@ -15,7 +15,7 @@ import { launchedByOfRun } from "./launch.ts";
 import {
   BACKPRESSURE_LIMIT, EMPTY_CHANGES, EMPTY_NOTES, MAX_RUN_OUTPUT, acpClis, activeLeaderTurns, changesByTab, chatStore, clientPrefs, clients, describeError,
   laggingClients, launchSafety, leaderActivity, leaderJobs, leaderModels, leaderUsage, leaders, notesByTab, pendingApprovals, reportedChatProblems,
-  requestActions, requestsStore, runOutput, runUsage, savingTabs, selectedTabId, settingsService, workspaces,
+  requestActions, requestsStore, runOutput, runUsage, savingTabs, selectedTabId, settingsService, workspaces, vaultCopyAttention,
 } from "./state.ts";
 import { acpLeaderOf, clone, effectiveMode, hasAcpLeader, runtimeFor, runtimeCrew, tabLocation } from "./tabs.ts";
 import { tabHasActiveWork } from "./workspace.ts";
@@ -114,6 +114,7 @@ export function stateMessage(): Record<string, unknown> {
         leaderJobs: leaderJobs.get(tab.id) ?? [],
         chatRevision: chat.revision,
         savedRevision: chat.savedRevision,
+        vaultCopyNeedsAttention: Boolean(settingsService.state.vault.path) && vaultCopyAttention.has(tab.id),
         ...(chatProblem ? { chatProblem } : {}),
       };
     }),

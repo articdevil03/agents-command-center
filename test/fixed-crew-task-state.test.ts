@@ -63,7 +63,7 @@ nodeTest("FCT browser dispatch limits authority and broadcasts only compact task
     const catalogTools = Object.fromEntries(CLI_CATALOG.map(({ id }) => [id, {
       installed: null, version: null, signedIn: null, registered: false, leaderEligible: false, connection: "unknown",
     }]));
-    state.setSettingsService({ state: { tools: { claude: {}, codex: {}, opencode: {} }, catalogTools, permissionActions: {}, uploads: {} }, installer: { busy: false }, login: { busy: false }, models: { busy: false }, snapshot: () => ({}), permissionMode: () => "ask" });
+    state.setSettingsService({ state: { tools: { claude: {}, codex: {}, opencode: {} }, catalogTools, permissionActions: {}, uploads: {}, vault: { path: null, status: "disconnected" } }, installer: { busy: false }, login: { busy: false }, models: { busy: false }, snapshot: () => ({}), permissionMode: () => "ask" });
     const replies: any[] = [], socket = { send: (raw: string) => replies.push(JSON.parse(raw)) };
     const dispatch = (type: string, extra: Record<string, unknown> = {}) => {
       messages.handleMessage(socket, JSON.stringify({ type, requestId: `browser${replies.length}`, tabId: "tab1", ...extra })); return replies.at(-1);

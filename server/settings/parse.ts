@@ -26,12 +26,15 @@ export function knownAuthStatus(cli: CliId, result: CliResult): boolean | null {
   return null;
 }
 
-export function parseGitHubAuthStatus(result: CliResult): { connected: boolean | null; account: string | null } {
-  const text = `${result.stdout}\n${result.stderr}`;
+export function parseGitHubAuthStatus(result: CliResult, reader: "login" | "settings" = "login"): { connected: boolean | null; account: string | null } {
+  const text = `${result.stdout}\n${result.stderr}`.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "");
   const loggedIn = text.match(/Logged in to github\.com account ([A-Za-z0-9-]{1,39})\b/i);
-  if (loggedIn) return { connected: true, account: loggedIn[1] };
-  if (/not logged in|not logged into any github hosts|no authentication token/i.test(text)) return { connected: false, account: null };
-  return { connected: null, account: null };
+  const active = /Active account:\s*true\b/i.test(text);
+  const negative = /not logged in|not logged into any github hosts|no authentication token|Active account:\s*false/i.test(text);
+  if (reader === "settings" && (result.code === 124 || result.code === 127 || result.code < 0 || !text.trim())) return { connected: null, account: null };
+  if (result.code === 0 && loggedIn && active && !negative) return { connected: true, account: loggedIn[1] };
+  if (reader === "settings" && !negative) return { connected: null, account: null };
+  return { connected: false, account: null };
 }
 
 export function parseMcpList(cli: CliId, text: string): McpItem[] {

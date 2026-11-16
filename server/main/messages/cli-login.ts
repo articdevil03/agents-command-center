@@ -16,5 +16,13 @@ export function cliLoginMessages(): Array<[string, MessageHandler]> {
       } finally { delete message.apiKey; }
     });
   };
-  return ["cliLogin", "replaceCliLogin", "submitCliLoginKey", "getCliLoginState", "openCliLogin", "submitCliLoginCode", "cancelCliLogin"].map((type) => [type, handler]);
+  const keyHandler: MessageHandler = (ws, message: any) => {
+    let pending: Promise<void>;
+    try {
+      const requestId = requiredRequestId(message.requestId);
+      pending = settingsService.cliKey(message, ws);
+      runAsyncAction(ws, message.type, requestId, () => pending);
+    } finally { delete message.fields; }
+  };
+  return [...["submitCliKey", "removeCliKey"].map((type): [string, MessageHandler] => [type, keyHandler]), ...["cliLogin", "replaceCliLogin", "submitCliLoginKey", "getCliLoginState", "openCliLogin", "submitCliLoginCode", "cancelCliLogin"].map((type): [string, MessageHandler] => [type, handler])];
 }

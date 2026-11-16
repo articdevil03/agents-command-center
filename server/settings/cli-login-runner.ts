@@ -1,3 +1,7 @@
+import { disableCopilotUpdate } from "./opencode/launch-env.ts";
+import { managedCli } from "./opencode/paths.ts";
+import { GITHUB_LOGIN_ARGS, resolveGitHub } from "./github-login.ts";
+import { LoginOutput } from "./cli-login-output.ts";
 import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { trackLeaderChild } from "../leader-common.ts";
@@ -8,11 +12,11 @@ import { catalogTool } from "./cli-catalog-validation.ts";
 import type { CliResult } from "./types.ts";
 // Authentication always opts into direct native execution; keep the resolved-call boundary shared by login guards.
 const resolveCliOrThrow: typeof resolveSafeCliOrThrow = (name, env, cwd) => resolveSafeCliOrThrow(name, env, cwd, true);
-export type LoginRunOptions = { cli: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; output: (chunk: Buffer) => void };
+export type LoginRunOptions = { cli: string; env: NodeJS.ProcessEnv; signal: AbortSignal; timeoutMs: number; output: (chunk: Buffer, stream?: "stdout" | "stderr") => void };
 export type LoginChild = { done: Promise<CliResult>; writable: () => boolean; submit: (code: string) => void };
 export type RunLogin = (options: LoginRunOptions) => LoginChild;
 export function loginEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const vendor = /^(?:CODEX_HOME|CLAUDE_CONFIG_DIR|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR)$/i;
+  const vendor = /^(?:COPILOT_AUTO_UPDATE|GH_CONFIG_DIR|CODEX_HOME|CLAUDE_CONFIG_DIR|XDG_CONFIG_HOME|XDG_DATA_HOME|XDG_STATE_HOME|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY|NODE_EXTRA_CA_CERTS|SSL_CERT_FILE|SSL_CERT_DIR)$/i;
   return { ...installEnv(env), ...Object.fromEntries(Object.entries(env).filter(([key]) => vendor.test(key))), OPENCODE_DISABLE_AUTOUPDATE: "1", NoDefaultCurrentDirectoryInExePath: "1" };
 }
 export function createLoginRunner(spawnProcess?: typeof spawn, treeFactory = installerTree): RunLogin {
@@ -24,20 +28,25 @@ export function createLoginRunner(spawnProcess?: typeof spawn, treeFactory = ins
       const failed = () => resolve({ code: -1, stdout: "", stderr: "", cleanupConfirmed: true });
       if (!spawnProcess && (options.env.CC_TEST_FAKE_CLI === "1" || process.env.CC_TEST_FAKE_CLI === "1")) { failed(); return; }
       try {
-        entry = catalogTool(options.cli);
-        if (!entry.signIn.managed || !entry.signIn.command) { failed(); return; }
-        const [name, ...fixedArgs] = entry.signIn.command.split(" ");
-        if (name !== entry.detection?.program || fixedArgs.some((arg) => !/^[a-z-]+$/.test(arg))) { failed(); return; }
-        program = process.platform === "win32" ? resolveCliOrThrow(name, env, process.cwd()) : posixCli(name, env)!;
+        if (options.cli === "github") {
+          program = resolveGitHub(env)!;
+          args = GITHUB_LOGIN_ARGS;
+        } else {
+          entry = catalogTool(options.cli);
+          if (!entry.signIn.managed || !entry.signIn.command) { failed(); return; }
+          const [name, ...fixedArgs] = entry.signIn.command.split(" ");
+          if (name !== entry.detection?.program || fixedArgs.some((arg) => !/^[a-z-]+$/.test(arg))) { failed(); return; }
+          program = process.platform === "win32" ? resolveCliOrThrow(name, env, process.cwd()) : (name === "copilot" ? managedCli(env, "copilot") : null) ?? posixCli(name, env)!;
+          args = fixedArgs;
+        }
         if (!program) { failed(); return; }
-        args = fixedArgs;
         const shim = /\.(cmd|bat)$/i.test(program);
         if ((shim ? /["!%\r\n\0]/ : /["\r\n\0]/).test(program)) { failed(); return; }
         bin = shim ? join(windowsSystem32(), "cmd.exe") : program;
         argv = shim ? ["/d", "/s", "/c", `"${[program, ...args].map(cmdQuote).join(" ")}"`] : args;
         if (options.signal.aborted) { resolve({ code: -1, stdout: "", stderr: "", cancelled: true, cleanupConfirmed: true }); return; }
         child = (spawnProcess ?? spawn)(bin, argv, { shell: false, windowsHide: true, detached: false, windowsVerbatimArguments: shim,
-          cwd: process.platform === "win32" ? windowsSystem32() : "/", env, stdio: ["pipe", "pipe", "pipe"] });
+          cwd: process.platform === "win32" ? windowsSystem32() : "/", env: disableCopilotUpdate(env, program), stdio: ["pipe", "pipe", "pipe"] });
       } catch { failed(); return; }
       trackLeaderChild(child);
       const tree = child.pid ? treeFactory(child.pid, env) : null;
@@ -63,15 +72,20 @@ export function createLoginRunner(spawnProcess?: typeof spawn, treeFactory = ins
         resolve({ code: timedOut ? 124 : code, stdout: "", stderr: "", cancelled: options.signal.aborted, cleanupConfirmed, retryCleanup: cleanup });
       };
       const stop = () => { if (stopping) return; stopping = true; void finish(-1); };
-      const output = (chunk: Buffer) => {
+      const github = options.cli === "github" ? new LoginOutput("github") : null;
+      const output = (chunk: Buffer, stream: "stdout" | "stderr") => {
         total += chunk.length;
         if (stopping || finished) return; // drain while cleanup runs
         try {
-          options.output(chunk);
+          options.output(chunk, stream);
+          if (github) {
+            github.feed(chunk, stream);
+            if (github.takeEnterPrompt()) child!.stdin!.write("\n");
+          }
           if (total > 1024 * 1024) throw new Error("outputLimit");
         } catch { stop(); }
       };
-      child.stdout?.on("data", output); child.stderr?.on("data", output);
+      child.stdout?.on("data", (chunk) => output(chunk, "stdout")); child.stderr?.on("data", (chunk) => output(chunk, "stderr"));
       child.stdin?.on("error", stop);
       child.once("exit", (code) => { endedAt = Date.now(); void finish(code ?? -1); });
       child.once("close", (code) => { closed = true; endedAt ??= Date.now(); void finish(code ?? -1); });
@@ -85,18 +99,3 @@ export function createLoginRunner(spawnProcess?: typeof spawn, treeFactory = ins
   };
 }
 export const runLogin = createLoginRunner();
-
-// The launcher owns no pipes: a new window may keep running after cmd exits.
-export function createDetachedLoginLauncher(spawnProcess?: typeof spawn, env: NodeJS.ProcessEnv = process.env) {
-  return async (): Promise<boolean> => {
-    if (!spawnProcess && (env.CC_TEST_FAKE_CLI === "1" || process.env.CC_TEST_FAKE_CLI === "1")) return false;
-    return new Promise((resolve) => {
-      try {
-        const child = (spawnProcess ?? spawn)(join(windowsSystem32(), "cmd.exe"), ["/d", "/c", "start", "", "gh", "auth", "login", "--web"],
-          { detached: true, stdio: "ignore", windowsHide: true, shell: false, cwd: windowsSystem32(), env: loginEnv(env) });
-        child.once("error", () => resolve(false));
-        child.once("spawn", () => { child.unref(); resolve(true); });
-      } catch { resolve(false); }
-    });
-  };
-}

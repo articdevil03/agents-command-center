@@ -3,11 +3,14 @@ import { lstat, mkdir, readdir, rmdir, unlink, writeFile, rename, readFile } fro
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 
-export function managedRoot(env: NodeJS.ProcessEnv): string | null {
+import { RELEASE_TOOLS, type ReleaseTool } from "./release-tools.ts";
+export const candidatesInProgress = new Set<string>();
+
+export function managedRoot(env: NodeJS.ProcessEnv, tool: ReleaseTool = "opencode"): string | null {
   const base = env.LOCALAPPDATA;
   if (!base || !isAbsolute(base) || /["%\r\n\0]/.test(base) ||
     (process.platform === "win32" && !/^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/.test(base))) return null;
-  return join(base, "Command Center", "tools", "opencode-v1");
+  return join(base, "Command Center", "tools", RELEASE_TOOLS[tool].folder);
 }
 export function assertNoLinks(path: string): void {
   let current = resolve(path);
@@ -19,8 +22,8 @@ export function assertNoLinks(path: string): void {
     current = parent;
   }
 }
-export function managedCli(env: NodeJS.ProcessEnv): string | null {
-  const root = managedRoot(env);
+export function managedCli(env: NodeJS.ProcessEnv, tool: ReleaseTool = "opencode"): string | null {
+  const root = managedRoot(env, tool);
   if (!root) return null;
   try {
     assertNoLinks(root);
@@ -29,7 +32,8 @@ export function managedCli(env: NodeJS.ProcessEnv): string | null {
     assertNoLinks(descriptor);
     const value = JSON.parse(readFileSync(descriptor, "utf8"));
     if (Object.keys(value).sort().join(",") !== "executable,version" || !/^1\.\d+\.\d+$/.test(value.version)) return null;
-    if (typeof value.executable !== "string" || !/^(?:install-[a-f0-9-]+)[\\/](?:opencode\.exe|npm[\\/]opencode\.cmd)$/.test(value.executable)) return null;
+    if (tool === "copilot" && (typeof value.executable !== "string" || !/^install-[a-f0-9-]+[\\/]copilot\.exe$/.test(value.executable))) return null;
+    if (tool === "opencode" && (typeof value.executable !== "string" || !/^(?:install-[a-f0-9-]+)[\\/](?:opencode\.exe|npm[\\/]opencode\.cmd)$/.test(value.executable))) return null;
     const path = resolve(root, value.executable), rel = relative(root, path);
     if (rel.startsWith("..") || isAbsolute(rel)) return null;
     assertNoLinks(path);
@@ -37,14 +41,15 @@ export function managedCli(env: NodeJS.ProcessEnv): string | null {
     return path;
   } catch { return null; }
 }
-export async function createCandidate(env: NodeJS.ProcessEnv): Promise<{ root: string; dir: string }> {
-  const root = managedRoot(env);
+export async function createCandidate(env: NodeJS.ProcessEnv, tool: ReleaseTool = "opencode"): Promise<{ root: string; dir: string }> {
+  const root = managedRoot(env, tool);
   if (!root) throw new Error("Missing installation profile");
   assertNoLinks(root);
   await mkdir(root, { recursive: true });
   assertNoLinks(root);
   const dir = join(root, `install-${randomUUID()}`);
   await mkdir(dir);
+  candidatesInProgress.add(dir);
   return { root, dir };
 }
 export async function publishCandidate(root: string, executable: string, version: string): Promise<() => Promise<void>> {
@@ -84,4 +89,5 @@ export async function removeCandidate(dir: string): Promise<void> {
   }
   if ((await readdir(dir)).length) throw new Error("Cleanup directory is not empty");
   await rmdir(dir);
+  candidatesInProgress.delete(dir);
 }

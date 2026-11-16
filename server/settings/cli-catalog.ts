@@ -4,7 +4,7 @@ import type { SeatCli } from "../process-types.ts";
 type BuiltinKind = Exclude<SeatCli, `acp:${string}`>; // the built-in leader kinds, taken from the one capability table
 export type Verification = "verified" | "candidate" | "NOT VERIFIED";
 export type CatalogRecipe =
-  | { kind: "opencode"; command: string }
+  | { kind: "opencode" | "copilot"; command: string }
   | { kind: "powershell"; url: string; command: string }
   | { kind: "npm"; package: string; command: string }
   | { kind: "uv"; package: string; command: string }
@@ -33,7 +33,7 @@ const login = (command: string | null, guidance: string, verified: Verification 
 const tool = (id: string, displayName: string, vendor: string, recipe: CatalogRecipe, prerequisites: string[], program: string,
   signIn: CatalogEntry["signIn"], leader: CatalogLeader, sources: string[], limitation = "Installation and Command Center compatibility NOT VERIFIED"): CatalogEntry =>
   ({ id, displayName, vendor, platforms: ["win32"], wave: 1, recipe, prerequisites,
-    detection: { program, args: id === "copilot" ? ["version"] : ["--version"], ...(id === "opencode" ? { supportedMajor: 1 } : {}) },
+    detection: { program, args: ["--version"], ...(id === "opencode" ? { supportedMajor: 1 } : {}) },
     signIn: { ...signIn, managed: loginProfile(id).managed, unsupportedMessage: loginProfile(id).managed ? null : UNSUPPORTED_MESSAGE }, leader: leader.kind === "acp" ? { ...leader, registrationName: `Command Center ${displayName}` } : leader, sources, limitation, verified: "NOT VERIFIED" });
 const provider = (id: string, displayName: string, vendor: string, guidance: string, limitation: string, sources: string[]): CatalogEntry =>
   ({ id, displayName, vendor, platforms: [], wave: 1, recipe: null, prerequisites: [], detection: null,
@@ -53,9 +53,9 @@ export const CLI_CATALOG: readonly CatalogEntry[] = [
   tool("gemini", "Gemini CLI", "Google", npm("@google/gemini-cli"), ["Node 20+", "Windows 11 24H2 minimum"], "gemini",
     login(null, "Google OAuth, API key or Vertex"), acp("gemini", ["--acp"], "verified", "Documented stdio mode; real Command Center session NOT VERIFIED"),
     ["https://geminicli.com/docs/get-started/installation/", "https://github.com/google-gemini/gemini-cli#authentication-options", "https://geminicli.com/docs/cli/acp-mode/"]),
-  tool("copilot", "GitHub Copilot CLI", "GitHub", { kind: "winget", id: "GitHub.Copilot", command: "winget install GitHub.Copilot" },
-    ["WinGet", "PowerShell 6+"], "copilot", login("copilot login --device-code", "Browser sign-in"), acp("copilot", ["--acp"], "verified", "ACP preview; qualify with updates disabled. Real session NOT VERIFIED"),
-    ["https://github.com/github/copilot-cli#installation", "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference", "https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server"]),
+  tool("copilot", "GitHub Copilot CLI", "GitHub", { kind: "copilot", command: "Install verified GitHub Copilot CLI" },
+    ["Windows account installation"], "copilot", login("copilot login --device-code", "Browser sign-in"), acp("copilot", ["--acp"], "verified", "ACP preview; qualify with updates disabled. Real session NOT VERIFIED"),
+    ["https://github.com/github/copilot-cli#installation", "https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference", "https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server"], "Managed installs do not update automatically. Installation and real sessions NOT VERIFIED"),
   tool("qwen", "Qwen Code", "Alibaba Qwen", ps("https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1"),
     ["Standalone route; npm alternative requires Node 22+", "Automatic fallback behavior NOT VERIFIED"], "qwen",
     login(null, "Interactive /auth, then Qwen account OAuth or provider key. Hidden OAuth login command NOT VERIFIED", "NOT VERIFIED"),

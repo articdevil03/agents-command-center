@@ -14,6 +14,7 @@ import type { GitChanges, TabNotes } from "../changes.ts";
 import type { SettingsService, RunCli } from "../settings.ts";
 import type { ProcessState } from "../process.ts";
 import type { TaskStore } from "../fixed-crew/task-store.ts";
+import { setVaultProjectFolders } from "../vault.ts";
 
 export let fixedTasks: TaskStore;
 export function setFixedTasks(value: TaskStore): void { fixedTasks = value; }
@@ -42,7 +43,10 @@ export const HOST = "127.0.0.1";
 export let claudeCliPath: ReturnType<typeof resolveClaudeCli>;
 export function setClaudeCliPath(value: ReturnType<typeof resolveClaudeCli>): void { claudeCliPath = value; }
 export let workspaces: ReturnType<typeof readWorkspaces>;
-export function setWorkspaces(value: ReturnType<typeof readWorkspaces>): void { workspaces = value; }
+export function setWorkspaces(value: ReturnType<typeof readWorkspaces>): void {
+  workspaces = value;
+  setVaultProjectFolders(() => workspaces.projects.flatMap((project) => [project.folder, ...project.tabs.map((tab) => tab.folder)]));
+}
 // The leader CLIs added in Settings by their start command (Agent Client Protocol). An unreadable list is kept aside and the app starts with none.
 export let acpClis: AcpCli[] = [];
 export function setAcpClis(value: AcpCli[]): void { acpClis = value; }
@@ -86,6 +90,9 @@ export const lateSteers = new Map<string, Array<{ text: string; images: string[]
 // Tabs whose running reply took a steered message: if that reply fails or is stopped, the chat says the steer may be unanswered (nothing a steer did is ever dropped silently).
 export const steeredTurns = new Set<string>();
 export const savingTabs = new Map<string, number>();
+// Retrying the vault copy without intervening work must not add another local Save history entry.
+export const vaultSaveRetries = new Map<string, { revision: number; path: string }>();
+export const vaultCopyAttention = new Set<string>();
 export const leaderTurnWaiters = new Map<string, Set<() => void>>();
 export const pendingHandoverReads = new Set<string>();
 export const handoverReadTurns = new Set<string>();

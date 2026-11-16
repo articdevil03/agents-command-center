@@ -55,12 +55,13 @@
       const disabledWhilePending = pendingButton.disabled;
       await waitFor(() => actionState(sent?.requestId)?.status === result, `${name} server action result`);
       const final = actionState(sent.requestId);
-      const statusNode = document.querySelector(`[data-status-for="${CSS.escape(sent.requestId)}"]`);
+      const github = type === "cliLogin" && fields.cli === "github";
+      const statusNode = github ? document.querySelector("#s-github .cli-login") : document.querySelector(`[data-status-for="${CSS.escape(sent.requestId)}"]`);
       const runningReceived = window.__received.some((item) => item.type === "state" && item.requestActions?.[sent.requestId]?.status === "running");
-      const statusShown = statusNode?.dataset.status === result && statusNode.textContent.includes(message)
+      const statusShown = (github ? statusNode?.dataset.state === result : statusNode?.dataset.status === result) && statusNode.textContent.includes(message)
         && statusNode.checkVisibility() && Boolean(statusNode.closest(`#s-${section}`))
         && (type !== "installCli" || statusNode.closest("[data-tool-row]")?.dataset.cli === fields.cli);
-      if (type === "cliLogin") {
+      if (type === "cliLogin" && !github) {
         check(`managed sign-in fails closed without a vendor process at ${innerWidth}px`, window.__latestState.settings.catalogTools[fields.cli].action.reason === "launchFailed" && statusShown, { final, statusShown });
       }
       const finalButton = requireElement(selector);
@@ -101,20 +102,24 @@
       const noteExpected = claudeTool?.installed === true && claudeTool.signedIn !== true;
       check(`Claude sign-in follows the server's sign-in policy at ${innerWidth}px`, !claudeRow.querySelector('[data-setting-action="login-cli"]') && (noteExpected ? Boolean(note) : note === null), { managed: claudeEntry?.signIn?.managed ?? null, installed: claudeTool?.installed ?? null, signedIn: claudeTool?.signedIn ?? null, note });
     }
-    await serverAction({ name: "GitHub connect", section: "github", selector: '#s-github [data-setting-action="github-login"]', type: "ghLogin", message: "could not open the GitHub login window" });
+    await serverAction({ name: "GitHub connect", section: "github", selector: '#s-github [data-setting-action="github-login"]', type: "cliLogin", fields: { cli: "github" }, message: "GitHub CLI is not installed on this PC." });
 
     const folder = window.__ccFolderChoice;
+    // The notes vault gets its own folder: the picker steps below make `folder` a tab folder, and the server refuses a vault that is or holds a tab folder.
+    const vaultFolder = window.__ccVaultFolder;
+    const tabFolder = window.__latestState.projects[0].tabs[0].folder;
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     requireElement('[data-l="notes"]').click();
     const noVaultButton = requireElement('#lowerBody [data-open-vault]');
     const noVaultNoop = noVaultButton.disabled && text("#lowerBody [data-vault-empty]") === "No vault is connected";
     const openedBeforeNoVault = window.__ccOpenedObsidian.length; noVaultButton.click();
     const noVaultStillClosed = window.__ccOpenedObsidian.length === openedBeforeNoVault;
-    await serverAction({ name: "Notes vault refusal", section: "vault", selector: '#s-vault [data-setting-action="vault-toggle"]', type: "setNotesVault", fields: { path: `${folder}\\missing-vault` }, message: "Notes vault folder does not exist" });
-    await serverAction({ name: "Notes vault save", section: "vault", selector: '#s-vault [data-setting-action="vault-toggle"]', type: "setNotesVault", fields: { path: folder }, result: "done", message: "Done" });
+    await serverAction({ name: "Notes vault refusal", section: "vault", selector: '#s-vault [data-setting-action="vault-toggle"]', type: "setNotesVault", fields: { path: `${vaultFolder}\\missing-vault` }, message: "Notes vault folder does not exist" });
+    await serverAction({ name: "Notes vault broad folder refusal", section: "vault", selector: '#s-vault [data-setting-action="vault-toggle"]', type: "setNotesVault", fields: { path: tabFolder }, message: "That folder is too broad to use as a notes vault. Choose the folder that holds your notes." });
+    await serverAction({ name: "Notes vault save", section: "vault", selector: '#s-vault [data-setting-action="vault-toggle"]', type: "setNotesVault", fields: { path: vaultFolder }, result: "done", message: "Done" });
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
     requireElement('[data-l="notes"]').click();
-    const expectedObsidian = `obsidian://open?path=${encodeURIComponent(folder)}`;
+    const expectedObsidian = `obsidian://open?path=${encodeURIComponent(vaultFolder)}`;
     const openVault = requireElement('#lowerBody [data-open-vault]'); openVault.click();
     await waitFor(() => window.__ccOpenedObsidian.at(-1) === expectedObsidian, "real Open in Obsidian route");
     const obsidianPathExact = window.__ccOpenedObsidian.at(-1) === expectedObsidian;

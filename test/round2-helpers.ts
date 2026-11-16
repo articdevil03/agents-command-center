@@ -26,6 +26,7 @@ import { SettingsService, permissionModeForSdk, ModeBusyError, runCli } from "..
 import * as agentUsage from "../server/agent-usage.ts";
 import * as leaderCommon from "../server/leader-common.ts";
 import * as changesApi from "../server/changes.ts";
+import * as vaultApi from "../server/vault.ts";
 import { leaderChildEnv, withResolvedCli, isInsideFolder, setCliSkipFolders, windowsTaskkillPath, resolveCliOrThrow, leaderKindOf, USER_DENIED } from "../server/leader-common.ts";
 import { keepBadCopy } from "../server/safe-file.ts";
 import { scratchDir, tempRoot, newAppKey } from "./temp-root.ts";
@@ -191,6 +192,7 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
   if (options.leaderSeamOnly) delete testEnv.CC_TEST_FAKE_CLI;
   const testPathExists = (value: string) => /^C:[\\/]work(?:[\\/]|$)/i.test(value);
   const dependencies = {
+    ...vaultApi,
     ...fixedDependencies, structuredClone,
     // These fixtures are existing installs. The real first-run registry and state are exercised in pack29-first-run.test.ts.
     firstRunRequired: () => false, firstRunMessages: () => [],
@@ -273,9 +275,7 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
     releaseUnconfirmedRun: options.releaseUnconfirmed ?? realRunner.releaseUnconfirmedRun,
     logsDir: realRunner.logsDir,
     ChatStore: options.failAssistantAppend ? class extends ChatStore { appendMessage(tabId: string, role: any, ...rest: any[]) { if (role === "assistant") throw new Error("chat disk failed"); return (super.appendMessage as any)(tabId, role, ...rest); } } : ChatStore,
-    SettingsService: class extends SettingsService {
-      constructor(given: ConstructorParameters<typeof SettingsService>[0]) { super({ ...given, launchGitHub: async () => false }); }
-    }, ModeBusyError, runCli, spawnSync: (fixedDependencies as { spawnSync?: typeof spawnSync }).spawnSync ?? spawnSync, writeProjectRules,
+    SettingsService, ModeBusyError, runCli, spawnSync: (fixedDependencies as { spawnSync?: typeof spawnSync }).spawnSync ?? spawnSync, writeProjectRules,
     RequestsStore,
     // This harness runs the server with fake runs and a made-up clock: it never reads the tools' real records or watches a folder (pack9-folder-activity-*.test.ts covers that through real servers).
     createFolderActivity: (given: any) => createFolderActivity({ ...given, home: null }),

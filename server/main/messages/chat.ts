@@ -1,18 +1,19 @@
 import { stat } from "node:fs/promises";
 import type { WebSocket } from "ws";
 import { handoverPath } from "../../changes.ts";
+import { resolvedVault, vaultHandoverPath, vaultSaveInstruction, verifiedVaultCopy } from "../../vault.ts";
 import { approvalWaitMessage, hasPendingApproval } from "../approvals.ts";
 import { broadcast, sendError, stateMessage } from "../broadcast.ts";
-import { stopLeaderSession } from "../leader-session.ts";
+import { leaderNeedsVaultReplacement, stopLeaderSession } from "../leader-session.ts";
 import {
   acceptChat, recordLeaderSession, sendLeaderTurn, serializeChatOperation, steerLeaderTurn, waitForLeaderTurnToFinish, withChatOperationTimeout,
 } from "../leader-turn.ts";
 import type { MessageHandler } from "./types.ts";
 import {
   CLEAR_UNDO_MS, activeLeaderTurns, chatClearGenerations, chatStore, describeError, expiredClearUndos, handoverReadTurns, leaders, pendingClearUndos,
-  pendingHandoverReads, reportedChatProblems, savingTabs,
+  pendingHandoverReads, reportedChatProblems, savingTabs, settingsService, vaultSaveRetries, vaultCopyAttention,
 } from "../state.ts";
-import { tabLocation } from "../tabs.ts";
+import { effectiveMode, tabLocation } from "../tabs.ts";
 import { refreshTabDetails } from "../workspace.ts";
 
 function onChat(ws: WebSocket, message: any): void {
@@ -36,14 +37,22 @@ function onSave(ws: WebSocket, message: any): void {
       const location = tabLocation(tabId);
       if (!location) { saveError("tab was removed before Save started"); return; }
       // A leader that has not read RESUME.md yet knows nothing: saving now would overwrite the good handover.
+      if (leaderNeedsVaultReplacement(tabId)) pendingHandoverReads.add(tabId);
       if (pendingHandoverReads.has(tabId)) { saveError("send a message first so the leader reads the saved handover; saving now would overwrite it"); return; }
       const ownHandover = handoverPath(location.tab.folder, tabId);
       const saveStartedAt = Date.now();
+      const vaultRoot = resolvedVault(settingsService.state.vault.path);
+      const vaultExpected = Boolean(settingsService.state.vault.path) && effectiveMode(tabId) !== "plan";
+      const vaultCopy = vaultRoot && effectiveMode(tabId) !== "plan" ? vaultHandoverPath(vaultRoot, location.project.name, location.tab.name) : null;
+      const retry = vaultSaveRetries.get(tabId);
+      const vaultRetry = retry?.path === vaultCopy && retry?.revision === chatStore.snapshot(tabId).revision;
+      let confirmed = false;
       const clearGeneration = chatClearGenerations.get(tabId) ?? 0;
       // True only when the handover file is newer than Save's start and no Clear or Undo swapped the transcript meanwhile.
       const startFolder = location.tab.folder;
       // A late confirm (after the Save timeout) must not mark a tab saved once its folder changed, its leader was replaced, or it is waiting to re-read the handover.
       const confirmSaved = async (): Promise<boolean> => {
+        if (confirmed) return true;
         const savedRevision = chatStore.snapshot(tabId).revision;
         let handover;
         try { handover = await stat(ownHandover); } catch { return false; }
@@ -51,17 +60,26 @@ function onSave(ws: WebSocket, message: any): void {
         if ((chatClearGenerations.get(tabId) ?? 0) !== clearGeneration) return false;
         if (tabLocation(tabId)?.tab.folder !== startFolder || leaders.get(tabId) !== leader || pendingHandoverReads.has(tabId)) return false;
         // The history entry exists before "saved" goes out: the page asks for the list on "saved" and must already see it.
-        try { await recordLeaderSession(tabId, ownHandover); }
+        try { if (!vaultRetry) await recordLeaderSession(tabId, ownHandover); }
         catch (err) { broadcast({ type: "error", message: `could not record this saved session in the leader's history: ${describeError(err)}` }); }
         // A Clear during the history write replaced the chat: that history entry stays (it records this Save), but the cleared chat is not "saved".
         if ((chatClearGenerations.get(tabId) ?? 0) !== clearGeneration) return false;
         const saved = chatStore.markSaved(tabId, savedRevision);
+        confirmed = true;
         broadcast({ type: "saved", tabId, revision: saved.revision, savedRevision: saved.savedRevision });
+        if (vaultExpected && settingsService.state.vault.path && (!vaultCopy || !vaultRoot || resolvedVault(settingsService.state.vault.path) !== vaultRoot || !(await verifiedVaultCopy(vaultRoot, vaultCopy, saveStartedAt)))) {
+          vaultCopyAttention.add(tabId);
+          if (vaultCopy) vaultSaveRetries.set(tabId, { revision: saved.revision, path: vaultCopy });
+          broadcast({ type: "chatNotice", tabId, message: "Saved in this project. The vault copy needs attention." });
+        } else {
+          vaultSaveRetries.delete(tabId);
+          if (!settingsService.state.vault.path || vaultExpected) vaultCopyAttention.delete(tabId);
+        }
         broadcast(stateMessage());
         void refreshTabDetails(tabId);
         return true;
       };
-      const turn = sendLeaderTurn(tabId, `Save a concise handover of this tab's current work to ${ownHandover}. Include current decisions, open work, and exact files changed. Create the folder if it does not exist.`);
+      const turn = sendLeaderTurn(tabId, `Save a concise handover of this tab's current work to ${ownHandover}. Include current decisions, open work, and exact files changed. Create the folder if it does not exist.` + vaultSaveInstruction(vaultCopy, effectiveMode(tabId), location.project.name, location.tab.name, new Date(saveStartedAt).toISOString()));
       let ok: boolean;
       try { ok = await withChatOperationTimeout(turn, "leader Save timed out", tabId); }
       catch (err) {
@@ -88,6 +106,8 @@ function onClear(ws: WebSocket, message: any): void {
   const previous = damaged ? undefined : chatStore.snapshot(tabId);
   stopLeaderSession(tabId, true);
   const snapshot = chatStore.clear(tabId);
+  vaultSaveRetries.delete(tabId);
+  vaultCopyAttention.delete(tabId);
   chatClearGenerations.set(tabId, (chatClearGenerations.get(tabId) ?? 0) + 1);
   const previousUndo = pendingClearUndos.get(tabId);
   if (previousUndo) clearTimeout(previousUndo.timer);
@@ -124,6 +144,8 @@ function onUndoClear(ws: WebSocket, message: any): void {
   pendingHandoverReads.add(tabId);
   handoverReadTurns.delete(tabId);
   const restored = chatStore.restore(tabId, undo.snapshot);
+  vaultSaveRetries.delete(tabId);
+  vaultCopyAttention.delete(tabId);
   chatClearGenerations.set(tabId, (chatClearGenerations.get(tabId) ?? 0) + 1);
   clearTimeout(undo.timer);
   pendingClearUndos.delete(tabId);

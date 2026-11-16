@@ -8,6 +8,7 @@
 (() => {
   // The server's static words per reason (the frozen contract). Anything unknown reads as an unfinished sign-in.
   const REASON = Object.freeze({
+    githubMissing: "GitHub CLI is not installed on this PC.",
     unsupportedVersion: "OpenCode 1 is needed.",
     existingCredentials: "A credential is already saved.",
     environmentCredentials: "OpenCode is using credentials set outside Command Center. Remove that setting in Windows Settings before adding a key here.",
@@ -60,13 +61,14 @@
     const panels = new Map(); // `${surface}:${cli}` -> { root, parts }
     const catalog = () => (Array.isArray(page.state?.cliCatalog) ? page.state.cliCatalog : []);
     const entry = (cli) => catalog().find((item) => item?.id === cli) ?? null;
-    const nameOf = (cli) => entry(cli)?.displayName ?? cli;
+    const nameOf = (cli) => cli === "github" ? "GitHub" : entry(cli)?.displayName ?? cli;
     function facts(id) {
+      if (id === "github") return { installed: true, signedIn: page.state?.settings?.github?.connected === true };
       const legacy = page.state?.settings?.tools?.[id], more = page.state?.settings?.catalogTools?.[id] ?? null;
       if (id === "opencode") return more ?? {};
       return { installed: legacy?.installed ?? more?.installed ?? null, signedIn: legacy?.signedIn ?? more?.signedIn ?? null };
     }
-    const managed = (cli) => entry(cli)?.signIn?.managed === true;
+    const managed = (cli) => cli === "github" || entry(cli)?.signIn?.managed === true;
     // The tool's own words when it has no managed sign-in; null for a managed tool.
     function unsupportedMessage(cli) {
       if (managed(cli)) return null;
@@ -74,7 +76,7 @@
       return typeof text === "string" && text.trim() ? text.trim() : REASON.unsupported;
     }
     function shared(id) {
-      const action = page.state?.settings?.catalogTools?.[id]?.action;
+      const action = id === "github" ? page.state?.settings?.github?.action : page.state?.settings?.catalogTools?.[id]?.action;
       return action && typeof action === "object" && action.kind === "login" && typeof action.requestId === "string" ? action : null;
     }
     const key = (cli) => `login-${cli}`, cancelKey = (cli) => `login-cancel-${cli}`;
@@ -108,7 +110,7 @@
     // sent but not yet published counts as running, so a double click never starts two).
     const keySupported = (cli) => cli !== "opencode" || facts(cli).supportedVersion === true;
     const replaceOffered = (cli) => cli === "opencode" && managed(cli) && facts(cli).installed === true && keySupported(cli) && facts(cli).credentialSource === "stored";
-    const offered = (cli) => managed(cli) && facts(cli).installed === true && facts(cli).signedIn !== true && keySupported(cli) && !replaceOffered(cli);
+    const offered = (cli) => cli === "github" ? facts(cli).signedIn !== true : managed(cli) && facts(cli).installed === true && facts(cli).signedIn !== true && keySupported(cli) && !replaceOffered(cli);
     const canStart = (cli) => offered(cli) && !busyId() && !installBusy();
 
     function start(cli, replace = false) {
@@ -164,7 +166,7 @@
       if (mine.event && revision <= mine.event.revision) return true;
       const running = message.status === "running";
       mine.event = { status: message.status, phase: message.phase ?? null, reason: message.reason ?? null, revision, pasteRequired: running && message.pasteRequired === true,
-        verificationUrl: running ? safeUrl(message.verificationUrl) : null, deviceCode: running ? safeCode(message.deviceCode) : null };
+        verificationUrl: running ? message.cli === "github" ? message.verificationUrl === "https://github.com/login/device" ? message.verificationUrl : null : safeUrl(message.verificationUrl) : null, deviceCode: running ? message.cli === "github" ? /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(message.deviceCode) ? message.deviceCode : null : safeCode(message.deviceCode) : null };
       if (!running || (message.cli === "opencode" && message.phase !== "waitingKey")) clearInputs(message.cli);
       if (!running) mine.loginId = null; // the capability ends with the sign-in
       return true;
@@ -227,7 +229,7 @@
       const live = view.state === "running" || view.state === "orphan";
       const isKey = cli === "opencode", replacing = replaceOffered(cli) && !live && view.state !== "stuck";
       const asking = view.state === "running" && ["waitingBrowser", "waitingCode", "waitingKey"].includes(view.phase);
-      const shown = replacing || live || view.state === "stuck" || view.state === "failed" || (view.state === "done" && (isKey || Boolean(view.reason)));
+      const shown = (cli === "github" && view.state === "refused") || replacing || live || view.state === "stuck" || view.state === "failed" || (view.state === "done" && (isKey || Boolean(view.reason)));
       show(root, shown);
       let text = "";
       if (view.stopping && view.state !== "failed") text = TEXT.stopping;
@@ -235,13 +237,19 @@
       else if (view.state === "running") text = view.reason === "browserUnavailable" ? REASON.browserUnavailable : isKey ? view.phase === "waitingKey" ? "Sign in with your OpenCode Go key" : "Saving your key…" : view.phase === "verifying" ? TEXT.verifying : asking ? TEXT.browser : TEXT.starting;
       else if (view.state === "stuck" || view.state === "failed" || view.state === "done") text = view.reason ? reasonText(view.reason) : "";
       if (isKey && view.state === "done" && !view.reason) text = "Key saved. OpenCode will check it when you first chat.";
+      if (cli === "github") {
+        if (view.state === "running" && asking && !view.stopping) text = "Waiting for you to finish in your browser";
+        else if (view.state === "refused") text = view.text || "Could not connect. Try again.";
+        else if (view.state === "failed" && view.reason !== "cancelled") text = view.reason === "githubMissing" ? REASON.githubMissing : "Could not connect. Try again.";
+        else if (view.state === "stuck") text = "Could not confirm sign-in stopped";
+      }
       setText(parts.status, text);
       root.dataset.state = view.state; parts.status.classList.toggle("bad", view.state === "failed" || view.state === "stuck" || view.reason === "browserUnavailable");
       show(parts.bar, live);
       const url = asking ? event?.verificationUrl ?? null : null, code = asking && !isKey ? event?.deviceCode ?? null : null;
       show(parts.browser, Boolean(url)); setText(parts.addr, url ?? "");
       show(parts.url, !isKey); show(parts["copy-url"], !isKey);
-      setText(parts.open, isKey ? "Get my key" : "Open sign-in page");
+      setText(parts.open, isKey ? "Get my key" : cli === "github" ? "Open GitHub" : "Open sign-in page");
       show(parts.code, Boolean(code)); setText(parts.big, code ?? "");
       const paste = !view.stopping && view.state === "running" && (isKey ? view.phase === "waitingKey" : view.phase === "waitingCode" && event?.pasteRequired === true);
       show(parts.paste, paste);

@@ -101,7 +101,7 @@
       other.bind(q, update);
       // Enter in a text field moves on when the step is complete, like a form; inside the Add form it adds the tool instead.
       root.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" || event.defaultPrevented || event.target.closest?.(".cli-login") || other.onEnter(event, update)) return;
+        if (event.key !== "Enter" || event.defaultPrevented || event.target.closest?.(".cli-login,.cli-key-panel") || other.onEnter(event, update)) return;
         if (event.target.matches?.("input:not([type=checkbox]):not([type=radio])")) { event.preventDefault(); next(); }
       });
       if (q("frunFolder")) q("frunFolder").value = draft.folder;
@@ -142,6 +142,7 @@
         drawIfChanged("acp", q("frunAcpRows"), other.rowsHtml(draft.search));
         drawIfChanged("providers", q("frunProviders"), tools.providersHtml(draft.search));
         login.mount(q("frunTools"), "wizard"); // each row's sign-in panel: the same element every time, brought up to date
+        page.cliKeys?.mount(q("frunTools"), "wizard");
       });
       q("frunLeadBox").hidden = !drawn.rows && !drawn.acp; q("frunModelBox").hidden = !drawn.providers;
       setText(q("frunNoMatch"), q("frunLeadBox").hidden && q("frunModelBox").hidden && draft.search.trim() ? `No tool or model matches “${draft.search.trim()}”.` : "");

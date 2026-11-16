@@ -1,3 +1,5 @@
+import { GITHUB_STATUS_ARGS } from "./github-login.ts";
+import { parseGitHubAuthStatus } from "./parse.ts";
 import { hasCredentialOverride } from "./opencode/credentials.ts";
 import { checkKeyCredentials, validApiKey } from "./opencode/key.ts";
 import { randomBytes } from "node:crypto";
@@ -11,6 +13,7 @@ import { validLoginCode, validateLoginUrl, UNSUPPORTED_MESSAGE } from "./cli-log
 import { AUTH_ARGS, CLI_TIMEOUT_MS } from "./constants.ts";
 import type { CliId, CliResult, RunCli, RunKey, KeyRunResult, SettingsState } from "./types.ts";
 export const LOGIN_MESSAGES = {
+  githubMissing: "GitHub CLI is not installed on this PC.",
   unsupportedVersion: "OpenCode 1 is needed.", existingCredentials: "A credential is already saved.",
   environmentCredentials: "OpenCode is using credentials set outside Command Center. Remove that setting in Windows Settings before adding a key here.",
   credentialUnknown: "Could not check saved credentials.", invalidKey: "Enter an OpenCode Go API key.", keyFailed: "Could not save the key. Try again.",
@@ -35,9 +38,9 @@ export function validateLoginRequest(message: unknown): asserts message is Recor
   if (typeof value.type !== "string" || !Object.hasOwn(extra, value.type)) throw new Error("Invalid sign-in request.");
   const fields = ["type", "requestId", "cli", ...extra[value.type as keyof typeof extra]];
   if (Object.keys(value).length !== fields.length || fields.some((field) => !Object.hasOwn(value, field)) || Object.keys(value).some((field) => !fields.includes(field)) || !isSafeRequestId(value.requestId)) throw new Error("Invalid sign-in request.");
-  catalogTool(value.cli);
+  if (value.cli !== "github") catalogTool(value.cli);
   if (["replaceCliLogin", "submitCliLoginKey"].includes(value.type) && value.cli !== "opencode") throw new Error("Invalid sign-in request.");
-  if (value.type === "submitCliLoginCode" && value.cli === "opencode") throw new Error("Invalid sign-in request.");
+  if (value.type === "submitCliLoginCode" && ["opencode", "github"].includes(value.cli as string)) throw new Error("Invalid sign-in request.");
   if (value.type === "replaceCliLogin" && value.confirm !== true) throw new Error("Invalid sign-in request.");
   if (fields.includes("loginId") && (typeof value.loginId !== "string" || !/^[a-f0-9]{48}$/.test(value.loginId))) throw new Error("Sign-in is already running. Cancel to start again.");
   if (value.type === "cancelCliLogin" && !isSafeRequestId(value.loginRequestId)) throw new Error("Invalid sign-in request.");
@@ -79,7 +82,7 @@ export class CliLogin {
     const action = { requestId: op.requestId, kind: "login" as const, phase, reason, status,
       message: reason ? LOGIN_MESSAGES[reason] : status === "done" ? op.id === "opencode" ? "Key saved. OpenCode will check it when you first chat." : "Signed in" : phase === "waitingKey" ? "Sign in with your OpenCode Go key" : op.id === "opencode" ? "Saving your key…" : phase === "waitingCode" ? "Paste the code from the website" : phase === "waitingBrowser" ? "Finish signing in in your browser" : "Signing in" };
     const cli = op.id;
-    const target = this.state.catalogTools[cli];
+    const target = cli === "github" ? this.state.github : this.state.catalogTools[cli];
     target.action = action;
     if (Object.hasOwn(this.state.tools, op.id)) this.state.tools[op.id as CliId].action = action;
     try { op.send({ ...op.event }); } catch { /* socket loss does not affect child ownership */ }
@@ -103,16 +106,24 @@ export class CliLogin {
     let cleanupConfirmed = true;
     op.deadline = setTimeout(() => { op.failure = "timeout"; this.clearPrivate(op); this.publish(op, null, op.keyWriteAttempt ? "possiblySaved" : "timeout"); op.abort.abort(); }, this.deps.timeoutMs ?? 600_000);
     try {
-      const entry = catalogTool(op.id);
-      if (op.id !== "opencode" && !entry.signIn.managed) throw new Error("unsupported");
-      if (op.id !== "opencode" && this.state.catalogTools[op.id].signedIn === true) throw new Error("existingCredentials");
-      if (op.id !== "opencode") {
+      if (op.id === "github") {
         await (this.deps.refreshPath ?? (() => refreshProcessPath({ env: this.deps.env })))();
-        await detectCatalogTool(op.id, this.state, (bin, args, options) => this.deps.run(bin, args, { ...options, directExecutable: true }));
-        if (this.state.catalogTools[op.id].signedIn === true) throw new Error("existingCredentials");
+        const version = await this.deps.run("gh", ["--version"], { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true });
+        if (version.code !== 0) throw new Error("githubMissing");
+        this.state.github.connected = false;
+        this.state.github.account = null;
+      } else {
+        const entry = catalogTool(op.id);
+        if (op.id !== "opencode" && !entry.signIn.managed) throw new Error("unsupported");
+        if (op.id !== "opencode" && this.state.catalogTools[op.id].signedIn === true) throw new Error("existingCredentials");
+        if (op.id !== "opencode") {
+          await (this.deps.refreshPath ?? (() => refreshProcessPath({ env: this.deps.env })))();
+          await detectCatalogTool(op.id, this.state, (bin, args, options) => this.deps.run(bin, args, { ...options, directExecutable: true }));
+          if (this.state.catalogTools[op.id].signedIn === true) throw new Error("existingCredentials");
+        }
+        const installed = this.state.catalogTools[op.id].installed;
+        if (installed !== true) throw new Error(installed === false ? "notInstalled" : "installationUnknown");
       }
-      const installed = this.state.catalogTools[op.id].installed;
-      if (installed !== true) throw new Error(installed === false ? "notInstalled" : "installationUnknown");
       if (op.abort.signal.aborted) throw new Error(op.failure ?? "cancelled");
       if (op.id === "opencode") {
         if (hasCredentialOverride(this.deps.env) && this.state.catalogTools.opencode.credentialSource !== "stored") {
@@ -156,10 +167,10 @@ export class CliLogin {
         return;
       }
       op.child = (this.deps.runner ?? runLogin)({ cli: op.id, env: this.deps.env, signal: op.abort.signal,
-        timeoutMs: Math.max(1, op.event.expiresAt! - Date.now()), output: (chunk) => {
+        timeoutMs: Math.max(1, op.event.expiresAt! - Date.now()), output: (chunk, stream) => {
           if (op.abort.signal.aborted) return;
           try {
-            const progress = op.parser.feed(chunk);
+            const progress = op.parser.feed(chunk, stream);
             if (op.event.verificationUrl === progress.verificationUrl && op.event.deviceCode === progress.deviceCode && op.event.pasteRequired === progress.pasteRequired) return;
             Object.assign(op.event, progress);
             this.publish(op, progress.pasteRequired ? "waitingCode" : progress.verificationUrl ? "waitingBrowser" : "starting");
@@ -179,7 +190,7 @@ export class CliLogin {
       this.publish(op, "verifying");
       await this.probe(op);
       if (op.failure) throw new Error(op.failure);
-      const reason = AUTH_ARGS[op.id as CliId] ? op.positive ? null : "notSignedIn" : "statusUnknown";
+      const reason = (op.id === "github" || AUTH_ARGS[op.id as CliId]) ? op.positive ? null : "notSignedIn" : "statusUnknown";
       if (reason === "notSignedIn") throw new Error(reason);
       this.clearPrivate(op); this.publish(op, null, reason, "done");
     } catch (error) {
@@ -194,9 +205,20 @@ export class CliLogin {
     }
   }
   private async probe(op: Operation): Promise<void> {
-    const args = AUTH_ARGS[op.id as CliId];
+    const args = op.id === "github" ? GITHUB_STATUS_ARGS : AUTH_ARGS[op.id as CliId];
     if (!args || op.abort.signal.aborted) return;
-    const result = await this.deps.run(catalogTool(op.id).detection!.program, args, { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true });
+    if (op.id === "github" && (!op.result || op.result.code !== 0 || op.result.cleanupConfirmed !== true)) return;
+    const result = await this.deps.run(op.id === "github" ? "gh" : catalogTool(op.id).detection!.program, args, { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true });
+    if (op.id === "github") {
+      const parsed = parseGitHubAuthStatus(result);
+      if (op.abort.signal.aborted) return;
+      // Account names stay out of shared login state and persistence.
+      this.state.github.connected = parsed.connected;
+      this.state.github.account = null;
+      op.positive = parsed.connected === true;
+      this.deps.publish();
+      return;
+    }
     const signedIn = catalogLoginStatus(op.id, result);
     this.state.catalogTools[op.id].signedIn = signedIn;
     if (Object.hasOwn(this.state.tools, op.id)) this.state.tools[op.id as CliId].signedIn = signedIn;

@@ -15,6 +15,7 @@ export { resolveClaudeCli } from "./leader/claude-cli.ts";
 export type LeaderOptions = {
   env: NodeJS.ProcessEnv;
   cwd: string;
+  additionalDirectories?: Options["additionalDirectories"];
   model: string;
   permissionMode: "default" | "acceptEdits" | "plan" | "bypassPermissions";
   allowDangerouslySkipPermissions: true;
@@ -37,7 +38,7 @@ export type LeaderTools = { mcpServers: Record<string, McpServerConfig>; allowed
 // advisor: the Claude model passed as --advisor; it is read when the session starts and only with the native CLI.
 export type LeaderSettings = { model: string; effort: string; advisor?: string };
 // holdsPlan: the tab is meant to be in Plan. An approved ExitPlanMode puts the live session back in its earlier mode (edits allowed), which must not read as "the user allowed edits".
-export function buildLeaderOptions(seat: LeaderSettings, tabFolder: string, cliPath: string | null, tools?: LeaderTools, mode: PermissionMode = "accept", ask: AskApproval = async () => false, savedAsks: () => boolean = () => false, observeMode: (mode: string) => void = () => {}, holdsPlan: () => boolean = () => mode === "plan"): LeaderOptions {
+export function buildLeaderOptions(seat: LeaderSettings, tabFolder: string, cliPath: string | null, tools?: LeaderTools, mode: PermissionMode = "accept", ask: AskApproval = async () => false, savedAsks: () => boolean = () => false, observeMode: (mode: string) => void = () => {}, holdsPlan: () => boolean = () => mode === "plan", vaultPath: string | null = null): LeaderOptions {
   // The path is resolved once but used for every tab: an executable inside this tab's folder is a planted one.
   if (cliPath && isInsideFolder(cliPath, tabFolder)) throw new Error(`The Claude CLI (${cliPath}) lies inside the tab folder (${tabFolder}); refusing to start it from there.`);
   const approve: AskApproval = async (tool, input, signal) => {
@@ -47,6 +48,7 @@ export function buildLeaderOptions(seat: LeaderSettings, tabFolder: string, cliP
   const options: LeaderOptions = {
     env: leaderChildEnv(),
     cwd: tabFolder,
+    ...(vaultPath ? { additionalDirectories: [vaultPath] } : {}),
     model: seat.model,
     permissionMode: permissionModeForSdk(mode),
     // Without this the SDK refuses a live switch to bypassPermissions on a running
@@ -107,7 +109,7 @@ function buildContent(text: string, images: string[]): unknown[] {
 
 // Streaming-input session: one Leader per tab, holding one long-lived
 // `claude` subprocess across turns via query()'s AsyncIterable prompt mode.
-export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: string | null, cb: LeaderCallbacks, tools?: LeaderTools, mode: PermissionMode = "accept", ask?: AskApproval, queryFn: typeof query = query, savedAsks?: () => boolean): {
+export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: string | null, cb: LeaderCallbacks, tools?: LeaderTools, mode: PermissionMode = "accept", ask?: AskApproval, queryFn: typeof query = query, savedAsks?: () => boolean, vaultPath: string | null = null): {
   send: (text: string, images: string[]) => void;
   steer: (text: string, images: string[]) => boolean;
   stop: () => void;
@@ -152,7 +154,7 @@ export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: s
     }
   }
 
-  const options: Options = { abortController, ...buildLeaderOptions(seat, tabFolder, cliPath, tools, mode, ask, savedAsks, (value) => { liveMode = value; }, () => requestedMode === "plan") };
+  const options: Options = { abortController, ...buildLeaderOptions(seat, tabFolder, cliPath, tools, mode, ask, savedAsks, (value) => { liveMode = value; }, () => requestedMode === "plan", vaultPath) };
 
   // The SDK's own spawn is replaced by the tracked one, so a kill that cannot be confirmed is reported and remembered for the tab's next leader.
   let claudeChild: ChildProcess | null = null;

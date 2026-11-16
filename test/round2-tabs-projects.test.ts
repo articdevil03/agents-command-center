@@ -1,11 +1,15 @@
+import { scratchDir } from "./temp-root.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import * as usage from "../server/usage.ts";
 import { moduleDataDir, config } from "./round2-setup.ts";
-import { fixtureWorkspaces, loadFixed, startHelper, endRun, fixedCreation, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
+import { fixtureWorkspaces, loadFixed as loadFixedFixture, startHelper, endRun, fixedCreation, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
+
+// Keep this file's real Settings writes outside the repository.
+const loadFixed = (options: Parameters<typeof loadFixedFixture>[0] = {}) => loadFixedFixture({ testRoot: scratchDir(), ...options });
 
 test("this file's config module keeps its files in a temp data folder, never in the repo's config/", () => {
   assert.equal(path.dirname(path.dirname(config.workspacesPath)).toLowerCase(), moduleDataDir.toLowerCase());
@@ -296,8 +300,8 @@ test("CLI, GitHub, MCP, and plugin action refusals echo their safe request ids a
     await waitFor(() => ws.messages.some((item: any) => item.type === "error" && item.requestId === requestId), `${message.type} refusal`);
     assert.equal(server.stateMessage().requestActions[requestId].status, "failed", `${message.type} state is server-owned`);
     if (message.type === "ghLogin") {
-      assert.equal(ws.messages.findLast((item: any) => item.type === "error" && item.requestId === requestId).message, "could not open the GitHub login window");
-      assert.equal(server.settingsService.state.github.action?.status, "failed");
+      assert.equal(ws.messages.findLast((item: any) => item.type === "error" && item.requestId === requestId).message, "Another installation or sign-in is running.");
+      assert.equal(server.settingsService.state.github.action, undefined, "refused admission cannot invent a GitHub operation");
     }
   }
 });

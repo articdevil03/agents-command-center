@@ -3,6 +3,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import type { LeaderSpawn } from "./types.ts";
+import { disableCopilotUpdate } from "../settings/opencode/launch-env.ts";
 import { managedCli } from "../settings/opencode/paths.ts";
 
 // cmd.exe looks in the current folder before PATH, so a codex.cmd planted in a project folder would run instead of the real CLI.
@@ -37,7 +38,7 @@ export function setCliSkipFolders(getFolders: () => string[]): void { workspaceF
 export function cliSkipFolders(cwd?: string | string[]): string[] { return [...(cwd === undefined ? [] : [cwd].flat()), ...workspaceFolders()].filter(Boolean); }
 export function resolveCliPath(name: string, env: NodeJS.ProcessEnv = process.env, cwd?: string | string[], ignoreSkip = false): string | null {
   const skip = ignoreSkip ? [] : cliSkipFolders(cwd);
-  const managed = name === "opencode" ? managedCli(env) : null;
+  const managed = name === "opencode" || name === "copilot" ? managedCli(env, name) : null;
   if (managed && !skip.some((folder) => isInsideFolder(managed, folder))) return managed;
   const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path");
   for (const raw of (pathKey ? env[pathKey] ?? "" : "").split(";")) {
@@ -91,9 +92,13 @@ export function leaderKindOf(cli: unknown): "claude" | "codex" | "opencode" | "a
 }
 
 // The leader child must never inherit the app's private data root, the app key or a stray server password (same strip as buildLeaderOptions).
-export function leaderChildEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+export function leaderChildEnv(extra: NodeJS.ProcessEnv = {}, program?: string, cwd?: string): NodeJS.ProcessEnv {
   const { CC_DATA_DIR: _ccDataDir, CC_TEST_FORCE_PACKAGED: _ccTestForcePackaged, CC_APP_KEY: _ccAppKey, OPENCODE_SERVER_PASSWORD: _ocPassword, ...childEnv } = process.env;
-  return stripElectronNodeEnv({ ...childEnv, NoDefaultCurrentDirectoryInExePath: "1", ...extra, OPENCODE_DISABLE_AUTOUPDATE: "1" });
+  const overridden = new Set(Object.keys(extra).map((key) => key.toLowerCase()));
+  for (const key of Object.keys(childEnv)) if (overridden.has(key.toLowerCase())) delete childEnv[key];
+  const env = { ...childEnv, NoDefaultCurrentDirectoryInExePath: "1", ...extra, OPENCODE_DISABLE_AUTOUPDATE: "1" };
+  const executable = program === "copilot" ? resolveCliPath(program, env, cwd) ?? undefined : program;
+  return stripElectronNodeEnv(disableCopilotUpdate(env, executable));
 }
 
 // Absolute System32 paths: a bare "taskkill" or "powershell" is looked for in the current folder first.

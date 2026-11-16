@@ -3,7 +3,9 @@ import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { keepBadCopy, writeFileSynced, replaceFile } from "../safe-file.ts";
 import { PERMISSION_MODES } from "./constants.ts";
+import { keyProfile } from "./cli-key-profiles.ts";
 import { CLI_CATALOG } from "./cli-catalog.ts";
+import { checkVaultStatus } from "./vault.ts";
 import type { CliInventory, PermissionMode, PersistedSettings, SettingsState } from "./types.ts";
 
 const EMPTY_SETTINGS: PersistedSettings = { notesVaultPath: null, defaultProjectFolder: "", permissionModes: {} };
@@ -12,9 +14,9 @@ function freshInventory(): CliInventory {
   return { instructionFiles: [], skills: [], mcpServers: [], plugins: [] };
 }
 
-export function freshState(saved: PersistedSettings): SettingsState {
+export function freshState(saved: PersistedSettings, vaultStatus: typeof checkVaultStatus = checkVaultStatus): SettingsState {
   return {
-    catalogTools: Object.fromEntries(CLI_CATALOG.map(({ id, leader }) => [id, { installed: null, version: null, signedIn: null,
+    catalogTools: Object.fromEntries(CLI_CATALOG.map(({ id, leader }) => [id, { keyProfile: keyProfile(id), keySaved: false, installed: null, version: null, signedIn: null,
       registered: false, leaderEligible: false, tested: leader.qualified === true, leaderLabel: leader.qualified === true ? "Tested" as const : "Not tested yet" as const, connection: "unknown" as const }])),
     tools: {
       claude: { installed: null, version: null, signedIn: null },
@@ -23,7 +25,7 @@ export function freshState(saved: PersistedSettings): SettingsState {
       gemini: { installed: null, version: null, signedIn: null },
     },
     github: { connected: null, account: null },
-    vault: { path: saved.notesVaultPath },
+    vault: { path: saved.notesVaultPath, status: vaultStatus(saved.notesVaultPath) },
     folders: { defaultProjectFolder: saved.defaultProjectFolder },
     skills: { claude: freshInventory(), codex: freshInventory(), opencode: freshInventory(), gemini: freshInventory() },
     permissionModes: { ...saved.permissionModes },

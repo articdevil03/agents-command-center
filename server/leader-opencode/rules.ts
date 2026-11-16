@@ -4,11 +4,14 @@ export const OPENCODE_CREW_SERVER = "tab-crew";
 // OpenCode 1.18's own list of permissions that only look (checked in its binary: new Set(["read","glob","grep","list"])).
 const READ_ONLY_PERMISSIONS = ["read", "glob", "grep", "list"];
 type Rule = { permission: string; pattern: string; action: "allow" | "deny" | "ask" };
+export function opencodeVaultPattern(path: string): string { return path.replaceAll("/", "\\").replace(/\\+$/, "") + "\\*"; }
 // OpenCode evaluates the LAST matching rule, so the broad rule comes first and the specific ones override it.
-export function opencodeRules(mode: PermissionMode): Rule[] {
+export function opencodeRules(mode: PermissionMode, vaultPath: string | null = null): Rule[] {
   const crew: Rule = { permission: `${OPENCODE_CREW_SERVER}_*`, pattern: "*", action: "allow" };
-  if (mode === "bypass") return [{ permission: "*", pattern: "*", action: "allow" }, crew];
+  const vault: Rule[] = vaultPath ? [{ permission: "external_directory", pattern: opencodeVaultPattern(vaultPath), action: "allow" }] : [];
+  if (mode === "bypass") return [{ permission: "*", pattern: "*", action: "allow" }, ...vault, crew];
   const rules: Rule[] = [{ permission: "*", pattern: "*", action: "ask" }];
+  rules.push(...vault);
   // Looking is free, as in Claude's default mode and in Codex; secrets files still ask. Anything else, outside folders included, asks.
   for (const permission of READ_ONLY_PERMISSIONS) rules.push({ permission, pattern: "*", action: "allow" });
   for (const pattern of ["*.env", "*.env.*"]) rules.push({ permission: "read", pattern, action: "ask" });
@@ -26,6 +29,10 @@ function wildcard(pattern: string, text: string): boolean {
 export function decideByRules(rules: Rule[], permission: string, patterns: string[]): "allow" | "deny" | "ask" {
   const actions = (patterns.length ? patterns : ["*"]).map((pattern) => rules.filter((rule) => wildcard(rule.permission, permission) && wildcard(rule.pattern, pattern)).at(-1)?.action ?? "ask");
   return actions.includes("deny") ? "deny" : actions.every((action) => action === "allow") ? "allow" : "ask";
+}
+export function opencodePermissionVerdict(liveMode: PermissionMode, subagent: boolean, permission: string, patterns: string[], vaultPath: string | null = null): "allow" | "deny" | "ask" {
+  if (liveMode === "bypass") return "allow";
+  return subagent ? decideByRules(opencodeRules(liveMode, vaultPath), permission, patterns) : "ask";
 }
 // A sub-agent session inherits only its parent's deny rules (checked in OpenCode 1.18's task tool), so left alone it runs on OpenCode's permissive defaults.
 // This baseline makes every sub-agent request ask; the leader then answers each one by the tab's mode (see onPermission).

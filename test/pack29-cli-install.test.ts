@@ -17,7 +17,7 @@ test("shutdown preserves disconnected root and waits for every worker result", a
     const worker = new Promise<boolean>((done) => { release = done; });
     const noop = () => {};
     const shutdown = runInNewContext(`(() => { ${stripTypeScriptTypes(text.slice(start, end))}; return shutdown; })()`, {
-      settingsService: { models: { close: noop, drain: async () => {} }, installer: { close: noop, drain: async () => true }, login: { close: noop, drain: async () => true } },
+      settingsService: { cliKeys: { close: () => {} }, models: { close: noop, drain: async () => {} }, installer: { close: noop, drain: async () => true }, login: { close: noop, drain: async () => true } },
       closeWorkerAdmission: noop, fixedGitOperations: { close: noop, drain: async () => true },
       console: { log: noop, error: noop }, folderActivity: { endAllOwn: noop, closeWatchers: noop },
       leadersAndWaitingTurns: () => [], stopLeaderSession: noop, stopAllRunning: noop, drainWorkers: () => worker,

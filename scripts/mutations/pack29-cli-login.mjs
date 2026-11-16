@@ -13,7 +13,7 @@ function row(name, file, from, to, test) {
   rows.push([id, file, from, to]);
   pack29CliLoginCatchMap[id] = `test/${test}.test.ts`;
 }
-const logic = "pack29-cli-login", proc = "pack29-cli-login-process", safety = "pack29-service-spawn-safety", plain = "pack29-default-runner-safety", github = "pack29-github-launch";
+const logic = "pack29-cli-login", proc = "pack29-cli-login-process", safety = "pack29-service-spawn-safety", plain = "pack29-default-runner-safety";
 
 // Host validation: the browser opener only ever sees an address that passes every one of these.
 row("host-https", policy, 'url.protocol !== "https:" || url.username', "url.username", logic);
@@ -53,7 +53,7 @@ row("secret-clear-address", login, "{ loginId: null, verificationUrl: null, devi
 row("secret-shared-state", login, 'const action = { requestId: op.requestId, kind: "login" as const, phase, reason, status,',
   'const action = { requestId: op.requestId, kind: "login" as const, phase, reason, status, verificationUrl: op.event.verificationUrl,', logic);
 // Truthful success: only a positive supported status probe means signed in.
-row("truthful-reason", login, 'const reason = AUTH_ARGS[op.id as CliId] ? op.positive ? null : "notSignedIn" : "statusUnknown";', "const reason = null;", logic);
+row("truthful-reason", login, 'const reason = (op.id === "github" || AUTH_ARGS[op.id as CliId]) ? op.positive ? null : "notSignedIn" : "statusUnknown";', "const reason = null;", logic);
 row("truthful-probe", login, "op.positive = signedIn === true;", "op.positive = signedIn !== false;", logic);
 row("truthful-exit-code", login, 'if (op.result.code !== 0) throw new Error(op.result.code === -1 ? "launchFailed" : "loginFailed");', "if (false) throw new Error(\"loginFailed\");", proc);
 row("truthful-codex-text", auth, String.raw`if (id === "codex") return /^Logged in using (?:ChatGPT|an? API key)(?:\s|$)/i.test(text) ? true : null;`,
@@ -75,8 +75,8 @@ row("hidden-no-shell", runner, "{ shell: false, windowsHide: true, detached: fal
 row("hidden-detached", runner, "{ shell: false, windowsHide: true, detached: false, windowsVerbatimArguments: shim,", "{ shell: false, windowsHide: true, detached: true, windowsVerbatimArguments: shim,", proc);
 row("hidden-no-start", runner, '`"${[program, ...args].map(cmdQuote).join(" ")}"`', '`"start ${[program, ...args].map(cmdQuote).join(" ")}"`', proc);
 row("hidden-absolute-cmd", runner, 'bin = shim ? join(windowsSystem32(), "cmd.exe") : program;', 'bin = shim ? "cmd.exe" : program;', proc);
-row("hidden-folder", runner, 'cwd: process.platform === "win32" ? windowsSystem32() : "/", env,', "cwd: process.cwd(), env,", proc);
-row("hidden-stdin-pipe", runner, 'env, stdio: ["pipe", "pipe", "pipe"] });', 'env, stdio: ["ignore", "pipe", "pipe"] });', proc);
+row("hidden-folder", runner, 'cwd: process.platform === "win32" ? windowsSystem32() : "/", env: disableCopilotUpdate(env, program),', "cwd: process.cwd(), env: disableCopilotUpdate(env, program),", proc);
+row("hidden-stdin-pipe", runner, 'env: disableCopilotUpdate(env, program), stdio: ["pipe", "pipe", "pipe"] });', 'env: disableCopilotUpdate(env, program), stdio: ["ignore", "pipe", "pipe"] });', proc);
 row("env-allowlist", runner, "return { ...installEnv(env), ...Object.fromEntries(", "return { ...env, ...Object.fromEntries(", proc);
 // Owned sweep and cleanup truth.
 row("owned-sweep", runner, "const swept = await tree!.sweep(endedAt, true);", "const swept = 0;", proc);
@@ -88,17 +88,7 @@ row("gate-login-default", runner, 'if (!spawnProcess && (options.env.CC_TEST_FAK
 row("gate-installer-injected", service, 'settings.installer && (env.CC_TEST_FAKE_CLI === "1" || ', "settings.installer && (", "pack29-opencode-mutation-guards");
 row("gate-installer-host", service, ' || process.env.CC_TEST_FAKE_CLI === "1")) return Promise.resolve({ code: -1', ")) return Promise.resolve({ code: -1", "pack29-opencode-mutation-guards");
 row("gate-probe-runner", service, "const probeRun = createTestCliRunner(env) ?? createTestCliRunner(process.env) ?? defaultRun;", "const probeRun = defaultRun;", "pack29-opencode-mutation-guards");
-row("gate-github-injected", runner, '!spawnProcess && (env.CC_TEST_FAKE_CLI === "1" || ', "!spawnProcess && (", safety);
-row("gate-github-host", runner, ' || process.env.CC_TEST_FAKE_CLI === "1")) return false;', ")) return false;", safety);
-// The detached GitHub launch: ignored pipes, detached, hidden, unreferenced, judged by the spawn or error event only.
-row("github-stdio", runner, 'detached: true, stdio: "ignore", windowsHide: true, shell: false,', 'detached: true, stdio: "pipe", windowsHide: true, shell: false,', github);
-row("github-detached", runner, 'detached: true, stdio: "ignore", windowsHide: true, shell: false,', 'detached: false, stdio: "ignore", windowsHide: true, shell: false,', github);
-row("github-hidden", runner, 'detached: true, stdio: "ignore", windowsHide: true, shell: false,', 'detached: true, stdio: "ignore", windowsHide: false, shell: false,', github);
-row("github-no-shell", runner, 'detached: true, stdio: "ignore", windowsHide: true, shell: false,', 'detached: true, stdio: "ignore", windowsHide: true, shell: true,', github);
-row("github-unref", runner, 'child.once("spawn", () => { child.unref(); resolve(true); });', 'child.once("spawn", () => { resolve(true); });', github);
-row("github-spawn-event", runner, 'child.once("spawn", () => { child.unref(); resolve(true); });', "if (child.unref) child.unref(); resolve(true);", github);
-row("github-error-fails", runner, 'child.once("error", () => resolve(false));', 'child.once("error", () => resolve(true));', github);
-row("github-throw-fails", runner, "} catch { resolve(false); }", "} catch { resolve(true); }", github);
+// GitHub now shares the managed runner and its safety guards. Pack 33 covers its fixed native argv and lifecycle.
 row("r1-existing-cached", "server/settings/cli-login.ts", "      if (op.id !== \"opencode\" && this.state.catalogTools[op.id].signedIn === true) throw new Error(\"existingCredentials\");", "", "pack29-cli-login");
 row("r1-existing-refreshed", "server/settings/cli-login.ts", "        if (this.state.catalogTools[op.id].signedIn === true) throw new Error(\"existingCredentials\");", "", "pack29-cli-login");
 export const pack29CliLoginMutations = rows;

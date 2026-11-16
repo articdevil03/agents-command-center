@@ -1,3 +1,5 @@
+import { secretVariants, redactSecrets } from "../server/secret-redaction.ts";
+import { createSecretStream } from "../server/leader-opencode/secret-stream.ts";
 import { EventEmitter } from "node:events";
 import { appendFileSync, readFileSync, mkdirSync, writeFileSync, unlinkSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
@@ -22,6 +24,7 @@ export function loadRunnerHarness(options: { treeWatch?: () => leaderCommon.Tree
     .replaceAll("export ", "")).join("\n");
   const module = runInNewContext(`(() => { ${runnerSource}\n const optional = (name) => { try { return eval(name); } catch { return undefined; } };
  return { buildCommand, runSeat, killRun, killRunAndConfirm: optional("killRunAndConfirm"), isRunning, isSeatRunning: optional("isSeatRunning"), runIdsForSeat, canRunWrite, unconfirmedPid, releaseUnconfirmedRun, stopAllRunning, logsDir, drainWorkers, closeWorkerAdmission, workerAdmissionClosed, WORKER_DRAIN_MS }; })()`, {
+    secretVariants, redactSecrets, createSecretStream,
     ...path, mkdirSync, writeFileSync, appendFileSync, unlinkSync, Buffer, StringDecoder, spawn: options.spawn ?? (() => isolatedRunnerProc(0)),
     fileURLToPath: () => path.join(testRoot, "server", "runner.ts"), process: { env: { CC_DATA_DIR: "C:/never-open-this", CC_TEST_FORCE_PACKAGED: "1" } },
     isValidModel: config.isValidModel, isValidEffort: config.isValidEffort, isAcpKind: config.isAcpKind, createAcpLeader, formatExitMarker: history.formatExitMarker,

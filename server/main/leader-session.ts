@@ -3,6 +3,7 @@ import { writeAcpClis, acpKindOf } from "../config.ts";
 import { assertCatalogLeaderEligible } from "../settings/catalog-acp.ts";
 import { KILL_TIMEOUT_MS, KILL_CONFIRM_MS, SWEEP_CAP_MS } from "../leader-common/types.ts";
 import { createLeader } from "../leader.ts";
+import { resolvedVault } from "../vault.ts";
 import { leaderKindOf, type LeaderCallbacks, type LeaderHandle } from "../leader-common.ts";
 import { createAcpLeader } from "../leader-acp.ts";
 import { createCodexLeader } from "../leader-codex.ts";
@@ -19,7 +20,7 @@ import {
   leaderInstances, leaderJobs, leaderModels, leaderQuery, leaderSeats, leaderSpawn, leaderStartTimeoutMs, leaderTurnResolvers, leaderTurnTimeoutMs, leaderTurnText, leaderUsage,
   leaders, pendingHandoverReads, setAcpClis, settingsService, steeredTurns,
 } from "./state.ts";
-import { effectiveMode, leaderSeatOf, tabLocation } from "./tabs.ts";
+import { effectiveMode, hasAcpLeader, leaderSeatOf, tabLocation } from "./tabs.ts";
 import { fixedCrewOf, isFixedTab } from "../fixed-crew/runtime.ts";
 import { DEFAULTS_VERSION } from "../fixed-crew/role-prompts.ts";
 import { fixedLeaderSettings } from "./state.ts";
@@ -42,6 +43,11 @@ export function createTabLeader(tabId: string): LeaderHandle {
 // Leaders stopped on a tab whose process (or a descendant its tracker knows) was not yet seen to be gone. A new leader never starts beside one:
 // it waits for the old one to finish exiting, and a kill or sweep that could not be confirmed blocks it until the old one is gone.
 const retiredLeaders = new Map<string, Set<LeaderHandle>>();
+export const leaderVaultPaths = new Map<string, string | null>();
+export function leaderNeedsVaultReplacement(tabId: string): boolean {
+  // An ACP leader keeps its session and learns of a vault change only at its next session.
+  return leaders.has(tabId) && !hasAcpLeader(tabId) && leaderVaultPaths.get(tabId) !== resolvedVault(settingsService.state.vault.path);
+}
 // Allow the old leader its tree kill, kill confirmation, and exit sweep, plus scheduling time.
 const RETIRED_LEADER_WAIT_MS = KILL_TIMEOUT_MS + KILL_CONFIRM_MS + SWEEP_CAP_MS + 5_000;
 export function retiredLeaderState(tabId: string): "clear" | "pending" | "failed" {
@@ -155,6 +161,8 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
   const mode = effectiveMode(tabId);
   const ask = (tool: string, input: Record<string, unknown>, signal?: AbortSignal) => askLeaderApproval(tabId, instance, tool, input, signal);
   const savedAsks = () => effectiveMode(tabId) === "ask";
+  const vaultPath = () => resolvedVault(settingsService.state.vault.path);
+  leaderVaultPaths.set(tabId, vaultPath());
   const seat = { model: lead.model, effort: lead.effort };
   // Codex and OpenCode read the seat's effort on every turn: updateSeatPrefs keeps this object current.
   leaderSeats.set(tabId, seat);
@@ -165,16 +173,16 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
     assertCatalogLeaderEligible(acp, settingsService.state);
     const bridge = openBridge(tabId, buildLeaderToolSpecs(toolDeps));
     revokeBridge = bridge.revoke;
-    leader = createAcpLeader(seat, location.tab.folder, callbacks, { cli: acp, bridge: { url: `http://${HOST}:${boundPort}/api/leader-mcp/${encodeURIComponent(tabId)}`, token: bridge.token }, spawnFn: acpSpawn, startTimeoutMs: leaderStartTimeoutMs });
+    leader = createAcpLeader(seat, location.tab.folder, callbacks, { cli: acp, loadKey: async () => { await settingsService.cliKeys.prepareConnection(acp); return settingsService.cliKeys.launch(acp); }, bridge: { url: `http://${HOST}:${boundPort}/api/leader-mcp/${encodeURIComponent(tabId)}`, token: bridge.token }, spawnFn: acpSpawn, startTimeoutMs: leaderStartTimeoutMs });
   } else if (leaderKind === "codex") {
-    leader = createCodexLeader(seat, location.tab.folder, callbacks, { tools: buildLeaderToolSpecs(toolDeps), mode, ask, savedAsks, spawnFn: leaderSpawn, startTimeoutMs: leaderStartTimeoutMs, turnTimeoutMs: leaderTurnTimeoutMs });
+    leader = createCodexLeader(seat, location.tab.folder, callbacks, { tools: buildLeaderToolSpecs(toolDeps), mode, ask, savedAsks, vaultPath, spawnFn: leaderSpawn, startTimeoutMs: leaderStartTimeoutMs, turnTimeoutMs: leaderTurnTimeoutMs });
   } else if (leaderKind === "opencode") {
     const bridge = openBridge(tabId, buildLeaderToolSpecs(toolDeps));
     revokeBridge = bridge.revoke;
-    leader = createOpencodeLeader(seat, location.tab.folder, callbacks, { bridge: { url: `http://${HOST}:${boundPort}/api/leader-mcp/${encodeURIComponent(tabId)}`, token: bridge.token }, mode, ask, savedAsks, spawnFn: leaderSpawn, startTimeoutMs: leaderStartTimeoutMs });
+    leader = createOpencodeLeader(seat, location.tab.folder, callbacks, { bridge: { url: `http://${HOST}:${boundPort}/api/leader-mcp/${encodeURIComponent(tabId)}`, token: bridge.token }, mode, ask, savedAsks, vaultPath, spawnFn: leaderSpawn, startTimeoutMs: leaderStartTimeoutMs });
   } else {
     // The advisor is read when the Claude session starts: a change applies from the next session.
-    leader = createLeader({ ...seat, ...(lead.advisor ? { advisor: lead.advisor } : {}) }, location.tab.folder, claudeCliPath, callbacks, { mcpServers: { "tab-crew": createLeaderTools(toolDeps) }, allowedTools: buildLeaderToolSpecs(toolDeps).map((s) => `mcp__tab-crew__${s.name}`) }, mode, ask, leaderQuery, savedAsks);
+    leader = createLeader({ ...seat, ...(lead.advisor ? { advisor: lead.advisor } : {}) }, location.tab.folder, claudeCliPath, callbacks, { mcpServers: { "tab-crew": createLeaderTools(toolDeps) }, allowedTools: buildLeaderToolSpecs(toolDeps).map((s) => `mcp__tab-crew__${s.name}`) }, mode, ask, leaderQuery, savedAsks, vaultPath());
   }
   leaders.set(tabId, leader);
   if (isFixedTab(location.tab)) fixedLeaderSettings.set(tabId, fixedLeaderSignature(tabId));
@@ -187,6 +195,7 @@ export function fixedLeaderSignature(tabId: string): string {
 // A turn waiting for a retired leader to exit has a resolver but no leader yet: Stop all and shutdown must end it too.
 export function leadersAndWaitingTurns(): string[] { return [...new Set([...leaders.keys(), ...leaderTurnResolvers.keys()])]; }
 export function stopLeaderSession(tabId: string, clearUsage = false, interruptedTurnError?: string): void {
+  leaderVaultPaths.delete(tabId);
   fixedGitOperations.cancelTab(tabId);
   // Handed-back steers still waiting behind the reply being stopped are dropped with it (the notice below says so); a failed finish below reads them first.
   const waitingBehind = (lateSteers.get(tabId)?.length ?? 0) > 0;

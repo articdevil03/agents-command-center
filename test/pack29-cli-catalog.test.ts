@@ -7,7 +7,7 @@ const commands = {
   claude: "irm https://claude.ai/install.ps1 | iex",
   codex: 'powershell -ExecutionPolicy ByPass -c "irm https://chatgpt.com/codex/install.ps1 | iex"',
   opencode: "Install verified OpenCode 1", grok: "irm https://x.ai/cli/install.ps1 | iex",
-  gemini: "npm install -g @google/gemini-cli", copilot: "winget install GitHub.Copilot",
+  gemini: "npm install -g @google/gemini-cli", copilot: "Install verified GitHub Copilot CLI",
   qwen: "irm https://qwen-code-assets.oss-cn-hangzhou.aliyuncs.com/installation/install-qwen-standalone.ps1 | iex",
   kimi: "irm https://code.kimi.com/kimi-code/install.ps1 | iex",
   mimo: 'powershell -ep Bypass -c "irm https://mimo.xiaomi.com/install.ps1 | iex"',

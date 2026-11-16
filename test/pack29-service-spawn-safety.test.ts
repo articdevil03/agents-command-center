@@ -2,14 +2,15 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { SettingsService } from "../server/settings/service.ts";
-import { CLI_CATALOG } from "../server/settings/cli-catalog.ts";
-import { INSTALL_MESSAGES } from "../server/settings/cli-installers.ts";
-import { fixture } from "./pack29-cli-install.setup.ts";
 import { setEnv } from "./temp-root.ts";
-import { api, setup } from "./pack29-first-run.setup.ts";
+// Load the handler graph under its temp data root before any cached server import.
+const { api, setup } = await import("./pack29-first-run.setup.ts");
+const { SettingsService } = await import("../server/settings/service.ts");
+const { CLI_CATALOG } = await import("../server/settings/cli-catalog.ts");
+const { INSTALL_MESSAGES } = await import("../server/settings/cli-installers.ts");
+const { fixture } = await import("./pack29-cli-install.setup.ts");
 
 // No injected runner or launcher: the same injected-env boundary as loadFixed.
 // The throwing spawn spy remains in place even during guard mutations.
@@ -34,6 +35,7 @@ for (const flagSource of ["injected", "host"] as const) {
             if (action === "login") respond(tool.detection!.program, tool.detection!.args, "1.2.3");
             if (tool.id === "opencode") respond("opencode", ["auth", "list"], "0 credentials");
           }
+          fx.write("gh.exe"); respond("gh", ["--version"], "2.95.0");
           const node = fx.write("node.exe"), npmDir = join(fx.bin, "node_modules", "npm", "bin");
           mkdirSync(npmDir, { recursive: true });
           const npm = join(npmDir, "npm-cli.js"); writeFileSync(npm, ""); fx.write("npm.cmd");
@@ -74,7 +76,7 @@ for (const flagSource of ["injected", "host"] as const) {
           };
           try {
             if (action === "github") {
-              await refuse("ghLogin", "could not open the GitHub login window");
+              await refuse("ghLogin", "Could not start sign-in.");
               assert.equal(service.state.github.action?.status, "failed", label);
             } else if (action === "login") {
               await refuse("cliLogin", "Could not start sign-in.");
@@ -84,16 +86,12 @@ for (const flagSource of ["injected", "host"] as const) {
               assert.equal(service.state.catalogTools[entry.id].action?.message, "Could not start sign-in.", label);
               assert.equal(service.login.busy, false, label);
             } else {
-              const reason = entry.id === "copilot" ? "blockedByWindows" : "installFailed";
+              const reason = "installFailed";
               await refuse("installCli", INSTALL_MESSAGES[reason]);
               assert.equal(service.state.catalogTools[entry.id].action?.status, "failed", label);
               assert.equal(service.state.catalogTools[entry.id].action?.message, INSTALL_MESSAGES[reason], label);
               assert.equal(service.installer.busy, false, label);
-              const calls = readFileSync(record, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-              if (entry.id === "copilot") assert.ok(calls.some((call) => call[0] === pwsh), `${label}: preflight reached`);
-              else {
-                assert.ok(phases.includes("installing"), `${label}: recipe must be reached, not a busy refusal`);
-              }
+              assert.ok(phases.includes("installing"), `${label}: recipe must be reached, not a busy refusal`);
             }
             assert.equal(spy.mock.callCount(), 0, `${label}: zero spawns`);
             console.log(`SAFE ${label}: failed with static text; spawn=0`);

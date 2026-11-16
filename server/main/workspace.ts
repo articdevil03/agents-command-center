@@ -15,7 +15,7 @@ import {
   activeLeaderTurns, blockedSeatKeys, changeGeneration, changesByTab, chatClearGenerations, chatStore, cliRunner, describeError, expiredClearUndos,
   handoverReadTurns, launchSafety, notesByTab, pendingClearUndos, pendingHandoverReads, requestActions, requestsStore, runContexts, savingTabs,
   selectedTabId, setSelectedTabId, setWorkspaces, settingsService, tabs, workspaces, type WorkspacesShape,
-  dataRoot,
+  dataRoot, vaultSaveRetries, vaultCopyAttention,
 } from "./state.ts";
 import { clone, runtimeFor, tabLocation, watchTabFolders } from "./tabs.ts";
 
@@ -93,6 +93,7 @@ export function syncWorkspace(next: WorkspacesShape): void {
     catch (err) { broadcast({ type: "error", message: `could not update requests for removed tab: ${describeError(err)}` }); }
     stopLeaderSession(tab.id, true);
     pendingHandoverReads.delete(tab.id);
+    vaultSaveRetries.delete(tab.id); vaultCopyAttention.delete(tab.id);
     tabs.delete(tab.id);
     changesByTab.delete(tab.id); notesByTab.delete(tab.id); changeGeneration.set(tab.id, (changeGeneration.get(tab.id) ?? 0) + 1);
     // Nothing of a removed tab may linger in memory. Its chat file stays on disk (no transcript is deleted), and its id is never handed out again (makeTabId).

@@ -78,8 +78,12 @@ test("harmless native PowerShell installer: success, errors, flood, absent CLI, 
       if (expected) assert.equal(service.state.catalogTools.qwen.action?.reason, expected, mode);
       assert.equal(service.installer.busy, false, mode); assert.equal(refreshed, 2, mode);
       if (existsSync(marker)) pids.push(Number(readFileSync(marker, "utf8")));
-      const alive = await listProcesses(); assert.ok(alive);
-      for (const pid of pids) assert.equal(alive.some((row) => row.pid === pid), false, `Owned PID ${pid} must have ended (${mode})`);
+      // The process table can lag a moment behind a finished cleanup on a loaded PC: wait up to 5 s for each owned PID to leave it, and still fail if one never does.
+      for (const pid of pids) {
+        let gone = false;
+        for (let tries = 0; tries < 50 && !gone; tries++) { const alive = await listProcesses(); assert.ok(alive); gone = !alive.some((row) => row.pid === pid); if (!gone) await new Promise((done) => setTimeout(done, 100)); }
+        assert.equal(gone, true, `Owned PID ${pid} must have ended (${mode})`);
+      }
     } finally { setProcessTreeForTests(null); fx.close(); }
   }
 });

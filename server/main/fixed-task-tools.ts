@@ -1,3 +1,5 @@
+import { acpClis, settingsService } from "./state.ts";
+import { acpKindOf } from "../config-acp.ts";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { LeaderToolSpec, ToolContent } from "../leader-tools.ts";
@@ -152,6 +154,8 @@ export async function launchFixedAction(actor: FixedLeaderActor, expected: Expec
     const allow = await askApproval(actor.tabId, { kind: "leader", instance: actor.instance }, "fixed-action", { command: summary });
     if (!allow) throw new Error("The owner denied this action.");
   }
+  const keyConnection = acpClis.find((cli) => acpKindOf(cli) === selection.assignment.cli);
+  if (keyConnection) await settingsService.cliKeys.prepareConnection(keyConnection);
   currentTask(actor, expected);
   if (planNow() || JSON.stringify(fixedCrewOf(tabLocation(actor.tabId)!.tab)) !== before) throw new Error("The assignment or permission changed while approving.");
   if (JSON.stringify(selectFixedExecution(actor, action, slot, reservedExecutionId).selection) !== approvedSelection) throw new Error("The selected position changed while approving.");

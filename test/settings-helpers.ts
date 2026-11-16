@@ -28,7 +28,7 @@ export function harness(initiallyInstalled: CliId[] = ["claude", "codex", "openc
   mkdirSync(home, { recursive: true }); mkdirSync(dataRoot, { recursive: true }); mkdirSync(project, { recursive: true }); mkdirSync(vault, { recursive: true });
   // The login window is started by the CLI's resolved path, so the CLIs must be found on an (absolute) PATH.
   const binDir = join(root, "bin"); mkdirSync(binDir, { recursive: true });
-  for (const name of ["claude", "codex", "opencode"]) writeFileSync(join(binDir, `${name}.exe`), "");
+  for (const name of ["claude", "codex", "opencode", "gh"]) writeFileSync(join(binDir, `${name}.exe`), "");
   const env = { HOME: home, USERPROFILE: home, PATH: binDir, APPDATA: join(root, "appdata") } as NodeJS.ProcessEnv;
   const npmDir = join(binDir, "node_modules", "npm", "bin"); mkdirSync(npmDir, { recursive: true });
   writeFileSync(join(npmDir, "npm-cli.js"), "");
@@ -55,9 +55,9 @@ export function harness(initiallyInstalled: CliId[] = ["claude", "codex", "openc
       if (started === "claude" || started === "codex" || started === "opencode") signedIn[started] = true;
       return { code: 0, stdout: "", stderr: "" };
     }
-    if (bin === "gh" && args.join(" ") === "auth status") {
+    if (bin === "gh" && args[0] === "auth" && args[1] === "status") {
       return githubConnected
-        ? { code: 0, stdout: "Logged in to github.com account octocat (keyring)\nToken: ghp_SHOULD_NEVER_LEAK", stderr: "" }
+        ? { code: 0, stdout: "Logged in to github.com account octocat (keyring)\nActive account: true\nToken: ghp_SHOULD_NEVER_LEAK", stderr: "" }
         : { code: 1, stdout: "You are not logged into any GitHub hosts.", stderr: "" };
     }
     if (bin === "gh") return { code: 0, stdout: "", stderr: "" };
@@ -77,10 +77,11 @@ export function harness(initiallyInstalled: CliId[] = ["claude", "codex", "openc
   return {
     root, home, dataRoot, project, vault, env, installed, signedIn, calls, runner,
     service: (onChange?: () => void, permissionTimeoutMs?: number) => new SettingsService({ dataRoot, env, runCli: runner,
-      launchGitHub: async () => { calls.push({ bin: "cmd", args: ["/c", "start", '""', "gh", "auth", "login", "--web"], timeoutMs: 0 }); githubConnected = true; return true; }, runLogin: createLoginRunner(((bin: string, args: string[], options: any) => {
+      runLogin: createLoginRunner(((bin: string, args: string[], options: any) => {
       const cli = basename(bin, ".exe") as CliId;
       calls.push({ bin, args, timeoutMs: 600000, env: options.env, verbatimArgs: options.windowsVerbatimArguments });
-      signedIn[cli] = true;
+      if (cli as string === "gh") githubConnected = true;
+      else signedIn[cli] = true;
       const child = new EventEmitter() as any;
       child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
       child.exitCode = null; child.signalCode = null;

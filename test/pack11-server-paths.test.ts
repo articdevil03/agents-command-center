@@ -1,7 +1,9 @@
 // Pack 11: a leader that starts with no memory of the tab is handed the tab's chat on its first turn, part 1: the inventory of every call site in server/index.ts that makes the next leader forget the tab, and the tests that walk those paths (this file holds all `path:` test names the inventory checks).
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, readFileSync, realpathSync } from "node:fs";
+import { writeFileSync, readFileSync, realpathSync, mkdtempSync, rmdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sourceText } from "./source-text.ts";
 import { TABS, type CliName, HEAD, READ_FIRST, sleep, count, type Server, boot, client, chatBlock, type Harness, turnAfter, expectChatGiven, seed } from "./pack11-server-helpers.ts";
 
@@ -18,11 +20,13 @@ const INVENTORY: Record<string, { count: number; paths: string[] }> = {
   "stopLeaderSession(message.tabId);": { count: 1, paths: ["changeFolder"] },
   "for (const tabId of leadersAndWaitingTurns()) stopLeaderSession(tabId);": { count: 2, paths: ["stopAll", "restart (shutdown)"] },
   "stopLeaderSession(tabId, true);": { count: 2, paths: ["clear", "undoClear"] },
+  "if (leaderNeedsVaultReplacement(tabId)) pendingHandoverReads.add(tabId);": { count: 1, paths: ["vaultChange"] },
+  "if (leaderNeedsVaultReplacement(tabId)) stopLeaderSession(tabId);": { count: 1, paths: ["vaultChange"] },
 };
 // removeTab ends the tab itself: ids are never handed out again, so nothing is left to give a leader.
 // The legacy-crew sites (useSetup, setSetup, roleChange, cliSwitch) were deleted with their handlers in run 13: the server answers those messages with a refusal (the in-session test below sends each one and checks the refusal and that the leader was left alone).
 const NOT_APPLICABLE = new Set(["removeTab"]);
-const COVERED = new Set(["restart", "restart (shutdown)", "every stopLeaderSession caller", "stopSeat", "stopAll", "changeFolder", "fixedLeaderChange", "deadLeader", "permissionModeFails", "clear", "undoClear"]);
+const COVERED = new Set(["restart", "restart (shutdown)", "every stopLeaderSession caller", "stopSeat", "stopAll", "changeFolder", "fixedLeaderChange", "deadLeader", "permissionModeFails", "clear", "undoClear", "vaultChange"]);
 
 // ---- the creation inventory: every place a leader is created or registered. A leader made anywhere else would skip `deliver`'s chat hand-back. ----
 const CREATION_PATTERN = /\b(startTabLeader|createTabLeader|createCodexLeader|createOpencodeLeader|createLeader)\(|\bleaders\.set\(/g;
@@ -190,3 +194,24 @@ test("in-session paths: Stop on each CLI, Stop all, folder change, the legacy cr
   } finally { c.close(); await server.stop(); }
 });
 
+test("path:vaultChange: a vault connected after a leader exists gives the next message a new leader that is handed the chat, and Save right after connecting is refused", { timeout: 120_000 }, async () => {
+  // Two real, empty vault folders under the OS temp folder: siblings of the server's temp folder, so neither holds the tab folder, the home folder or the repo.
+  const vaults = [mkdtempSync(join(tmpdir(), "cc-pack11-vault-")), mkdtempSync(join(tmpdir(), "cc-pack11-vault-"))];
+  const server = await boot();
+  const c = await client(server); const h: Harness = { server, c };
+  try {
+    const connect = async (folder: string) => { const reply = await c.action({ type: "setNotesVault", path: folder }); assert.equal(reply.type, "actionResult", JSON.stringify(reply)); };
+    // Connect: the live leader is replaced at the next message and the new one reads the saved handover and gets the chat tail (the vault notice rides in the same text).
+    const earlier = await seed(h, TABS.claude, "vault-connect");
+    const got = await turnAfter(h, TABS.claude, async () => { await connect(vaults[0]!); }, "after-vault-connect");
+    assert.equal(got.cli, "claude"); expectChatGiven(got.text, "after-vault-connect", earlier, false);
+    assert.ok(got.text.includes("Connected notes vault:"), "the new leader is told about the vault");
+    assert.equal((await turnAfter(h, TABS.claude, async () => {}, "second-vault")).text, "second-vault", "the requirement is used up by one good turn");
+    // Save as the very next action after changing the vault is refused: the leader has not read the saved handover yet.
+    await seed(h, TABS.claude, "vault-save");
+    await connect(vaults[1]!);
+    const from = c.messages.length; c.send({ type: "save", tabId: TABS.claude });
+    const refusal = await c.wait(() => c.messages.slice(from).find((m) => m.type === "error" && m.action === "save"), "Save is refused after the vault changed");
+    assert.equal(refusal.message, "send a message first so the leader reads the saved handover; saving now would overwrite it");
+  } finally { c.close(); await server.stop(); for (const dir of vaults) { try { rmdirSync(dir); } catch { /* a leftover empty temp folder is harmless */ } } }
+});

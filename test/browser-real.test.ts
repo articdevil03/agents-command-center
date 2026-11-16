@@ -78,6 +78,9 @@ test("browser harness exercises the real app, server actions, safety shell and r
     const settingsFolder = join(temp, "folders", "settings-picker-choice");
     mkdirSync(settingsFolder, { recursive: true });
     writeFileSync(join(settingsFolder, "GEMINI.md"), "temporary Settings picker Gemini instructions\n", "utf8");
+    // The notes vault step gets its own folder, a sibling of the project, tab and picker folders (the server refuses a vault that is or holds one of them).
+    const vaultFolder = join(temp, "folders", "settings-vault");
+    mkdirSync(vaultFolder, { recursive: true });
     const script = harnessSource();
     const seed = fakeParallelState(await getServerState(actualPort));
     await fixedSmoke(actualPort, temp, folder, seed, script); // both entries prove the fixed seed first (phase "fixed-smoke")
@@ -154,7 +157,7 @@ test("browser harness exercises the real app, server actions, safety shell and r
       assert.equal(childEnv.CC_DATA_DIR, dataDir, `real Settings browser audit at ${width}px must use temporary server data`);
       assert.equal(childEnv.CC_PORT, "0", `real Settings browser audit at ${width}px must use the isolated server it started`);
       assert.notEqual(actualPort, 4317);
-      proxy = proxyServer(actualPort, { folder: settingsFolder, mode: "real" }, script);
+      proxy = proxyServer(actualPort, { folder: settingsFolder, vaultFolder, mode: "real" }, script);
       await packCRealSettingsAudit(proxy, temp, settingsFolder, width);
       shutProxy(proxy); proxy = null;
     }

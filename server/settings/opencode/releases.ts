@@ -1,5 +1,7 @@
 import type { InstallTransport } from "../types.ts";
 
+import { RELEASE_TOOLS, type ReleaseTool } from "./release-tools.ts";
+
 export const RELEASE_API = "https://api.github.com/repos/anomalyco/opencode/releases";
 export const DOWNLOAD_LIMIT = 128 * 1024 * 1024;
 export class ReleaseFailure extends Error {
@@ -18,15 +20,16 @@ export function defaultTransport(env: NodeJS.ProcessEnv): InstallTransport {
     return fetch(url, options);
   };
 }
-function safeAddress(url: string, asset: boolean): boolean {
+function safeAddress(url: string, asset: boolean, tool: ReleaseTool): boolean {
   try {
     const value = new URL(url);
     return value.protocol === "https:" && !value.username && !value.password && !value.port && !value.hash &&
-      (asset ? value.hostname === "github.com" && value.pathname.startsWith("/anomalyco/opencode/releases/download/") :
-        value.origin + value.pathname === RELEASE_API);
+      (asset ? value.hostname === "github.com" && value.pathname.startsWith(`/${RELEASE_TOOLS[tool].repository}/releases/download/`) :
+        value.origin + value.pathname === `https://api.github.com/repos/${RELEASE_TOOLS[tool].repository}/releases`);
   } catch { return false; }
 }
-export async function request(transport: InstallTransport, url: string, signal: AbortSignal): Promise<Response> {
+export async function request(transport: InstallTransport, url: string, signal: AbortSignal, tool: ReleaseTool = "opencode"): Promise<Response> {
+  if (!safeAddress(url, true, tool) && !safeAddress(url, false, tool)) throw new ReleaseFailure();
   let response: Response;
   try { response = await transport(url, { signal, redirect: "manual", headers: { Accept: "application/vnd.github+json", "User-Agent": "Command-Center" } }); }
   catch { signal.throwIfAborted(); throw new ReleaseFailure(true); }
@@ -37,7 +40,7 @@ export async function request(transport: InstallTransport, url: string, signal: 
     if (hops >= 3 || !location) throw new ReleaseFailure();
     const next = new URL(location, url);
     if (next.protocol !== "https:" || next.username || next.password || next.port || next.hash ||
-      !["release-assets.githubusercontent.com", "objects.githubusercontent.com"].includes(next.hostname) || !safeAddress(url, true)) throw new ReleaseFailure();
+      !["release-assets.githubusercontent.com", "objects.githubusercontent.com"].includes(next.hostname) || !safeAddress(url, true, tool)) throw new ReleaseFailure();
     url = next.href;
     try { response = await transport(url, { signal, redirect: "manual", headers: { Accept: "application/octet-stream", "User-Agent": "Command-Center" } }); }
     catch { signal.throwIfAborted(); throw new ReleaseFailure(true); }
@@ -46,14 +49,15 @@ export async function request(transport: InstallTransport, url: string, signal: 
   if (!response.body) throw new ReleaseFailure();
   return response;
 }
-export async function selectRelease(transport: InstallTransport, signal: AbortSignal, arch: string): Promise<ReleaseAsset> {
-  const name = arch === "x64" ? "opencode-windows-x64-baseline.zip" : arch === "arm64" ? "opencode-windows-arm64.zip" : null;
+export async function selectRelease(transport: InstallTransport, signal: AbortSignal, arch: string, tool: ReleaseTool = "opencode"): Promise<ReleaseAsset> {
+  const profile = RELEASE_TOOLS[tool];
+  const name = arch === "x64" || arch === "arm64" ? profile.assets[arch] : null;
   if (!name) throw new ReleaseFailure();
   let total = 0, selected: any = null, complete = false;
   const tags = new Set<string>();
   for (let page = 1; page <= 50; page++) {
     signal.throwIfAborted();
-    const response = await request(transport, `${RELEASE_API}?per_page=100&page=${page}`, signal);
+    const response = await request(transport, `https://api.github.com/repos/${profile.repository}/releases?per_page=100&page=${page}`, signal, tool);
     const chunks: Uint8Array[] = []; let size = 0;
     for await (const chunk of response.body!) {
       signal.throwIfAborted(); size += chunk.length; total += chunk.length;
@@ -79,8 +83,8 @@ export async function selectRelease(transport: InstallTransport, signal: AbortSi
   if (matches.length !== 1) throw new ReleaseFailure();
   const asset = matches[0], version = selected.row.tag_name.slice(1);
   if (typeof asset.digest !== "string" || !/^sha256:[a-f0-9]{64}$/i.test(asset.digest) ||
-    !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > DOWNLOAD_LIMIT || !safeAddress(asset.browser_download_url, true)) throw new ReleaseFailure();
+    !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > profile.downloadLimit || !safeAddress(asset.browser_download_url, true, tool)) throw new ReleaseFailure();
   const path = new URL(asset.browser_download_url).pathname;
-  if (path !== `/anomalyco/opencode/releases/download/v${version}/${name}`) throw new ReleaseFailure();
+  if (path !== `/${profile.repository}/releases/download/v${version}/${name}`) throw new ReleaseFailure();
   return { version, url: asset.browser_download_url, size: asset.size, hash: asset.digest.slice(7).toLowerCase() };
 }

@@ -62,8 +62,8 @@
     function detailOf(id, status, current) {
       const tool = toolOf(id), name = nameOf(id), sign = login.viewOf(id), link = action(`connect-${id}`);
       if (current?.state === "running") return { text: CAT.phaseText(current.phase, name, current.message) };
-      if (current?.state === "stuck") return { text: CAT.reasonText("cleanupUnconfirmed", name), bad: true };
-      if (tool?.installed !== true && current?.state === "failed") return { text: CAT.reasonText(current.reason, name), bad: current.reason !== "cancelled" };
+      if (current?.state === "stuck") return { text: CAT.reasonText("cleanupUnconfirmed", name, id), bad: true };
+      if (tool?.installed !== true && current?.state === "failed") return { text: CAT.reasonText(current.reason, name, id), bad: current.reason !== "cancelled" };
       if (tool?.installed !== true && current?.state === "refused") return { text: `Not installed: ${sentence(current.message)}`, bad: true };
       if (sign.state === "running" || sign.state === "orphan") return { text: "Signing in…" };
       if (sign.state === "refused") return { text: sentence(sign.text || "Could not start sign-in"), bad: true };
@@ -92,7 +92,7 @@
       if (tool?.installed === true) {
         // Sign in only for a tool with a managed sign-in (login.js); the panel under the row holds its steps and Cancel.
         const signingIn = ["running", "orphan", "stuck"].includes(login.viewOf(id).state);
-        if (login.offered(id)) return { button: `<button type="button" class="btn sm" data-frun-login="${id}" data-focus-key="frun-login-${id}"${signingIn || locked ? " disabled" : ""}>${signingIn ? "Signing in…" : "Sign in"}</button>` };
+        if (login.offered(id) && !tool.keySaved) return { button: `<button type="button" class="btn sm" data-frun-login="${id}" data-focus-key="frun-login-${id}"${signingIn || locked ? " disabled" : ""}>${signingIn ? "Signing in…" : "Sign in"}</button>` };
         if (entry?.leader?.kind === "acp" && tool.registered !== true) {
           const busy = running(`connect-${id}`);
           return { button: `<button type="button" class="btn sm" data-frun-connect="${id}" data-focus-key="frun-connect-${id}" aria-describedby="frunWhy-${id}" aria-disabled="${busy}">${busy ? "Connecting…" : "Connect"}</button>`,
@@ -102,7 +102,7 @@
       }
       if (current?.state === "failed" && CAT.recheckAfter(current.reason)) return { button: recheck };
       if (tool?.installed === false && entry?.installable === true) {
-        return { button: `<button type="button" class="btn primary sm" data-frun-install="${id}" data-focus-key="frun-install-${id}" aria-describedby="frunWhy-${id}"${locked ? " disabled" : ""}>Install</button>`, line: CAT.consentText(entry) };
+        return { button: `<button type="button" class="btn primary sm" data-frun-install="${id}" data-focus-key="frun-install-${id}" aria-describedby="frunWhy-${id}"${locked ? " disabled" : ""}>${id === "copilot" && current?.state === "failed" ? "Try again" : "Install"}</button>`, line: CAT.consentText(entry) };
       }
       return { button: tool?.installed === false ? "" : recheck };
     }
@@ -116,9 +116,9 @@
       const bar = busy && current.state === "running" ? `<span class="frun-bar" role="progressbar" aria-label="${esc(detail.text)}"><i></i></span>` : "";
       const line = act.line ? `<small class="wrap frun-consent-line" id="frunWhy-${id}">${esc(act.line)}</small>` : "";
       // An installed tool without a managed sign-in says so in its own words and has no Sign in button; the slot holds login.js's panel.
-      const unsupported = tool?.installed === true && tool.signedIn !== true && !busy ? login.unsupportedMessage(id) : null;
+      const unsupported = tool?.installed === true && tool.signedIn !== true && !tool.keyProfile && !busy ? login.unsupportedMessage(id) : null;
       const note = unsupported ? `<small class="wrap frun-signin-note">${esc(unsupported)}</small>` : "";
-      const slot = tool?.installed === true ? `<div class="cli-login-slot" data-cli-login-slot="${id}"></div>` : "";
+      const slot = tool?.installed === true ? `<div class="cli-login-slot" data-cli-login-slot="${id}"></div><div data-cli-key-slot="${id}"></div>` : "";
       // The fallback guide: only for a tool not found yet, and not while an installation runs.
       const info = builtIn(id) ? help.tools[id] : catalog.guideInfo(id), byHand = Boolean(info) && tool?.installed !== true && !busy, open = byHand && openHelp.has(id);
       const more = byHand ? `<button type="button" class="frun-more frun-byhand" data-frun-help="${id}" data-focus-key="frun-help-${id}" aria-expanded="${open}" aria-controls="frunHelp-${id}">${CHEVRON}<span>${id === "opencode" ? "How to set up" : "Install by hand"}</span></button>` : "";

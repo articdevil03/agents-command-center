@@ -49,6 +49,74 @@ Installation, registration, login and setup start no ACP session. Setup requires
 First chat retains ACP initialization and session checks. Grok's catalog handshake
 limitation remains unverified; selection makes no compatibility claim.
 
+## Catalog keys
+
+`catalogTools[id]` additionally exposes `keyProfile: { fields } | null` and
+`keySaved: boolean`. Field descriptors contain `id`, `kind` (`secret`, `choice`,
+`text`), `label`, `required`, `maxLength`, and optional `choices: [{label,value}]`.
+They contain no environment variable names or saved values. The shared wizard and
+Settings panel renders these descriptors. Existing OpenCode key sign-in is separate.
+
+| Message | Exact fields |
+|---|---|
+| `submitCliKey` | `type`, `requestId`, `cli`, `fields: {key, model?, endpoint?}` |
+| `removeCliKey` | `type`, `requestId`, `cli` |
+
+Only profile field IDs are accepted. Secret values are trimmed, 8-4096 bytes,
+without controls or newlines. Models require 1-128 conservative plain characters.
+Endpoint choices must match the profile. Each socket request is consumed once;
+per-tool admission is synchronous. Neither action returns any credential value.
+Secrets and their temporary field object are cleared immediately at submission and
+never enter browser storage or Settings drafts. Non-secret model and region fields remain
+available after a failed save. Cancel closes the fields without changing the saved key.
+Replacement is explicit and opens empty fields. Removal deletes the stored record and the usable server cache entry.
+
+| Profile | Fields | Fixed launch environment |
+|---|---|---|
+| Gemini | key | GEMINI_API_KEY |
+| Mistral | key | MISTRAL_API_KEY (also vibe-acp) |
+| Grok | key | XAI_API_KEY |
+| Kimi | key, model | KIMI_MODEL_API_KEY, KIMI_MODEL_NAME |
+| Copilot | key (GitHub token) | COPILOT_GITHUB_TOKEN |
+| Qwen | key, endpoint (China or International), model | OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL |
+
+Qwen choices are `https://coding.dashscope.aliyuncs.com/v1` and
+`https://coding-intl.dashscope.aliyuncs.com/v1`; the model has no default.
+MiMo and MiniMax have no key profile. A saved key does not establish Signed in or
+Connected. Success says `Key saved. Connection checked when you first chat.`
+Matching installed catalog ACP tools can be registered and selected without
+`signedIn`; Start still requires the saved profile, executable and Full access consent.
+
+Qwen endpoint source: https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/
+
+Kimi variable source: https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/env-vars.html
+`KIMI_MODEL_NAME` enables the override; the example value is `kimi-for-coding`.
+
+NOT VERIFIED 2026-11-16, because no released binary or account was used: whether a previously cached sign-in mode of Qwen or Gemini ignores the saved key; whether project settings can override the base URL; other endpoints of the same vendor are not offered.
+
+Private server-child IPC, never renderer IPC:
+`{type:"cliCredentialRequest", id, operation:"set"|"get"|"remove", tool, record?}`
+returns `{type:"cliCredentialResult", id, available, ok, record?}` on the same channel.
+`record` is required only for set, returned only for successful get, and null for
+missing, unreadable or invalid ciphertext. Extra fields are refused. Tool IDs match
+`^[a-z0-9]+(?:-[a-z0-9]+)*$` (at most 32 characters); IDs are strings at most 64
+characters. Record JSON is limited to 16 KiB. The client timeout is five seconds.
+
+Electron encrypts JSON using safeStorage into `<userData>/credentials/<tool>.cred`.
+The directory must resolve without links. Set writes an exclusive random temporary
+file beside the destination, flushes and closes it, then renames atomically. Before
+writing, set removes only that tool's pre-existing regular temporary files. Failure
+preserves the previous record and removes only its temporary file. Encryption
+unavailable means `ok:false` with no write and no plaintext fallback. No record or
+field value is logged, included in error text, shared state or persisted drafts.
+Launch environments are private per child, selected by catalog identity; saved keys
+never enter argv or process.env. Streaming redaction protects persisted output.
+Replacement/removal invalidate prior connection evidence. A timed-out change clears
+the usable cache entry and says "Could not confirm the change. Check again." The next
+prepare/refresh reads the store again. Reads retry once after a short delay; confirmed
+absence allows launches without a saved key, while two failed reads refuse launch.
+Shutdown clears the cache.
+
 ## Managed hidden sign-in
 
 Only these exact request keys are accepted at both handler and service:
@@ -136,3 +204,42 @@ messages, state or logs. Potential vendor echo after submission is discarded.
 
 Native vendor sign-in, credential persistence and absence of vendor-created consoles
 still require real-account visual qualification. No automated test logs in to a vendor.
+
+## Managed Copilot installation
+
+Copilot uses the managed official GitHub release ZIP route, with no WinGet, npm or
+script fallback. It selects the numerically latest non-draft, non-prerelease
+`v1.x.y` release of `github/copilot-cli`. Assets are `copilot-win32-x64.zip` and
+`copilot-win32-arm64.zip`. Required API size and SHA-256 digest must match the
+streamed bytes. HTTPS origins and manual redirects use the shared release policy.
+The download ceiling is 192 MiB, expanded ceiling 256 MiB. OpenCode retains its
+128 MiB download and 512 MiB expanded ceilings and existing transfer-only fallback.
+Copilot has a 1500-second install deadline; OpenCode retains 600 seconds.
+After admission, Copilot best-effort removes orphan install folders before creating
+a candidate, preserving the active descriptor target, in-progress candidates and links.
+
+The entire archive must contain exactly one regular `copilot.exe`. Unsafe paths,
+links, duplicates, case variants, empty archives and oversized entries are refused.
+An isolated throwaway home and hidden bounded `--version` probe must report exactly
+the selected `GitHub Copilot CLI <version>` before atomic publication of
+`%LOCALAPPDATA%/Command Center/tools/copilot/active.json`. Its executable points to
+`install-<id>/copilot.exe` within that same managed folder, with links refused.
+Activation failure rolls back the old descriptor and removes only the candidate.
+Unconfirmed owned-process cleanup retains admission until Stop again confirms it.
+
+Detection, login, ACP leaders and crew prefer a valid managed descriptor outside
+project folders, then safe PATH discovery. Detection uses offline `--version`.
+Only managed Copilot launches get `COPILOT_AUTO_UPDATE=false`; PATH installations
+retain the user's update setting. Selected `COPILOT_GITHUB_TOKEN` delivery remains
+private to keyed launches and never enters argv. Managed Copilot does not update
+itself and the app does not update it in this pack. Wizard and Settings retain
+Install, progress, Cancel, Installed and Try again states with no shell instructions.
+Copilot offers no manual installation button or setup-guide link.
+The obsolete Copilot prerequisites were removed: installation needs neither
+WinGet nor PowerShell. PowerShell 6+ is not consumed as catalog data and was removed.
+Uninstalling Command Center retains the managed Copilot folder, like the existing
+managed OpenCode installation; this pack adds no uninstaller deletion.
+
+NOT VERIFIED 2026-11-16: real release download, native execution on x64 or arm64,
+real sign-in and ACP sessions, vendor-created windows, and whether Copilot shell
+tools require PowerShell 6+ on a PC. No real vendor session was run for this pack.

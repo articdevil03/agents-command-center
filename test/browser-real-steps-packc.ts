@@ -39,6 +39,7 @@ const REAL_SETTINGS_NAMES = (width: number): string[] => [
   `Claude sign-in shows real server status for its fresh id at ${width}px`,
   `GitHub connect shows real server status for its fresh id at ${width}px`,
   `Notes vault refusal shows real server status for its fresh id at ${width}px`,
+  `Notes vault broad folder refusal shows real server status for its fresh id at ${width}px`,
   `Notes vault save shows real server status for its fresh id at ${width}px`,
   `real Notes vault Open in Obsidian uses the encoded server path at ${width}px`,
   `Default folder refusal shows real server status for its fresh id at ${width}px`,
@@ -122,5 +123,5 @@ export async function fakeRunnerRecordAudit(fakeRecord: string) {
   const recordedCalls = readFileSync(fakeRecord, "utf8").trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
   assert.ok(recordedCalls.every((argv) => Array.isArray(argv) && argv.every((arg: unknown) => typeof arg === "string")), `fake runner recorded argv arrays only: ${JSON.stringify(recordedCalls)}`);
   assert.ok(recordedCalls.some((argv) => JSON.stringify(argv) === JSON.stringify(["gemini", "--version"])), `Gemini version probe was recorded by the fake runner: ${JSON.stringify(recordedCalls)}`);
-  assert.ok(recordedCalls.some((argv) => JSON.stringify(argv) === JSON.stringify(["gh", "auth", "status"])), `GitHub auth status was recorded by the fake runner: ${JSON.stringify(recordedCalls)}`);
+  assert.ok(recordedCalls.some((argv) => JSON.stringify(argv) === JSON.stringify(["gh", "auth", "status", "--active", "--hostname", "github.com"])), `GitHub auth status was recorded by the fake runner: ${JSON.stringify(recordedCalls)}`);
 }

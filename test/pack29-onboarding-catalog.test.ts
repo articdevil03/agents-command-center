@@ -41,9 +41,9 @@ test("P29 B3 catalog: every real catalog entry has its row, in its group, with t
       assert.equal(found.length, 1, `${entry.id}: exactly one row (found ${found.length})`);
       const [r] = found;
       if (entry.installable) {
-        assert.deepEqual([r.group, r.chip, r.buttons], ["lead", "Not found", ["Install", entry.id === "opencode" ? "How to set up" : "Install by hand"]], `${entry.id}: Install and the fallback (OpenCode installs in the app, so its fallback says How to set up)`);
+        assert.deepEqual([r.group, r.chip, r.buttons], ["lead", "Not found", (entry.id === "copilot" ? ["Install"] : ["Install", entry.id === "opencode" ? "How to set up" : "Install by hand"])], `${entry.id}: Install and the fallback (OpenCode installs in the app, so its fallback says How to set up)`);
         const consent = await ev(`document.getElementById('frunWhy-'+${J(entry.id)})?.textContent ?? ''`);
-        assert.ok(consent.startsWith("Downloads and ") && consent.includes(`${entry.vendor}'s`) && consent.endsWith("on this PC.") || consent.includes("uv may also download Python.") || (entry.id === "opencode" && consent === "Downloads and checks OpenCode 1 from its official releases, then installs it for your Windows account."), `${entry.id}: the consent names the maker (${consent})`);
+        assert.ok(consent.startsWith("Downloads and ") && consent.includes(`${entry.vendor}'s`) && consent.endsWith("on this PC.") || consent.includes("uv may also download Python.") || (entry.id === "opencode" && consent === "Downloads and checks OpenCode 1 from its official releases, then installs it for your Windows account.") || (entry.id === "copilot" && consent === "Downloads and checks GitHub Copilot CLI from its official releases, then installs it for your Windows account."), `${entry.id}: the consent names the maker (${consent})`);
       } else {
         assert.deepEqual([r.group, r.buttons], ["models", []], `${entry.id}: in the models group, with no button at all`);
         assert.equal(await ev(`Boolean(document.querySelector('[data-frun-install=${J(entry.id)}],[data-frun-connect=${J(entry.id)}],[data-frun-login=${J(entry.id)}]'))`), false, `${entry.id}: no Install, Connect or Sign in`);
@@ -124,7 +124,7 @@ test("P29 B3 catalog layout: no overlap or clipping at 900x600 and 1296x1030, li
   if (skipped(t)) return;
   await withPage(async ({ ev, waitFor, seed, page }) => {
     const busy = catalogChange({ codex: { action: { requestId: "r1", kind: "install", status: "running", phase: "installing", reason: null } },
-      grok: { action: { requestId: "r0", kind: "install", status: "failed", phase: null, reason: "notFoundAfterInstall" } }, copilot: { action: { requestId: "r2", kind: "install", status: "failed", phase: null, reason: "needsWinget" } } });
+      grok: { action: { requestId: "r0", kind: "install", status: "failed", phase: null, reason: "notFoundAfterInstall" } }, copilot: { action: { requestId: "r2", kind: "install", status: "failed", phase: null, reason: "installFailed" } } });
     await showFirstRun(ev, seed, NONE_READY, everyMissing(seed));
     await waitFor(`Boolean(document.querySelector('#first .frun'))`, "setup wizard FOUND");
     await toToolStep(ev, FOLDER);

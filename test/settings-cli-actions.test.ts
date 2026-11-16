@@ -47,11 +47,11 @@ test("Settings inventory uses injected CLI results and only the temporary HOME a
     assert.deepEqual(state.skills.gemini.mcpServers, []);
     assert.deepEqual(state.skills.codex.mcpServers, [{ name: "demo-server" }]);
     assert.deepEqual(state.skills.claude.plugins, ["helper@official"]);
-    assert.deepEqual(state.github, { connected: true, account: "octocat" });
-    assert.doesNotMatch(JSON.stringify(state), /ghp_SHOULD_NEVER_LEAK|Token:/);
+    assert.deepEqual(state.github, { connected: true, account: null });
+    assert.doesNotMatch(JSON.stringify(state), /octocat|ghp_SHOULD_NEVER_LEAK|Token:/);
     assert.ok(h.calls.every((call) => Number.isFinite(call.timeoutMs) && call.timeoutMs > 0));
     assert.ok(h.calls.some((call) => call.bin === "claude" && call.args[0] === "--version"));
-    assert.ok(h.calls.some((call) => call.bin === "gh" && call.args.join(" ") === "auth status"));
+    assert.ok(h.calls.some((call) => call.bin === "gh" && call.args.join(" ") === "auth status --active --hostname github.com"));
     assert.ok(state.skills.claude.instructionFiles.some((item) => item.path === join(h.home, ".claude", "CLAUDE.md")), "global instructions come from the injected temporary home");
   } finally { h.close(); }
 });
@@ -234,47 +234,18 @@ test("round 2 fix 4: the real cmd.exe hands a launcher whose path holds & ^ ( ) 
   assert.deepEqual(JSON.parse(readFileSync(record, "utf8")), [launcher, "auth", "login"]);
 });
 
-test("ghLogin opens web auth and stores only the connected flag and account name", async () => {
-  const h = harness([]);
+test("GitHub uses managed sign-in and verified active status", async () => {
+  const h = harness(); h.setGithub(false);
+  const service = h.service();
   try {
-    h.setGithub(false);
-    let launches = 0;
-    const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, runCli: h.runner, loginRecheckMs: 10,
-      launchGitHub: async () => { launches++; h.setGithub(true); return true; } });
     await service.loginGitHub("github_login");
-    assert.equal(launches, 1);
-    assert.equal(h.calls.some((call) => call.bin === "cmd"), false);
-    const end = Date.now() + 3000;
-    while (service.state.github.connected !== true && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(service.state.github, { connected: true, account: "octocat", action: { requestId: "github_login", status: "done", message: "Done" } });
-    assert.doesNotMatch(JSON.stringify(service.snapshot()), /ghp_SHOULD_NEVER_LEAK|Token:/);
-  } finally { h.close(); }
-});
-
-test("sign-in re-read (GitHub connect): it keeps asking every interval, tells the page each time, and stops once signed in", async () => {
-  const h = harness([]);
-  try {
-    let reads = 0, changes = 0;
-    const runner: RunCli = async (bin, args) => {
-      if (bin === "gh" && args.join(" ") === "auth status") {
-        reads++;
-        return reads >= 4 ? { code: 0, stdout: "Logged in to github.com account octocat", stderr: "" } : { code: 1, stdout: "You are not logged in to any GitHub hosts", stderr: "" };
-      }
-      return { code: 0, stdout: "", stderr: "" };
-    };
-    const service = new SettingsService({ dataRoot: h.dataRoot, env: h.env, runCli: runner, onChange: () => { changes++; }, loginRecheckMs: 10, launchGitHub: async () => true });
-    await service.loginGitHub("github_poll");
-    assert.equal(reads, 0, "the window has only just opened: nothing has re-read the status yet");
-    const end = Date.now() + 3000;
-    while (service.state.github.connected !== true && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(service.state.github.connected, true);
-    const readsAtSignIn = reads;
-    assert.ok(readsAtSignIn >= 4, `it asked more than once: ${readsAtSignIn}`);
-    const changesAtSignIn = changes;
-    await new Promise((resolve) => setTimeout(resolve, 120));
-    assert.equal(reads, readsAtSignIn, "no more reads after it said signed in");
-    assert.ok(changesAtSignIn >= 4, `the page was told after each re-read: ${changesAtSignIn}`);
-  } finally { h.close(); }
+    assert.equal(service.state.github.account, null);
+    assert.equal(service.state.github.action?.status, "done");
+    assert.equal(h.calls.some((call) => call.args.includes("start")), false);
+    assert.ok(h.calls.some((call) => call.bin.endsWith("gh.exe") && call.args.includes("--skip-ssh-key")));
+    assert.ok(h.calls.some((call) => call.args.join(" ") === "auth status --active --hostname github.com"));
+  } finally { await service.login.drain(); h.close(); }
 });
 
 test("CLI inventory parsers return names only and reject unknown auth as unknown", () => {
@@ -285,10 +256,10 @@ test("CLI inventory parsers return names only and reject unknown auth as unknown
   assert.deepEqual(parseMcpList("codex", "• connected server_two: npx server"), [{ name: "server_two" }]);
   assert.deepEqual(parsePluginList("Installed plugins:\n- helper@official enabled"), ["helper@official"]);
   assert.deepEqual(parsePluginList("• helper-two@official enabled"), ["helper-two@official"]);
-  const parsed = parseGitHubAuthStatus({ code: 0, stdout: "Logged in to github.com account octocat\nToken: ghp_SECRET", stderr: "" });
+  const parsed = parseGitHubAuthStatus({ code: 0, stdout: "Logged in to github.com account octocat\nActive account: true\nToken: ghp_SECRET", stderr: "" });
   assert.deepEqual(parsed, { connected: true, account: "octocat" });
   assert.equal(JSON.stringify(parsed).includes("ghp_SECRET"), false);
-  assert.equal(parseGitHubAuthStatus({ code: 0, stdout: "checking", stderr: "" }).connected, null);
+  assert.equal(parseGitHubAuthStatus({ code: 0, stdout: "checking", stderr: "" }).connected, false);
 });
 
 // ---- sign-in parsing against the formats the real CLIs print ----

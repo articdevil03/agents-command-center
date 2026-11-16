@@ -11,7 +11,7 @@ import { addRunUsage, appendRunOutput, broadcast, broadcastUsageState, stateMess
 import { LAUNCH_WINDOW_MS, LEADER_LAUNCH_LIMIT, MAX_LAUNCH_NOTICES, NOTICE_BRIEF_MAX } from "./launch-gates.ts";
 import { addUnconfirmed, clearConfirmedKill, endLiveRun, persistLaunchSafety } from "./launch-safety.ts";
 import {
-  RUN_RECORDS_KEPT, acpClis, blockedSeatKeys, describeError, folderActivity, launchSafety, runBridgeRevokers,
+  RUN_RECORDS_KEPT, settingsService, acpClis, blockedSeatKeys, describeError, folderActivity, launchSafety, runBridgeRevokers,
   runContexts, runOutput, runRecords, runUsage, runWindows, stallTrackers, tabs, unconfirmedRunIds, type Launcher,
   type RunRecord,
 } from "./state.ts";
@@ -57,11 +57,11 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
   const definition = crewDefinition(location.tab, slot);
   if (!member || !definition) return { ok: false, error: `unknown slot: ${slot}` };
   // A CLI added in Settings that was since removed: say so before anything is counted or saved.
-  let acp: { name: string; program: string; args: string[] } | undefined;
+  let acp: import("../config-acp.ts").AcpCli | undefined;
   if (isAcpKind(member.cli)) {
     const added = acpClis.find((cli) => acpKindOf(cli) === member.cli);
     if (!added) return { ok: false, error: `The CLI "${member.cli.slice(4)}" was removed in Settings. Pick another CLI for ${member.name}.` };
-    acp = { name: added.name, program: added.program, args: [...added.args] };
+    acp = { ...added, args: [...added.args] };
   }
   if (typeof prompt !== "string" || !prompt.trim()) return { ok: false, error: "run prompt is required" };
   const seatKey = `${tabId}.${slot}`;
@@ -190,7 +190,7 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
       broadcast(stateMessage());
       void refreshTabDetails(tabId);
     },
-  }); } catch (err) {
+  }, undefined, { keyLaunch: acp ? settingsService.cliKeys.launch(acp) : undefined }); } catch (err) {
     runContexts.delete(run.runId); runRecords.delete(run.runId); revokeRunBridge(run.runId);
     rollbackLaunch();
     return { ok: false, error: describeError(err) };

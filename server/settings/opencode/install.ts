@@ -1,16 +1,19 @@
 import { createHash } from "node:crypto";
-import { open, unlink, lstat } from "node:fs/promises";
+import { open, unlink, lstat, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { externalNpm, InstallFailure } from "../cli-installers.ts";
 import { windowsSystem32 } from "../../leader-common/cli-path.ts";
 import { parseVersion } from "../parse.ts";
 import type { CliResult, InstallTransaction, OpenCodeInstallOptions, RunCli } from "../types.ts";
-import { assertNoLinks, createCandidate, publishCandidate, removeCandidate } from "./paths.ts";
-import { defaultTransport, DOWNLOAD_LIMIT, operationSignal, ReleaseFailure, request, selectRelease } from "./releases.ts";
+import { assertNoLinks, candidatesInProgress, createCandidate, publishCandidate, removeCandidate } from "./paths.ts";
+import { defaultTransport, operationSignal, ReleaseFailure, request, selectRelease } from "./releases.ts";
 import { extractExecutable } from "./archive.ts";
 
-export async function installOpenCode(run: RunCli, env: NodeJS.ProcessEnv, abort: AbortSignal, deadline: number,
-  options: OpenCodeInstallOptions = {}): Promise<InstallTransaction> {
+import { RELEASE_TOOLS, type ReleaseTool } from "./release-tools.ts";
+
+export async function installManagedRelease(run: RunCli, env: NodeJS.ProcessEnv, abort: AbortSignal, deadline: number,
+  options: OpenCodeInstallOptions = {}, tool: ReleaseTool = "opencode"): Promise<InstallTransaction> {
+  const profile = RELEASE_TOOLS[tool];
   const signal = operationSignal(abort, deadline), transport = options.transport ?? defaultTransport(env);
   let candidate: Awaited<ReturnType<typeof createCandidate>> | undefined;
   let processResult: CliResult | undefined;
@@ -30,15 +33,15 @@ export async function installOpenCode(run: RunCli, env: NodeJS.ProcessEnv, abort
       } } };
   };
   try {
-    options.phase?.("Checking OpenCode 1 releases");
-    const release = await selectRelease(transport, signal, options.arch ?? process.arch);
-    candidate = await createCandidate(env);
+    options.phase?.(`Checking ${profile.label} releases`);
+    const release = await selectRelease(transport, signal, options.arch ?? process.arch, tool);
+    candidate = await createCandidate(env, tool);
     signal.throwIfAborted();
     const zip = join(candidate.dir, "download.zip");
     let executable: string;
     try {
-      options.phase?.("Downloading OpenCode 1…");
-      const response = await request(transport, release.url, signal);
+      options.phase?.(`Downloading ${profile.label}…`);
+      const response = await request(transport, release.url, signal, tool);
       const file = await open(zip, "wx");
       let count = 0; const hash = createHash("sha256");
       const reader = response.body!.getReader();
@@ -50,17 +53,19 @@ export async function installOpenCode(run: RunCli, env: NodeJS.ProcessEnv, abort
           if (read.done) break;
           const chunk = read.value;
           signal.throwIfAborted(); count += chunk.length;
-          if (count > DOWNLOAD_LIMIT || count > release.size) throw new ReleaseFailure();
+          if (count > profile.downloadLimit || count > release.size) throw new ReleaseFailure();
           hash.update(chunk); await file.writeFile(chunk);
         }
       } finally { await reader.cancel().catch(() => {}); await file.close(); }
       options.phase?.("Checking the download…");
-      if (count !== release.size || hash.digest("hex") !== release.hash) throw new ReleaseFailure();
-      executable = await extractExecutable(zip, candidate.dir, signal);
+      if (count !== release.size) throw new ReleaseFailure();
+      if (hash.digest("hex") !== release.hash) throw new ReleaseFailure();
+      executable = await extractExecutable(zip, candidate.dir, signal, tool);
       await unlink(zip);
     } catch (error) {
       // Only a transfer transport failure with selected, valid metadata can use
       // npm. Integrity, archive, version, cancellation and deadline failures cannot.
+      if (tool === "copilot") throw error;
       if (!(error instanceof ReleaseFailure) || !error.transport) throw error;
       signal.throwIfAborted();
       await unlink(zip).catch((error) => { if (error.code !== "ENOENT") throw error; });
@@ -82,20 +87,33 @@ export async function installOpenCode(run: RunCli, env: NodeJS.ProcessEnv, abort
       await runOwned(node, [npm, "install", "--global", "--prefix", prefix, `opencode-ai@${release.version}`, "--registry=https://registry.npmjs.org"]);
       executable = join(prefix, "opencode.cmd");
     }
-    options.phase?.("Checking OpenCode 1…");
+    options.phase?.(`Checking ${profile.label}…`);
     signal.throwIfAborted();
     assertNoLinks(executable);
     if (!(await lstat(executable)).isFile()) throw new ReleaseFailure();
-    processResult = await run(executable, ["--version"], { timeoutMs: Math.max(1, deadline - Date.now()), cwd: windowsSystem32(), env: { OPENCODE_DISABLE_AUTOUPDATE: "1" }, installer: { signal } });
+    const probeHome = join(candidate.dir, "probe-home");
+    if (tool === "copilot") await mkdir(probeHome);
+    const probeEnv: Record<string, string> = tool === "copilot" ? { COPILOT_AUTO_UPDATE: "false", HOME: probeHome, USERPROFILE: probeHome, APPDATA: probeHome, LOCALAPPDATA: probeHome, TEMP: probeHome, TMP: probeHome } : { OPENCODE_DISABLE_AUTOUPDATE: "1" };
+    processResult = await run(executable, ["--version"], { timeoutMs: Math.max(1, deadline - Date.now()), cwd: windowsSystem32(), env: probeEnv, installer: { signal } });
     if (processResult.cleanupConfirmed !== true) throw new InstallFailure("cleanupUnconfirmed");
     signal.throwIfAborted();
     const version = processResult.code === 0 ? parseVersion(processResult.stdout || processResult.stderr) : null;
     if (!version || !/^1\.\d+\.\d+$/.test(version)) throw new ReleaseFailure();
+    if (tool === "copilot" && (version !== release.version || ![
+      `GitHub Copilot CLI ${release.version}.`, `GitHub Copilot CLI ${release.version}`,
+    ].includes(processResult.stdout.split(/\r?\n/)[0]))) throw new ReleaseFailure();
+    if (tool === "copilot") await removeCandidate(probeHome);
     return { result: processResult, candidate: executable, rollback, commit: async () => {
       signal.throwIfAborted();
       undo = await publishCandidate(candidate!.root, executable, version);
+      candidatesInProgress.delete(candidate!.dir);
     } };
   } catch {
     return failure(abort.aborted ? "cancelled" : signal.aborted || processResult?.code === 124 ? "timeout" : "installFailed");
   }
+}
+
+// Preserve the established OpenCode entry point for callers and its unchanged tests.
+export function installOpenCode(run: RunCli, env: NodeJS.ProcessEnv, abort: AbortSignal, deadline: number, options: OpenCodeInstallOptions = {}): Promise<InstallTransaction> {
+  return installManagedRelease(run, env, abort, deadline, options);
 }

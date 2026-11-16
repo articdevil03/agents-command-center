@@ -21,7 +21,7 @@ row("ui-address-https-only", login, 'url.protocol === "https:" && !url.username'
 row("ui-message-login", login, '{ type: "cliLogin", cli });', '{ type: "cliLogin", cli, command: "evil" });', page);
 row("ui-message-open", login, 'type: "openCliLogin", requestId: page.newRequestId(), cli, loginId: mine.loginId }', 'type: "openCliLogin", requestId: page.newRequestId(), cli, loginId: mine.loginId, url: view.event?.verificationUrl }', page);
 row("ui-message-submit", login, "loginId: mine.loginId, code });", "loginId: mine.loginId, code, again: code });", page);
-row("ui-unmanaged-no-signin", login, "const offered = (cli) => managed(cli) && facts(cli).installed === true", "const offered = (cli) => facts(cli).installed === true", page);
+row("ui-unmanaged-no-signin", login, 'const offered = (cli) => cli === "github" ? facts(cli).signedIn !== true : managed(cli) && facts(cli).installed === true', 'const offered = (cli) => cli === "github" ? facts(cli).signedIn !== true : facts(cli).installed === true', page);
 // The wizard: an eligible catalog tool is "Not tested yet" and never chosen by itself.
 row("ui-untested-label", "public/first-run/tools.js", 'return tool.tested === true ? "tested" : "untested";', 'return "tested";', page);
 row("ui-no-auto-select", "public/first-run/tools.js", 'draft.leader : readyClis()[0] ?? "");', 'draft.leader : choices()[0] ?? "");', page);
@@ -43,9 +43,6 @@ row("acp-facts-tested", acp, 'tested: entry.leader.qualified === true, leaderLab
 row("settings-connect-unregistered", "public/app/11-settings-render.js", "&& tool.registered !== true;", ";", "pack29-settings-connect-page");
 row("settings-connect-confirm", "public/app/11-settings-render.js", 'payload = { type: "registerCatalogCli", cli, confirm: true };', 'payload = { type: "registerCatalogCli", cli, confirm: false };', "pack29-settings-connect-page");
 row("settings-connected-badge-needs-connect", "public/app/11-settings-render.js", "tool?.signedIn === true && !unsupportedVersion && !needsConnect ?", "tool?.signedIn === true && !unsupportedVersion ?", "pack29-settings-connect-page");
-// The sign-in re-read (the GitHub connect's watcher): it asks again every interval and stops once signed in.
-row("watch-signin-once", "server/settings/service.ts", "          step();", "          void 0;", "settings-cli-actions");
-row("watch-signin-never-stops", "server/settings/service.ts", "if (signedIn === true || Date.now() >= deadline ||", "if (Date.now() >= deadline ||", "settings-cli-actions");
 row("r1-guide-shell", "public/first-run/cli-help.js", "Visit the official setup guide at the address below.", "Open PowerShell and paste the install command.", "pack29-onboarding-install-guide");
 row("r1-settings-shell", "public/app/11-settings-render.js", "Visit the official setup guide, then return here and press Check again.", "Open PowerShell and paste the install command.", "pack29-onboarding-install-page");
 export const pack29CliLoginUiMutations = rows;

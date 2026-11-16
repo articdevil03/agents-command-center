@@ -12,10 +12,10 @@ const CODEX_COMMAND = "codex app-server";
 const KILL_GRACE_MS = 200;
 
 export type CodexPolicy = { approvalPolicy: string; sandbox: string; sandboxPolicy: Record<string, unknown> };
-export function codexPolicy(mode: PermissionMode, folder: string): CodexPolicy {
+export function codexPolicy(mode: PermissionMode, folder: string, vaultPath: string | null = null): CodexPolicy {
   if (mode === "bypass") return { approvalPolicy: "never", sandbox: "danger-full-access", sandboxPolicy: { type: "dangerFullAccess" } };
   if (mode === "plan") return { approvalPolicy: "on-request", sandbox: "read-only", sandboxPolicy: { type: "readOnly", networkAccess: false } };
-  const workspace = { type: "workspaceWrite", writableRoots: [resolve(folder)], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
+  const workspace = { type: "workspaceWrite", writableRoots: [...new Set([resolve(folder), ...(vaultPath ? [resolve(vaultPath)] : [])])], networkAccess: false, excludeTmpdirEnvVar: false, excludeSlashTmp: false };
   return { approvalPolicy: mode === "ask" ? "untrusted" : "on-request", sandbox: "workspace-write", sandboxPolicy: workspace };
 }
 
@@ -24,6 +24,7 @@ export type CodexLeaderDeps = {
   mode: PermissionMode;
   ask: AskApproval;
   savedAsks?: () => boolean;
+  vaultPath?: () => string | null;
   spawnFn?: LeaderSpawn;
   startTimeoutMs?: number;
   // The turn/start deadline alone (tests shorten it without shortening the start).
@@ -280,7 +281,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
   const ready = deadline((async () => {
     await request("initialize", { clientInfo: { name: "command-center", title: "Command Center", version: "1.0.0" }, capabilities: { experimentalApi: true } });
     write({ method: "initialized" });
-    const policy = codexPolicy(effectiveMode(), tabFolder);
+    const policy = codexPolicy(effectiveMode(), tabFolder, deps.vaultPath?.());
     const started = await request("thread/start", {
       cwd: resolve(tabFolder), model, approvalPolicy: policy.approvalPolicy, sandbox: policy.sandbox,
       dynamicTools: deps.tools.map((spec) => ({ type: "function", name: spec.name, description: spec.description, inputSchema: leaderToolJsonSchema(spec) })),
@@ -294,7 +295,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
   const inputOf = (text: string, images: string[]): Json[] => [{ type: "text", text, text_elements: [] }, ...images.map((path) => ({ type: "localImage", path }))];
 
   async function startTurn(text: string, images: string[]): Promise<void> {
-    const policy = codexPolicy(effectiveMode(), tabFolder);
+    const policy = codexPolicy(effectiveMode(), tabFolder, deps.vaultPath?.());
     turnModel = model;
     turnId = null;
     held = [];

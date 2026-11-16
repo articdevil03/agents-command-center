@@ -204,6 +204,7 @@ function shutdown(signal: string): Promise<void> {
   closeWorkerAdmission();
   settingsService.installer.close();
   settingsService.login.close();
+  settingsService.cliKeys.close();
   settingsService.models.close();
   fixedGitOperations.close();
   shutdownWork = drainShutdown(signal);

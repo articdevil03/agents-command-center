@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { serverNodeRuntime } from "../electron/node-runtime.js";
+import { createCliCredentialStore, handleCliCredentialMessage } from "../electron/cli-credentials.js";
 import { removeWithRetry } from "./mutation-proof.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -46,6 +47,8 @@ setImmediate(() => {
     let runtimeCommand;
     const startServer = runInNewContext(source + ";startServer", {
       app: { isPackaged: true, getPath: () => data }, randomBytes, createServer, join,
+      createCliCredentialStore, handleCliCredentialMessage,
+      safeStorage: { isEncryptionAvailable: () => false },
       root, smokeReadyFile: undefined, process: { env: runtimeProofEnv(temp, data) },
       serverNodeRuntime: (entry, skip) => serverNodeRuntime(entry, skip, electron),
       setTimeout, clearTimeout,
