@@ -20,13 +20,13 @@ Command Center is local mission control for the AI coding tools you already use.
 ## Features
 
 - **One leader, one fixed crew per tab.** Projects hold tabs, and each tab owns its folder, its 18 positions and its leader chat. A new tab is initially saved with all 18 positions unassigned unless choices or Auto assign were requested. Startup and CLI discovery fill empty automatic choices from installed tools; positions cleared by you stay empty.
-- **Any CLI in any position.** Each position can run on Claude Code, Codex or OpenCode, and any other agent CLI that speaks the Agent Client Protocol (ACP, such as `opencode acp`) can be added in Settings. Command Center is not tied to one vendor.
+- **Any CLI in any position.** Each position can run on Claude Code, Codex or OpenCode. Settings also lists other AI tools (such as Copilot, Gemini, Qwen, Kimi, Mistral, Grok and MiMo) that Command Center can install for you or connect with a key, and any other agent CLI that speaks the Agent Client Protocol (ACP, such as `opencode acp`) can be added. Command Center is not tied to one vendor.
 - **Pick a model per position, or let it assign.** In **Settings > Crew and models** you choose a model and effort for each position by hand, or press **Auto assign** to fill them from the AI tools you have installed (empty positions are also filled this way when the app starts and after it re-checks your tools; a position you cleared by hand stays empty). **Use one model for all positions** changes idle positions together; the result names any busy positions it skipped. Your choices are saved per tab, so two tabs can use different models. There is no crew or template editor and no tagging of seats: the leader launches the right position when the plan needs it.
 - **The Planner decides the process.** The plan records the risk level and which reviews the work needs (a final review is required for high or unknown risk, large work and work that joins several parts). You approve the plan, and for visible work you try and approve a rough version before polish, checks and review. A review should come from a different model than the one that wrote the code; when the same model or company sits on both, Settings says so, but it does not block you.
 - **You stay in charge.** Approval cards for risky steps, permission modes per tab (Ask before edits, Auto-accept edits, Plan only, Bypass permissions) and a "Needs you" inbox.
 - **Safety limits.** A launch budget, stall detection, leftover-process cleanup, and the app's own connection tokens kept out of the chat.
 - **Live view.** Streaming chat, live run logs, usage and context numbers, Stop per tab or Stop all.
-- **Pick up where you left off.** Save writes a handover file the next leader session reads.
+- **Pick up where you left off.** Save writes a handover file the next leader session reads. If you connect a notes folder (a vault) in Settings, the leader can read and write it, and Save also puts a copy of the handover there.
 - **Desktop or browser.** Run it as a desktop app or open it in your browser on localhost.
 
 ## Quick start
@@ -37,7 +37,7 @@ Download the installer from the [Releases page](../../releases) (version 1.0.0 i
 
 No Node, npm, git or terminal is needed to install Command Center. It installs for your Windows user, without admin rights, under `%LOCALAPPDATA%\Programs\command-center`. Uninstalling never deletes your data in `%APPDATA%\command-center`; it does remove the AI tools Command Center installed itself, in `%LOCALAPPDATA%\Command Center\tools`.
 
-To work with agents, at least one of Claude Code, Codex or OpenCode must be installed and signed in. On first open, setup shows **Welcome**, **Folder**, **AI tool**, then **Ready**. The wizard checks your AI tools and explains what to install or sign in to.
+On first open, setup shows **Welcome**, **Folder**, **AI tool**, then **Ready**. To work with agents you need at least one AI tool. The wizard checks the ones already on your PC. For the tools it knows, it can install them for you with an **Install** button and then sign you in, with a sign-in page in your browser or a key box in the app, so you never need a terminal. You can also add tools later in **Settings**.
 
 ### Run from source (developers)
 
@@ -67,8 +67,9 @@ A position with no model cannot run: the launch is refused with a message tellin
 
 - The server binds to `127.0.0.1` only. The live connection and every change need a per-launch key; loading the page and its images does not.
 - No telemetry. Command Center sends nothing anywhere; the agent CLIs talk to their own providers as they normally do.
-- Each tab picks a permission mode, from **Ask before edits** (the leader asks before edits, commands and launching seats that can write; a Codex leader asks only about commands Codex judges unsafe) to **Bypass permissions** (runs everything without asking). The mode picker says what each mode does for that tab's CLI. ACP leaders always run in full access, and an ACP CLI on a crew seat needs your confirmation once.
+- Each tab picks a permission mode, from **Ask before edits** (the leader asks before edits, commands and launching seats that can write; a Codex leader asks only about commands Codex judges unsafe) to **Bypass permissions** (runs everything without asking). The mode picker says what each mode does for that tab's CLI. ACP leaders always run in full access, and an ACP CLI on a crew seat needs your confirmation once. With an OpenCode leader, a mode change waits until the running turn ends, because OpenCode reads its permission rules once at the start of a turn.
 - No CLI's read-only mode is treated as a real boundary.
+- An API key you type into Command Center is stored encrypted by Windows and handed to the tool only when it starts. It is kept out of logs and chat.
 
 See [SECURITY.md](./SECURITY.md) to report a problem.
 
