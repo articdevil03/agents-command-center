@@ -83,7 +83,7 @@ test("p29 ACP missing and project-contained programs refuse without writes", asy
     try {
       unlinkSync(join(ctx.bin, "fake-acp.cmd"));
       if (inside) { writeFileSync(join(ctx.work, "fake-acp.cmd"), "@echo off\r\n"); process.env.PATH = ctx.work; }
-      await refused(ctx, {}, inside ? /found only inside a project folder/ : /was not found on PATH/);
+      await refused(ctx, {}, inside ? /Choose a project folder/ : /was not found on PATH/);
     } finally { ctx.restore(); }
   }
 });
@@ -113,4 +113,15 @@ test("p29 built-in consent accepts only booleans and otherwise leaves readiness 
     try { await refused(ctx, { cli }, cli === "claude" ? /not signed in/ : /unknown leader CLI/); }
     finally { ctx.restore(); }
   }
+});
+
+// R-6: admission refuses a folder that holds the program, so the guard in complete.ts is reached through the app's own working folder, which admission does not look at.
+test("p29 ACP program found only inside the app's working folder is refused by the program guard, not by folder admission", async () => {
+  const ctx = fixture(), previous = process.cwd(), working = scratchDir();
+  try {
+    unlinkSync(join(ctx.bin, "fake-acp.cmd"));
+    writeFileSync(join(working, "fake-acp.cmd"), "@echo off\r\n"); process.env.PATH = working;
+    process.chdir(working);
+    await refused(ctx, {}, /found only inside a project folder/);
+  } finally { process.chdir(previous); ctx.restore(); }
 });

@@ -12,8 +12,7 @@
   // Action keys in the page's shared action tracking (sendSettingsAction): the server's actionResult or error for the request id lands there.
   const KEY = { complete: "first-run-complete", skip: "first-run-skip", refresh: "first-run-refresh" };
 
-  // The project id the server derives from the name (server/first-run/complete.ts): a name without a letter or digit gets none.
-  const projectSlug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  // Display names accept every script; the server derives a separate safe project id.
   const folderName = (folder) => folder.replace(/[\\/]+$/, "").split(/[\\/]/).pop() ?? "";
   const isAbsolute = (folder) => /^[a-zA-Z]:[\\/]|^\\\\|^\//.test(folder);
 
@@ -56,7 +55,8 @@
       if (!draft.folder) return canBrowse() ? "Choose a folder to go on." : "Type the folder's path to go on.";
       if (!isAbsolute(draft.folder)) return "Type the full folder path, starting with the drive, like C:\\.";
       if (!draft.name.trim()) return "Give the project a name.";
-      if (!projectSlug(draft.name.trim())) return "Use at least one letter (a to z) or number in the name.";
+      if (draft.name.trim().length > 100 || /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B\uFEFF]/u.test(draft.name)) return "Use at most 100 characters without control or invisible formatting characters in the name.";
+      if (!/[\p{L}\p{N}]/u.test(draft.name)) return "Use at least one letter or number in the name.";
       return "";
     }
     // A running check never blocks a Ready tool: a click back into the window starts one, and must not swallow the click behind it.
@@ -214,7 +214,7 @@
     }
     function onToolClick(event) {
       const button = event.target.closest("button"); if (!button || button.disabled || button.closest(".cli-login")) return; // the panel has its own clicks
-      const { frunLogin: signIn, frunHelp: help, frunCopy: copy, frunInstall: add, frunCancel: stop, frunRecheck: recheck, frunConnect: link } = button.dataset;
+      const { frunLogin: signIn, frunHelp: help, frunInstall: add, frunCancel: stop, frunRecheck: recheck, frunConnect: link } = button.dataset;
       const off = button.getAttribute("aria-disabled") === "true";
       // Install, Cancel and Connect send only the tool's id (install.js); Install is the consent, so it asks nothing more.
       if (add) { if (install.install(add)) redraw(`frun-cancel-${add}`); return; }
@@ -231,7 +231,6 @@
         if (openHelp.has(help)) q(`frunHelp-${CSS.escape(help)}`)?.closest(".frun-tool")?.scrollIntoView({ block: "nearest" });
         return;
       }
-      if (copy) copyText(tools.guideInfo(copy)?.page ?? "");
     }
     // "Go to OpenCode" under the models: brings the OpenCode row into view (clearing a search that hides it) and focuses its action.
     function toOpenCode() {
@@ -240,7 +239,7 @@
       row?.scrollIntoView({ block: "nearest" });
       ([...(row?.querySelectorAll("button") ?? [])].find((el) => !el.disabled) ?? q("frunSearch")).focus({ preventScroll: true });
     }
-    // Copy the official guide address.
+    // Copy the provider guide address.
     async function copyText(text, what = "address") {
       const done = `${what[0].toUpperCase()}${what.slice(1)} copied`;
       try { await navigator.clipboard.writeText(text); page.showToast(done); }

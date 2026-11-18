@@ -4,7 +4,6 @@ import { IpcCredentialStore } from "./cli-key-store.ts";
 import type { OpenCodeModelRefresh } from "./opencode/models.ts";
 import { createSetupActions } from "./setup-actions.ts";
 import { readdirSync, statSync } from "node:fs";
-import { realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import { isSafeRequestId } from "../chat-store.ts";
@@ -15,7 +14,7 @@ import { ACTION_TIMEOUT_MS, CLI_IDS, CLI_TIMEOUT_MS, MCP_NAME, PERMISSION_MODES,
 import { applyBounded, LIVE_TIMEOUT, ModeBusyError, serializePermissionMode } from "./permissions.ts";
 import { parseGitHubAuthStatus, parseMcpCommand, parseMcpList, parsePluginList } from "./parse.ts";
 import { freshState, persist, readPersisted } from "./store.ts";
-import { checkVaultStatus } from "./vault.ts";
+import { canonicalDirectory, checkVaultStatus, readVaultStatus } from "./vault.ts";
 import { BROAD_VAULT_MESSAGE, isBroadVault } from "../vault.ts";
 import type { ActionState, CliId, CliResult, PermissionMode, PersistedSettings, RunCli, SettingsServiceOptions, SettingsState } from "./types.ts";
 
@@ -52,7 +51,7 @@ export class SettingsService {
     this.path = join(resolve(options.dataRoot), "settings.json");
     const read = readPersisted(this.path);
     this.saved = read.settings;
-    if (read.recovered) this.recoveryNotice = "The settings file was damaged, so your saved permission modes were lost. A copy was kept beside it. Every tab without a saved mode now asks before changing files; pick a mode for each tab to change that.";
+    if (read.recovered) this.recoveryNotice = read.notice ?? null;
     this.state = freshState(this.saved);
     this.cliKeys = new CliKeys(options.credentialStore ?? new IpcCredentialStore(), this.state, () => this.publish());
     this.env = options.env ?? process.env;
@@ -143,7 +142,9 @@ export class SettingsService {
 
   async refreshAll(folder: string | null): Promise<void> {
     await this.cliKeys.prepareAllBounded(Object.keys(CLI_KEY_PROFILES), KEY_READ_WAIT_MS);
-    this.state.vault.status = checkVaultStatus(this.state.vault.path);
+    const vaultPath = this.state.vault.path;
+    const vaultStatus = await readVaultStatus(vaultPath);
+    if (this.state.vault.path === vaultPath) this.state.vault.status = vaultStatus;
     this.refreshProjectInstructions(folder);
     this.refreshLocalSkills();
     await Promise.all([this.models.refresh(), refreshCatalog(this.state, this.run, this.env), ...CLI_IDS.map((cli) => this.refreshCliInventory(cli))]);
@@ -192,6 +193,7 @@ export class SettingsService {
 
   async addMcp(cli: CliId, requestId: string, name: unknown, commandOrUrl: unknown): Promise<void> {
     if (!CLI_IDS.includes(cli)) throw new SettingsActionError("unknown CLI", requestId);
+    if (cli === "opencode") throw new SettingsActionError("OpenCode MCP changes are not available yet. You can still use the tools already listed here.", requestId);
     const target = this.state.skills[cli];
     return this.action(target, requestId, async () => {
       if (cli === "gemini") throw new Error("Gemini MCP changes are unavailable");
@@ -200,8 +202,7 @@ export class SettingsService {
       let args: string[];
       if (cli === "codex") args = ["mcp", "add", name, ...(parsed.type === "url" ? ["--url", parsed.url] : ["--", ...parsed.argv])];
       // -s user: the default "local" scope is keyed to the server's own working folder, so the server would be invisible to every tab and lost on restart.
-      else if (cli === "claude") args = ["mcp", "add", "-s", "user", ...(parsed.type === "url" ? ["--transport", "http", name, parsed.url] : [name, "--", ...parsed.argv])];
-      else args = ["mcp", "add", name, ...(parsed.type === "url" ? ["--url", parsed.url] : ["--", ...parsed.argv])];
+      else args = ["mcp", "add", "-s", "user", ...(parsed.type === "url" ? ["--transport", "http", name, parsed.url] : [name, "--", ...parsed.argv])];
       const result = await this.call(cli, args, ACTION_TIMEOUT_MS);
       await this.refreshCliInventory(cli);
       if (result.code !== 0) throw new Error("MCP add failed");
@@ -209,6 +210,7 @@ export class SettingsService {
   }
 
   async removeMcp(cli: CliId, requestId: string, name: unknown, confirm: unknown): Promise<void> {
+    if (cli === "opencode") throw new SettingsActionError("OpenCode MCP changes are not available yet. You can still use the tools already listed here.", requestId);
     if (cli !== "claude" && cli !== "codex") throw new SettingsActionError("MCP removal is unavailable for this CLI", requestId);
     const target = this.state.skills[cli];
     return this.action(target, requestId, async () => {
@@ -241,25 +243,12 @@ export class SettingsService {
     });
   }
 
-  private async canonicalDirectory(value: unknown, label: string): Promise<string> {
-    if (typeof value === "string" && !value.trim()) throw new Error(`${label} is required`);
-    if (typeof value !== "string" || value.length > 4096 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${label} must be an absolute directory path`);
-    const candidate = value.trim();
-    if (!isAbsolute(candidate) || candidate.split(/[\\/]+/).includes("..")) throw new Error(`${label} must be an absolute directory path without traversal`);
-    let canonical: string;
-    try { canonical = await realpath(candidate); }
-    catch { throw new Error(`${label} folder does not exist`); }
-    try { if (!(await stat(canonical)).isDirectory()) throw new Error(`${label} must be a directory`); }
-    catch (error) { if (error instanceof Error && error.message.includes("must be a directory")) throw error; throw new Error(`${label} folder is unavailable`); }
-    return canonical;
-  }
-
   async setNotesVault(requestId: string, value: unknown): Promise<void> {
     const state = this.state;
     const target = { get action() { return state.preferenceAction; }, set action(value: ActionState | undefined) { state.preferenceAction = value; } };
     return this.action(target, requestId, async () => {
       if (typeof value === "string" && isAbsolute(value.trim()) && isBroadVault(resolve(value.trim()))) throw new Error(BROAD_VAULT_MESSAGE);
-      const path = value === null || value === "" ? null : await this.canonicalDirectory(value, "Notes vault");
+      const path = value === null || value === "" ? null : await canonicalDirectory(value, "Notes vault");
       if (path && isBroadVault(path)) throw new Error(BROAD_VAULT_MESSAGE);
       const status = checkVaultStatus(path);
       if (status === "readonly") throw new Error("Command Center can read this folder but cannot save notes here.");
@@ -275,7 +264,7 @@ export class SettingsService {
     const state = this.state;
     const target = { get action() { return state.preferenceAction; }, set action(action: ActionState | undefined) { state.preferenceAction = action; } };
     return this.action(target, requestId, async () => {
-      const path = await this.canonicalDirectory(value, "Default project folder");
+      const path = await canonicalDirectory(value, "Default project folder");
       this.save({ ...this.saved, defaultProjectFolder: path });
       this.state.folders.defaultProjectFolder = path;
     });

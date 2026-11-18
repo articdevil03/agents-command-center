@@ -3,7 +3,7 @@ import type { DialogPage } from "./browser-dialog-page.ts";
 
 export async function settingsLifecycleProbes(page: DialogPage, args: { width: number }, proc: { pid?: number }) {
   const { evaluate, waitForPage } = page;
-  const settings = await evaluate(`(()=>{
+  const settings = await evaluate(`(async()=>{
     const $=id=>document.getElementById(id), find=s=>{const e=document.querySelector(s);if(!e)throw Error("missing target "+s);return e};
     const deliver=s=>window.__ccDeliver({...s,type:"state"});
     const close=()=>document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true,cancelable:true}));
@@ -11,7 +11,7 @@ export async function settingsLifecycleProbes(page: DialogPage, args: { width: n
     const open=()=>$("setBtn").click(); close(); open();
     const add=find('[data-settings-add="mcp-claude"]'); if(find('[data-mcp-form="claude"]').hidden)add.click();
     const form=()=>find('[data-mcp-form="claude"]');
-    T(form().elements.name,"focused_server");T(form().elements.commandOrUrl,"npx -y server");form().elements.name.focus();form().requestSubmit();if(!$("confirmModal").hidden)$("confirmOk").click();
+    T(form().elements.name,"focused_server");T(form().elements.commandOrUrl,"npx -y server");form().elements.name.focus();form().requestSubmit();await window.__ccHarness.confirmIfAsked();
     const m=window.__sent.filter(m=>m.type==="mcpAdd").at(-1),s=structuredClone(window.__latestState);
     s.requestActions={...s.requestActions,[m.requestId]:{requestId:m.requestId,status:"done",message:"Done"}};deliver(s);
     const mcpCleared=form().elements.name.value==="" && form().elements.commandOrUrl.value==="";
@@ -68,17 +68,20 @@ export async function settingsLifecycleProbes(page: DialogPage, args: { width: n
   assert.equal(second.browsedLabel, "Connect", "the Browse choice keeps a Connect button, never flips to Disconnect");
   assert.equal(second.typed, "typed-vault", "a typed vault choice survives a broadcast");
   assert.equal(second.typedLabel, "Connect", "the typed choice keeps a Connect button");
-  for (const cli of ["claude", "codex", "opencode", "plugin"]) {
-    const result = await evaluate(`(()=>{
+  // OpenCode MCP Add is disabled by design (P6 E-3): there is no form or enabled Add control to drive, and the page says so.
+  const openCodeAdd = await evaluate(`({form:document.querySelectorAll('[data-mcp-form="opencode"]').length,enabledAdd:document.querySelectorAll('[data-settings-add="mcp-opencode"]').length})`);
+  assert.deepEqual(openCodeAdd, { form: 0, enabledAdd: 0 }, "OpenCode MCP Add offers no form and no enabled Add control");
+  for (const cli of ["claude", "codex", "plugin"]) {
+    const result = await evaluate(`(async()=>{
       const T=(e,v)=>{e.value=v;e.dispatchEvent(new Event("input",{bubbles:true}))};const cli=${JSON.stringify(cli)},plugin=cli==="plugin",find=s=>{const e=document.querySelector(s);if(!e)throw Error("missing target "+s);return e};
       const selector=plugin?'[data-plugin-form]':'[data-mcp-form="'+cli+'"]', form=()=>find(selector);
       if(form().hidden)find('[data-settings-add="'+(plugin?'plugins-claude':'mcp-'+cli)+'"]').click();
-      T(form().elements.name,"first_name");if(!plugin)T(form().elements.commandOrUrl,"npx -y first-server");form().requestSubmit();if(document.getElementById("confirmModal").hidden===false)document.getElementById("confirmOk").click();
+      T(form().elements.name,"first_name");if(!plugin)T(form().elements.commandOrUrl,"npx -y first-server");form().requestSubmit();await window.__ccHarness.confirmIfAsked();
       const type=plugin?"pluginInstall":"mcpAdd",m=window.__sent.filter(m=>m.type===type&&(plugin||m.cli===cli)).at(-1);
       T(form().elements.name,"newer_name");if(!plugin)T(form().elements.commandOrUrl,"https://newer.example/mcp");
       const s=structuredClone(window.__latestState);s.requestActions={...s.requestActions,[m.requestId]:{status:"done",requestId:m.requestId}};window.__ccDeliver({...s,type:"state"});
       const name=form().elements.name.value,command=plugin?null:form().elements.commandOrUrl.value;
-      form().requestSubmit();if(document.getElementById("confirmModal").hidden===false)document.getElementById("confirmOk").click();const next=window.__sent.filter(m=>m.type===type&&(plugin||m.cli===cli)).at(-1);
+      form().requestSubmit();await window.__ccHarness.confirmIfAsked();const next=window.__sent.filter(m=>m.type===type&&(plugin||m.cli===cli)).at(-1);
       return {name,command,next};
     })()`);
     assert.equal(result.name,"newer_name", cli + " completed Add preserves newer name");

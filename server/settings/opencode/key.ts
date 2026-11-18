@@ -7,6 +7,11 @@ import type { KeyRunOptions, KeyRunResult, RunCli, RunKey } from "../types.ts";
 export function validApiKey(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 && Buffer.byteLength(value) <= 4096 && !/[\u0000-\u001f\u007f-\u009f]/.test(value);
 }
+export function normalizeApiKey(value: unknown): string {
+  const key = typeof value === "string" ? value.trim() : "";
+  if (!validApiKey(key)) throw new Error("Enter an OpenCode Go API key.");
+  return key;
+}
 export async function checkKeyCredentials(run: RunCli, env: NodeJS.ProcessEnv, replace: boolean, signal: AbortSignal, timeoutMs: number): Promise<void> {
   if (signal.aborted) throw new Error("cancelled");
   const version = await run("opencode", ["--version"], { timeoutMs, directExecutable: true, env: { OPENCODE_DISABLE_AUTOUPDATE: "1" } });
@@ -30,7 +35,7 @@ export function createKeyRunner(deps: KeyDeps): RunKey {
     const remaining = () => Math.max(1, Math.min(10_000, options.timeoutMs - (Date.now() - started)));
     const started = Date.now();
     try {
-      if (!validApiKey(options.apiKey)) throw new Error("invalidKey");
+      try { options.apiKey = normalizeApiKey(options.apiKey); } catch { throw new Error("invalidKey"); }
       await checkKeyCredentials(deps.run, options.env, options.replace, signal, remaining());
       server = startKeyServer(options.env, signal, deps);
       const origin = await server.origin;

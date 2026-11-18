@@ -17,6 +17,16 @@ const KEY = "ccTEST-KEY-" + randomUUID();
 const connection = catalogProfile(catalogTool("gemini"));
 const serviceFor = (store: any) => new SettingsService({ dataRoot: scratchDir(), credentialStore: store });
 
+test("a credential channel lost during the first read is not polled again", async () => {
+  const store = new MemoryCredentialStore(); let attempts = 0;
+  store.get = async () => { attempts++; store.enabled = false; throw new Error("channel closed"); };
+  const service = serviceFor(store);
+  try {
+    await assert.doesNotReject(service.cliKeys.prepareConnection(connection));
+    assert.equal(attempts, 1);
+  } finally { service.cliKeys.close(); service.login.close(); service.installer.close(); }
+});
+
 test("first read hiccup retries once, absence permits launch, two failed reads refuse a possibly saved key", async () => {
   for (const saved of [false, true]) {
     const store = new MemoryCredentialStore();
@@ -108,7 +118,7 @@ test("mixed-case inherited Gemini variable is replaced rather than duplicated", 
 test("a PC where encryption is unavailable launches a tool with no key, without a read error", async () => {
   class Channel extends EventEmitter {
     connected = true;
-    send = (m: any, cb: any) => { cb(null); queueMicrotask(() => this.emit("message", { type: "cliCredentialResult", id: m.id, available: false, ok: false })); };
+    send = (m: any, cb: any) => { cb(null); queueMicrotask(() => this.emit("message", { type: "cliCredentialResult", id: m.id, available: false, ok: true, record: null })); };
   }
   const service = serviceFor(new IpcCredentialStore(new Channel(), 50));
   try {

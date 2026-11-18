@@ -108,12 +108,23 @@ function onChangeFolder(ws: WebSocket, message: any): void {
   const folder = validateFolderPath(message.folder, "tab folder");
   const location = tabLocation(message.tabId); if (!location) throw new Error(`unknown tab: ${String(message.tabId)}`);
   if (tabHasActiveWork(message.tabId)) throw new Error("cannot change the folder while the tab is busy");
-  // The new folder's leader starts on the tab's next chat message, so its project hooks never run unasked.
-  stopLeaderSession(message.tabId);
   const draft = saveWorkspaceDraft();
   draft.projects.find((project) => project.id === location.project.id)!.tabs.find((tab) => tab.id === message.tabId)!.folder = folder;
-  syncWorkspace(draft);
-  const runtime = tabs.get(message.tabId)!; runtime.state.folderPath = folder;
+  let persisted = false;
+  try {
+    syncWorkspace(draft, () => {
+      persisted = true;
+      // Keep the new saved folder and stop the old session before fallible refresh work.
+      stopLeaderSession(message.tabId);
+      // A tab with no runtime yet gets one built from the saved folder by syncWorkspace.
+      const runtime = tabs.get(message.tabId);
+      if (runtime) runtime.state.folderPath = folder;
+    });
+  } catch {
+    if (!persisted) throw new Error("Could not save the folder change. Your previous folder and session have been kept.");
+    broadcast(stateMessage());
+    throw new Error("Your new folder was saved and the previous session stopped, but folder details could not refresh. Close Command Center and open it again.");
+  }
   broadcast(stateMessage()); void refreshTabDetails(message.tabId); return;
 }
 function onChangeProjectFolder(ws: WebSocket, message: any): void {

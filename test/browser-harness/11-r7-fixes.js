@@ -66,7 +66,7 @@
     const mcpForm = () => requireElement('[data-mcp-form="claude"]');
     mcpForm().querySelector('[name="name"]').value = "held_mcp";
     mcpForm().querySelector('[name="commandOrUrl"]').value = "npx held";
-    mcpForm().requestSubmit(); confirmIfAsked();
+    mcpForm().requestSubmit(); await confirmIfAsked();
     const heldAdd = window.__sent.filter((item) => item.type === "mcpAdd").at(-1);
     window.__ccSeed.settings.skills.claude.action = done("other_mcp_finished");
     window.__ccSeed.requestActions[heldAdd.requestId] = running(heldAdd.requestId); deliverSeed();

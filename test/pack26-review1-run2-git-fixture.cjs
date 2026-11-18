@@ -23,6 +23,10 @@ const finish = () => {
   }
   let out = '';
   if (kind === 'rev-parse') out = command[1] === '--is-inside-work-tree' ? 'true' : String.fromCharCode(97 + state.commits).repeat(40);
+  if (kind === 'symbolic-ref') out = 'refs/heads/main\n';
+  if (kind === 'remote') out = command[1] === 'get-url' ? 'https://example.invalid/repo\n' : 'origin\n';
+  if (kind === 'for-each-ref') out = command[1].includes('remotename') ? 'origin\0refs/heads/main\n' : 'refs/remotes/origin/main\n';
+  if (kind === 'rev-list') out = command[1] === '--count' ? '1\n' : String.fromCharCode(97 + state.commits).repeat(40) + '\n';
   if (kind === 'status') out = config.clean ? '' : ' M owned.txt\0';
   if (kind === 'commit') { state.commits++; state.subject = command[command.indexOf('-m') + 1]; fs.writeFileSync(stateFile, JSON.stringify(state)); out = 'committed'; }
   if (kind === 'diff-tree') out = config.unrelated ? 'unrelated.txt\0' : 'owned.txt\0';

@@ -35,6 +35,8 @@ export async function run4Fixture(t: { after: (fn: () => any) => void }, overrid
   const controls = server.fixedTasks.run4;
   const tabId = "alpha-dev", ws = connect(server);
   ws.terminate = () => { ws.readyState = 3; };
+  // A check in Accept now waits for the owner's approval card (P5 R-1); these tests drive the lifecycle, not the card.
+  server.settingsService.state.permissionModes[tabId] = "bypass";
   server.createTabLeader(tabId);
   const task = () => server.fixedTasks.get(tabId);
   const expected = () => { const current = task(); return current ? { taskId: current.id, planVersion: current.planVersion, recordRevision: current.recordRevision } : null; };

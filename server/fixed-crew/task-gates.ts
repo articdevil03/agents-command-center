@@ -113,4 +113,12 @@ export function assertTaskGate(task: Task | null, action: TaskAction, execution?
     if (!allChecksPassed(task, revision)) throw new Error("Shipping checks are missing, failed or stale.");
     if (!task.plan.shipping.includes(action.kind as "commit")) throw new Error("This shipping action is outside the approved scope.");
   }
+  // Stamp only the admitted reservation, never a caller's requested capability.
+  // inspect consumes existing visual evidence; it does not need shell access.
+  if (execution) {
+    delete execution.executionCapability;
+    if (["check", "visualCheck"].includes(action.kind) && execution.role === selectedRole(task, action)
+      && !task.seats[execution.role]?.cli.startsWith("acp:")
+      && execution.kind === action.kind) execution.executionCapability = "run-commands";
+  }
 }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,6 +10,7 @@ import { runInNewContext } from "node:vm";
 import { serverNodeRuntime } from "../electron/node-runtime.js";
 import { createCliCredentialStore, handleCliCredentialMessage } from "../electron/cli-credentials.js";
 import { removeWithRetry } from "./mutation-proof.mjs";
+import { isMain } from "./is-main.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 export function runtimeProofEnv(temp, data) {
@@ -28,6 +29,15 @@ async function bounded(promise, ms, message) {
   finally { clearTimeout(timer); }
 }
 export async function proveRuntime(electron = join(root, "node_modules/electron/dist/electron.exe")) {
+  const startedAt = Date.now();
+  const recordPath = process.env.CC_RUNTIME_PROOF_RECORD;
+  const artifact = process.env.CC_RUNTIME_PROOF_ARTIFACT;
+  const runId = process.env.CC_RUNTIME_PROOF_RUN_ID;
+  const recording = [recordPath, artifact, runId].some((value) => value !== undefined);
+  if (recording && (!recordPath || !artifact || !runId)) throw new Error("Runtime check success record settings are incomplete.");
+  const artifactHash = () => createHash("sha256").update(readFileSync(artifact)).digest("hex");
+  const artifactSha256 = recording ? artifactHash() : undefined;
+  let checksRun = 0;
   assert.ok(resolve(electron) === electron, `runtime path must be absolute: ${electron}`);
   const temp = mkdtempSync(join(tmpdir(), "cc-p29-proof-"));
   const data = join(temp, "data"); mkdirSync(data);
@@ -63,6 +73,7 @@ setImmediate(() => {
     });
     const ready = await startServer();
     assert.equal(ready.ok, true, ready.reason);
+    checksRun++;
     port = ready.port;
     await bounded(new Promise((done, reject) => {
       const inspect = () => { if (/P29_CHILD_ENV=([^\r\n]+)/.test(output)) done(); };
@@ -71,17 +82,23 @@ setImmediate(() => {
     }), 10000, "child observation exhausted");
     const record = JSON.parse(/P29_CHILD_ENV=([^\r\n]+)/.exec(output)[1]);
     assert.equal(record.code, 0, `child observer failed: ${JSON.stringify(record)}`);
+    checksRun++;
     assert.equal(record.keys, "", `child inherited Node mode: ${JSON.stringify(record)}`);
+    checksRun++;
     assert.ok(record.electron, `Electron runtime signal absent: ${JSON.stringify(record)}`);
+    checksRun++;
     const response = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(5000) });
     assert.equal(response.status, 200, `GET / returned ${response.status}`);
+    checksRun++;
     child.send("shutdown");
     const exit = await bounded(ended, 130000, "IPC shutdown exhausted");
     assert.equal(exit.code, 0, `IPC shutdown: ${JSON.stringify(exit)} ${errors}`);
+    checksRun++;
     await new Promise((done, reject) => {
       const probe = createServer(); probe.once("error", reject);
       probe.listen(port, "127.0.0.1", () => probe.close(done));
     });
+    checksRun++;
     console.log(`PASS runtime=${runtimeCommand}; ready port=${port}; GET /=200; child keys=${JSON.stringify(record.keys)}; electron=${record.electron}; IPC exit=0; port free`);
   } finally {
     if (child?.pid && child.exitCode === null && child.signalCode === null) {
@@ -90,8 +107,12 @@ setImmediate(() => {
     }
     assert.ok(removeWithRetry(temp), `proof temp not removed: ${temp}`);
   }
+  if (recording) {
+    assert.equal(artifactHash(), artifactSha256, "Installer changed during its runtime check.");
+    writeFileSync(recordPath, JSON.stringify({ proof: "pack29-runtime", runId, artifactSha256, startedAt, endedAt: Date.now(), checksRun }), { flag: "wx" });
+  }
 }
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   const args = process.argv.slice(2);
   if (args.length && (args.length !== 2 || args[0] !== "--electron")) { console.error("Usage: node scripts/pack29-runtime-proof.mjs [--electron <absolute exe>]"); process.exitCode = 1; }
   else proveRuntime(args[1]).catch((error) => { console.error(`FAIL runtime proof: ${error.message}`); process.exitCode = 1; });

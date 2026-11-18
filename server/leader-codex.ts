@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { plainFailure, vendorRemedy } from "./leader-common/plain-failure.ts";
 import { StringDecoder } from "node:string_decoder";
 import { permissionModeForSdk, type PermissionMode } from "./settings.ts";
 import { leaderToolJsonSchema, runLeaderTool, type LeaderToolSpec } from "./leader-tools.ts";
@@ -10,6 +11,9 @@ import {
 // Fixed argv: the model, folder and prompt travel in JSON-RPC, never on the command line.
 const CODEX_COMMAND = "codex app-server";
 const KILL_GRACE_MS = 200;
+// The only Codex texts shown as they are: fixed, plain, free of ids and paths. Anything else is the vendor's and stays private.
+const CODEX_KNOWN: ReadonlyArray<string | RegExp> = [/^Codex did not start within \d+ seconds$/, "Codex did not answer the turn request", "Codex did not return a thread"];
+const CODEX_TURN_FAILED = (reason: string, raw = ""): string => plainFailure("Codex", "", [], vendorRemedy("Codex", raw) ?? "The Codex leader turn failed. Try again.", reason);
 
 export type CodexPolicy = { approvalPolicy: string; sandbox: string; sandboxPolicy: Record<string, unknown> };
 export function codexPolicy(mode: PermissionMode, folder: string, vaultPath: string | null = null): CodexPolicy {
@@ -231,7 +235,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
       case "error":
         // willRetry means Codex is still trying; only a final error ends the turn.
         if (params.willRetry === true || stale(params.turnId) || !turnOpen) return;
-        die(`leader turn failed: ${params.error?.message ?? "Codex reported an error"}`);
+        die(CODEX_TURN_FAILED("error", params.error?.message ?? ""));
         return;
       case "turn/completed": {
         if (!turnOpen || stale(params.turn?.id)) return;
@@ -242,7 +246,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
           cb.onUsage({ modelId: turnModel, contextTokens: typeof last.inputTokens === "number" ? last.inputTokens : null, contextWindow: typeof window === "number" && window > 0 ? window : null, costUsd: null });
         }
         if (status === "completed") endTurn();
-        else die(`leader turn ${status === "interrupted" ? "interrupted" : "failed"}${params.turn?.error?.message ? `: ${params.turn.error.message}` : ""}`);
+        else die(status === "interrupted" ? plainFailure("Codex", "", [], "The Codex leader turn interrupted. Try again.", "interrupted") : CODEX_TURN_FAILED("status", params.turn?.error?.message ?? ""));
         return;
       }
     }
@@ -273,7 +277,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
       if (line) onLine(line);
     }
   });
-  child.on("error", (error) => die(`Codex could not start: ${error.message}`));
+  child.on("error", () => die(plainFailure("Codex", "", [], "Codex could not start. Try again.", "spawn")));
   // The CLI can exit on its own; that ends this leader, once, unless Stop already did.
   child.on("exit", () => die(threadId ? "leader session ended; a new one will start on the next message" : "Codex exited before it started; is it installed and signed in?"));
 
@@ -290,7 +294,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
     if (!threadId) throw new Error("Codex did not return a thread");
     cb.onSession?.(threadId);
   })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, `Codex did not start within ${LEADER_START_TIMEOUT_MS / 1000} seconds`);
-  ready.catch((error: Error) => die(`Codex leader failed to start: ${error.message}`));
+  ready.catch((error: Error) => die(vendorRemedy("Codex", error.message) ?? plainFailure("Codex", error.message, CODEX_KNOWN, "Codex could not start. Try again.", "start")));
 
   const inputOf = (text: string, images: string[]): Json[] => [{ type: "text", text, text_elements: [] }, ...images.map((path) => ({ type: "localImage", path }))];
 
@@ -309,7 +313,7 @@ export function createCodexLeader(seat: LeaderSeat, tabFolder: string, cb: Leade
       if (typeof started?.turn?.id === "string" && started.turn.id) setTurnId(started.turn.id);
       else die("leader turn failed: Codex did not identify the turn");
     } catch (error) {
-      if (!stopped && !dead && turnOpen) die(`leader turn failed: ${(error as Error).message}`);
+      if (!stopped && !dead && turnOpen) die(plainFailure("Codex", (error as Error).message, CODEX_KNOWN, vendorRemedy("Codex", (error as Error).message) ?? "The Codex leader turn failed. Try again.", "turn-start"));
     }
   }
 

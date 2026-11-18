@@ -141,7 +141,12 @@ if (process.env.CC_FCX_GIT_BOUNDARY === "1") {
     const settingsPath = join(folder, "..", "git-options.json");
     const settings = existsSync(settingsPath) ? JSON.parse(readFileSync(settingsPath, "utf8")) : {};
     if (args[0] === "rev-parse") return args[1] === "--is-inside-work-tree" ? "true" : String.fromCharCode(97 + commits).repeat(40);
+    if (args[0] === "symbolic-ref") return "refs/heads/main\n";
+    if (args[0] === "remote") return args[1] === "get-url" ? "https://example.invalid/repo\n" : "origin\n";
+    if (args[0] === "for-each-ref") return args[1].includes("remotename") ? "origin\0refs/heads/main\n" : "refs/remotes/origin/main\n";
+    if (args[0] === "config") return "";
     if (args[0] === "status") return settings.clean ? "" : " M owned.txt\0";
+    if (args[0] === "rev-list") return args[1] === "--count" ? "1" : String.fromCharCode(97 + commits).repeat(40) + "\n";
     if (args[0] === "commit") { commits++; subject = args[args.indexOf("-m") + 1]; return "committed"; }
     if (args[0] === "diff-tree") return settings.unrelated ? "unrelated.txt\0" : "owned.txt\0";
     if (args[0] === "log") return subject;

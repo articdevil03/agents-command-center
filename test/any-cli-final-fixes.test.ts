@@ -17,7 +17,8 @@ test("OpenCode leader: an unreadable successful reply never puts a piece of the 
   await withServer({ leader: OPENCODE_LEADER, env: { FAKE_OPENCODE_SESSION_MALFORMED: "1" } }, async (h) => {
     const start = h.chat("hello"); await h.wait(() => h.turnEnded(start).length >= 1, "setup failure");
     const message = h.turnEnded(start)[0].message;
-    assert.match(message, /POST \/session returned unreadable data/);
+    assert.equal(message, "OpenCode could not start. Try again.");
+    assert.doesNotMatch(message, /POST|session|unreadable data/);
     const { password, token } = h.cliEntries().find((e) => e.leaked).leaked;
     const everything = JSON.stringify(h.messages.filter((m) => m.type !== "state"));
     for (const secret of [password, token]) for (let at = 0; at + 8 <= secret.length; at++) assert.ok(!everything.includes(secret.slice(at, at + 8)), `no 8 character piece of a secret at ${at}: ${message}`);
@@ -84,7 +85,8 @@ test("OpenCode leader: a question is rejected, and a reject that fails retires t
     const start = h.chat(script({ question: true }, { hang: true }));
     await h.wait(() => h.turnEnded(start).length >= 1, "the turn failed instead of waiting for ever"); await sleep(400);
     assert.equal(h.turnEnded(start).length, 1); assert.equal(h.turnEnded(start)[0].type, "chatError");
-    assert.match(h.turnEnded(start)[0].message, /could not answer an OpenCode question \(OpenCode POST \/question\/\S+\/reject returned 500\)/);
+    assert.equal(h.turnEnded(start)[0].message, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(h.turnEnded(start)[0].message, /POST|question\/|returned 500/);
     await h.wait(() => !h.pidAlive(startedPids(h)[0]), "the server is gone");
     const next = h.chat("fresh"); await h.wait(() => h.turnEnded(next).length === 1, "next message");
     assert.equal(startedPids(h).length, 2, "the next message started a fresh leader");

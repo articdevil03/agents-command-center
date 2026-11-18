@@ -115,7 +115,7 @@ test("scripted GitHub child rejects failures and ignores hostile URLs without op
         await fx.service.cliLogin({ type: "cancelCliLogin", cli: "github", requestId: "stop-bad", loginRequestId: "bad" }, () => {});
         await stopped;
       }
-      assert.equal(fx.service.state.github.connected, false); assert.deepEqual(fx.opened, []);
+      assert.equal(fx.service.state.github.connected, null); assert.deepEqual(fx.opened, []);
       assert.equal(fx.service.login.busy, false);
       assert.ok(fx.child()?.exitCode !== null || fx.child()?.signalCode !== null);
     } finally { assert.equal(await fx.service.login.drain(), true); fx.close(); }

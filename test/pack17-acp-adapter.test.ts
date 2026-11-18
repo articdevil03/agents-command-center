@@ -97,11 +97,11 @@ test("C3: in Full access a permission request is answered with allow_once, else 
   assert.deepEqual(answers, { permission: "permission:selected:once", "permission-always": "permission:selected:always", "permission-none": "permission:cancelled:-" });
 });
 
-test("C4: not signed in is shown with the CLI's own sign-in description (at session start and at a prompt)", async () => {
+test("C4: not signed in is shown with fixed app instructions (at session start and at a prompt)", async () => {
   const start = adapter("auth");
   try {
     await start.until(() => start.ev.errors.length >= 1, "start error");
-    assert.deepEqual(start.ev.errors, ["Fake is not signed in: Run `fakecli auth login` in the terminal"]);
+    assert.deepEqual(start.ev.errors, ["Fake is not signed in. Open Settings and check the tool's sign-in or key settings, then try again."]);
     assert.equal(start.leader.isDead(), true);
     assert.equal(start.ev.stops, 1);
   } finally { await start.finish(); }
@@ -110,7 +110,7 @@ test("C4: not signed in is shown with the CLI's own sign-in description (at sess
     await prompt.until(() => prompt.ev.sessions.length >= 1, "started");
     prompt.leader.send("hi", []);
     await prompt.until(() => prompt.ev.errors.length >= 1, "prompt error");
-    assert.deepEqual(prompt.ev.errors, ["Fake is not signed in: Run `fakecli auth login` in the terminal"]);
+    assert.deepEqual(prompt.ev.errors, ["Fake is not signed in. Open Settings and check the tool's sign-in or key settings, then try again."]);
     assert.equal(prompt.ev.done, 0);
   } finally { await prompt.finish(); }
 });
@@ -267,7 +267,7 @@ test("C9: everything the CLI supplies that leaves the adapter is hidden if it ho
     await e.until(() => e.ev.sessions.length >= 1, "started");
     e.leader.send("hi", []);
     await e.until(() => e.ev.errors.length === 1, "error");
-    assert.equal(e.ev.errors[0], "Fake reported an error: failed for [hidden]");
+    assert.equal(e.ev.errors[0], "Fake could not finish this turn. Try again."); assert.doesNotMatch(e.ev.errors[0], /failed for|hidden/, "the vendor text never reaches the page");
     assert.ok(!JSON.stringify(e.ev).includes(TOKEN));
   } finally { await e.finish(); }
   const i = adapter("idtoken");

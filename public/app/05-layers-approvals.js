@@ -112,7 +112,7 @@
       }
       if (!layerStack.some((item) => item.modal)) { const scrim = $("scrim"); scrim.classList.remove("on"); scrim.hidden = true; scrim.setAttribute("aria-hidden", "true"); }
       if (layer.id === "setModal") settingsSubmits.clear();
-      if (layer.id === "confirmModal") { const cancelled = confirmCancelled; confirmCallback = null; confirmCancelled = null; cancelled?.(); }
+      if (layer.id === "confirmModal") { confirmationClosed(); }
       if (layer.id === "renameModal") renameCallback = null;
       if (layer.id === "runModal" && !pendingRun) runTarget = null;
       if (restore && !focusEquivalent(entry.opener, entry.key)) {
@@ -210,26 +210,6 @@
       if (!item || item.disabled) return;
       setLayer(pop, false, null, false, !item.keepFocusAway); item.run?.();
     }));
-  }
-  // onCancel runs when the dialog closes any way but OK: Cancel, Escape, the scrim, or another dialog taking its place.
-  function confirmAction({ title, body, ok = "OK", cancel = "Cancel", danger = false, phrase = "" }, callback, opener = document.activeElement, onCancel = null) {
-    $("confirmTitle").textContent = title; $("confirmBody").textContent = body;
-    $("confirmPhraseField").hidden = !phrase; $("confirmPhrase").value = ""; $("confirmPhrase").dataset.phrase = phrase;
-    $("confirmPhraseLabel").innerHTML = phrase ? `Type <b>${esc(phrase)}</b> to confirm` : "";
-    $("confirmErr").textContent = "";
-    $("confirmOk").textContent = ok; $("confirmOk").className = `btn ${danger ? "danger" : "primary"}`;
-    $("confirmCancel").textContent = cancel;
-    openModal("confirmModal", opener);
-    confirmCallback = callback; confirmCancelled = onCancel;
-    if (phrase) $("confirmPhrase").focus();
-  }
-  function confirmAccepted() {
-    const input = $("confirmPhrase"), phrase = input.dataset.phrase;
-    if (phrase && input.value.trim() !== phrase) { $("confirmErr").textContent = "Type the words exactly as shown"; input.focus(); return; }
-    const callback = confirmCallback, typed = input.value.trim();
-    confirmCallback = null; confirmCancelled = null;
-    setLayer($("confirmModal"), false, null, true);
-    callback?.(typed);
   }
   function renameDialog(title, value, save, opener) {
     $("renameTitle").textContent = title; $("renameInput").value = value;

@@ -86,33 +86,19 @@
         && busy.label === "Reading…" && busy.disabled && !after.button && /fuller log, still capped by the server/.test(after.meta) && after.log === "the fuller log, still capped", { offered, asked, busy, after });
     });
 
-    // The Copy address button beside an official setup guide in Settings > AI tools.
-    await part("Copy button", async () => {
+    // Settings recovery uses the actual Install and Check again controls.
+    await part("Install recovery", async () => {
       const missingGemini = structuredClone(window.__ccSeed);
       missingGemini.settings.tools = { ...missingGemini.settings.tools, gemini: { installed: false, version: null, signedIn: null } };
       window.__ccSeed = missingGemini; deliverSeed();
       $("setBtn").click(); requireElement('#setNav [data-settings-section="tools"]').click();
-      const button = requireElement('#setBody [data-cli="gemini"] [data-copy-address]'), address = button.dataset.copyAddress;
-      button.closest("details").querySelector("summary").click();
-      check("the fallback opens an official guide with Check again and no shell instructions or command copy", button.checkVisibility() && text("code", button.closest(".cmd")) === address && Boolean(document.querySelector("#s-tools [data-settings-refresh]")) && !document.querySelector("#s-tools [data-copy]") && !/powershell|npm install|curl |winget|open.{0,12}terminal/i.test(button.closest("details").textContent), { address, guide: button.closest("details").textContent });
-      const written = []; let refuse = false, copied = true, execCalls = 0;
-      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async (value) => { if (refuse) throw new Error("clipboard refused"); written.push(value); } } });
-      document.execCommand = (name) => { execCalls++; return name === "copy" && copied; };
-      try {
-        button.click();
-        await waitFor(() => $("toast").textContent === "Address copied" && written.length === 1, "the official address is copied");
-        const ok = { written: [...written], toast: $("toast").textContent };
-        refuse = true; copied = true; $("toast").textContent = "";
-        requireElement('#setBody [data-cli="gemini"] [data-copy-address]').click();
-        await waitFor(() => execCalls === 1, "the text-copy fallback runs");
-        const fallback = { written: written.length, toast: $("toast").textContent, execCalls, leftover: document.querySelectorAll("body > textarea").length };
-        copied = false; $("toast").textContent = "";
-        requireElement('#setBody [data-cli="gemini"] [data-copy-address]').click();
-        await waitFor(() => execCalls === 2, "the fallback runs again");
-        const failed = { toast: $("toast").textContent };
-        check("the Copy address button copies the official guide and says so, and falls back to a hidden text copy when the clipboard refuses",
-          address === "https://geminicli.com/docs/get-started/installation/" && ok.written[0] === address && ok.toast === "Address copied" && fallback.written === 1 && fallback.toast === "Address copied" && fallback.leftover === 0 && /^Could not copy/.test(failed.toast), { address, ok, fallback, failed });
-      } finally { delete navigator.clipboard; delete document.execCommand; }
+      const row = requireElement('#setBody [data-cli="gemini"]');
+      const install = requireElement('#setBody [data-cli="gemini"] [data-setting-action="install-cli"]');
+      check("Settings recovery names visible controls and contains no external install guide", install.checkVisibility() && /Choose Install\. If it fails, choose Try again, then Check again\./.test(row.textContent) && !row.querySelector('details,.cmd,[data-copy-address],[data-copy]') && !/powershell|open.{0,12}terminal/i.test(row.textContent), { guidance: row.textContent });
+      const before = window.__sent.length;
+      requireElement('#s-tools [data-settings-refresh]').click();
+      const asked = window.__sent.slice(before).filter(m => m.type === 'refreshSettings');
+      check("Check again sends one refresh with no installation or vendor address", asked.length === 1 && Object.keys(asked[0]).sort().join() === 'requestId,type' && !window.__sent.slice(before).some(m => m.type === 'installCli'), { asked });
     });
   };
   Object.assign(window.__ccHarness, { runPackThreeC });

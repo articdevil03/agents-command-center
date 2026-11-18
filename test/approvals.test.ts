@@ -41,7 +41,7 @@ test("the hook asks when the SDK mode is default OR the tab is saved as Ask", as
   };
   // saved ask + a subagent or ExitPlanMode landing in another live mode still asks
   for (const live of ["acceptEdits", "bypassPermissions", "plan"]) assert.deepEqual((await run(true, live)).asked, ["Write"], `saved ask + live ${live}`);
-  // saved accept + live default still asks: the live mode wins as before
+  // Preserve the base live-default approval requirement.
   assert.deepEqual((await run(false, "default")).asked, ["Write"]);
   // saved accept + live acceptEdits and a tool outside the list never ask
   assert.deepEqual(await run(false, "acceptEdits"), { asked: [], result: {} });
@@ -50,15 +50,16 @@ test("the hook asks when the SDK mode is default OR the tab is saved as Ask", as
 
 test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS + LIST_TIMEOUT_MS + 30000 }, async () => {
   const temp = mkdtempSync(join(tmpdir(), "cc-approvals-"));
-  const home = join(temp, "home"), data = join(temp, "data");
+  const home = join(temp, "home"), data = join(temp, "data"), work = join(temp, "project");
+  mkdirSync(work);
   mkdirSync(home); mkdirSync(join(data, "config"), { recursive: true });
   // The fixture loads config-files, which reads its data root once: it is imported here, after the temp root is in force above.
   const { fixedProject, fixedTab, fixedWorkspaces } = await import("./fixed-server-fixture.ts");
   // Saved fixed-crew tabs: the leader is the one seat the fake leader needs; the other seats stay unchosen.
   const leader = { cli: "claude" as const, model: "claude-sonnet-5-5[1m]", effort: "high" };
-  const tabs = ["approval-dev", "approval-other"].map((id) => fixedTab(id, temp, { leader }, id));
-  const spare = fixedTab("approval-spare", temp, { leader }, "approval-spare");
-  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([fixedProject("approval", temp, tabs), { ...fixedProject("approval-two", temp, [spare]), name: "Approval Two" }])));
+  const tabs = ["approval-dev", "approval-other"].map((id) => fixedTab(id, work, { leader }, id));
+  const spare = fixedTab("approval-spare", work, { leader }, "approval-spare");
+  writeFileSync(join(data, "config", "workspaces.json"), JSON.stringify(fixedWorkspaces([fixedProject("approval", work, tabs), { ...fixedProject("approval-two", work, [spare]), name: "Approval Two" }])));
   const script = join(temp, "cli.json"); writeFileSync(script, JSON.stringify({ responses: {} }));
   const key = newAppKey();
   const child = spawn(process.execPath, [join(resolve("."), "server", "index.ts")], { cwd: resolve("."), windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"], env: { ...process.env, HOME: home, USERPROFILE: home, CC_TEST_FORCE_PACKAGED: "1", CC_DATA_DIR: data, CC_PORT: "0", CC_APP_KEY: key, CC_SKIP_DISCOVERY: "1", CC_SKIP_LEADER_CHECK: "1", CC_TEST_FAKE_CLI: "1", CC_TEST_FAKE_CLI_SCRIPT: script, CC_TEST_FAKE_LEADER: "1", CC_TEST_CHAT_TIMEOUT_MS: "600", CC_TEST_SAVE_WRITE_DELAY_MS: "200" } });
@@ -74,7 +75,7 @@ test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS
   let number = 0;
   const action = async (payload: any) => { const requestId = `approval_request_${++number}`; socket!.send(JSON.stringify({ ...payload, requestId })); return await wait(() => messages.find((m) => m.requestId === requestId && (m.type === "error" || m.type === "actionResult" || m.type === "permissionModeChanged")), payload.type); };
   const chat = (requests: any[]) => socket!.send(JSON.stringify({ type: "chat", tabId, text: JSON.stringify(requests) }));
-  const write = { tool: "Write", input: { file_path: "C:/work/file.ts", content: "hello" } };
+  const write = { tool: "Write", input: { file_path: join(work, "file.ts"), content: "hello" } };
   try {
     // CC_PORT=0: the OS picks the port at the server's own listen, so no other test can take it first.
     const port = await waitForServerStart(child, () => log);
@@ -110,10 +111,15 @@ test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS
       await wait(() => !state().projects[0].tabs[0].derived.leaderTurnActive, "idle turn");
     }
     await action({ type: "setPermissionMode", tabId, mode: "accept" });
-    let start = ipc.length; chat([{ ...write, canUseTool: true }]); await wait(() => pending().length === 1, "accept-mode SDK callback waits");
+    let start = ipc.length; chat([{ tool: "Bash", input: { command: "echo measured" }, canUseTool: true }]); await wait(() => pending().length === 1, "accept-mode SDK callback waits");
     await action({ type: "answerApproval", tabId, approvalId: pending()[0].approvalId, allow: true });
-    const result = await wait(() => ipc.slice(start).find((m) => m.type === "hookResult"), "SDK allow"); assert.deepEqual(result.result, { behavior: "allow", updatedInput: write.input });
+    const result = await wait(() => ipc.slice(start).find((m) => m.type === "hookResult"), "SDK allow"); assert.deepEqual(result.result, { behavior: "allow", updatedInput: { command: "echo measured" } });
     await wait(() => !state().projects[0].tabs[0].derived.leaderTurnActive, "idle callback");
+    // An inside-folder Write that reaches the SDK callback is the CLI's own prompt (a sensitive file or an ask rule): it asks too.
+    start = ipc.length; chat([{ ...write, canUseTool: true }]); await wait(() => pending().length === 1, "accept-mode SDK Write callback waits");
+    await action({ type: "answerApproval", tabId, approvalId: pending()[0].approvalId, allow: true });
+    const writeResult = await wait(() => ipc.slice(start).find((m) => m.type === "hookResult"), "SDK Write allow"); assert.deepEqual(writeResult.result, { behavior: "allow", updatedInput: write.input });
+    await wait(() => !state().projects[0].tabs[0].derived.leaderTurnActive, "idle Write callback");
     await action({ type: "setPermissionMode", tabId, mode: "ask" });
     start = messages.length; chat([{ ...write, delayMs: 100 }]);
     await wait(() => state().projects[0].tabs[0].derived.leaderTurnActive, "active before approval");
@@ -129,7 +135,7 @@ test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS
     assert.equal(saveErrors(start).length, 0, "Save does not refuse its own approval");
     await action({ type: "answerApproval", tabId, approvalId: pending()[0].approvalId, allow: false });
     await wait(() => saveErrors(start).some((m) => m.message.includes("could not save the handover")), "Save fails with a clear message after Deny");
-    assert.equal(messages.slice(start).some((m) => m.type === "saved"), false); assert.equal(existsSync(join(temp, ".command-center", tabId, "RESUME.md")), false);
+    assert.equal(messages.slice(start).some((m) => m.type === "saved"), false); assert.equal(existsSync(join(work, ".command-center", tabId, "RESUME.md")), false);
     await wait(() => idle(), "idle Save turn");
     const beforeSaved = state().projects[0].tabs[0].savedRevision;
     start = messages.length; socket.send(JSON.stringify({ type: "save", tabId }));
@@ -139,7 +145,7 @@ test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS
     assert.equal(pending().length, 1, "still waiting past the Save timeout"); assert.equal(saveErrors(start).length, 0, "Save timeout does not fire while its own approval is pending");
     await action({ type: "answerApproval", tabId, approvalId: pending()[0].approvalId, allow: true });
     const saved = await wait(() => messages.slice(start).find((m) => m.type === "saved" && m.tabId === tabId), "Save completes after Allow");
-    assert.equal(saved.savedRevision, saved.revision); assert.ok(existsSync(join(temp, ".command-center", tabId, "RESUME.md")), "the handover was written");
+    assert.equal(saved.savedRevision, saved.revision); assert.ok(existsSync(join(work, ".command-center", tabId, "RESUME.md")), "the handover was written");
     await wait(() => idle(), "idle after Save");
     assert.equal(messages.slice(start).filter((m) => m.type === "saved").length, 1, "Save reports saved exactly once");
     const savedChanges = (from: number, before: number) => {
@@ -218,7 +224,7 @@ test("real leader options and WS approval lifecycle", { timeout: SERVER_START_MS
     const removed = await wait(() => ipc.slice(start).find((m) => m.type === "hookResult"), "removal denies"); assert.equal(removed.result.hookSpecificOutput.permissionDecision, "deny");
     const remainingId = tabs[1].id;
     start = ipc.length;
-    socket.send(JSON.stringify({ type: "chat", tabId: remainingId, text: JSON.stringify([{ ...write, canUseTool: true }]) }));
+    socket.send(JSON.stringify({ type: "chat", tabId: remainingId, text: JSON.stringify([{ tool: "Bash", input: { command: "echo measured" }, canUseTool: true }]) }));
     await wait(() => state().projects[0].tabs[0].pendingApprovals.length === 1, "SDK deny pending");
     await action({ type: "answerApproval", tabId: remainingId, approvalId: state().projects[0].tabs[0].pendingApprovals[0].approvalId, allow: false });
     const shutdown = await wait(() => ipc.slice(start).find((m) => m.type === "hookResult"), "SDK denial resolves");

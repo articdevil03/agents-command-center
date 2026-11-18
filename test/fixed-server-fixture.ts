@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import * as path from "node:path";
 import { runInNewContext } from "node:vm";
 import { resolveDataRoot } from "../server/data-root.ts";
+import * as ownedPaths from "../server/owned-path.js";
 import * as processEngine from "../server/process.ts";
 import { freshFixedCrew } from "../server/fixed-crew/preferences.ts";
 import type { Assignment, FixedSlot } from "../server/fixed-crew/roster.ts";
@@ -38,9 +39,9 @@ const SOURCES = ["safe-file", "config-files", "config-acp", "config-prefs",
 export function launchConfig(copy: string, data: string, overrides = {}): any {
   const source = SOURCES.map((name) => stripTypeScriptTypes(fs.readFileSync(`server/${name}.ts`, "utf8"))
     .replace(/^(?:import .*|export (?:\{[^}]*\}|\*) from .*);\r?$/gm, "").replaceAll("import.meta.url", '"unused"').replaceAll("export ", "")).join("\n");
-  return runInNewContext(`${source}; ({ workspacesPath, projectsPath, writeClientPrefs, readClientPrefs, workspaceRecovery })`, {
-    ...fs, ...path, ...overrides, resolveDataRoot, ...processEngine, createHash, randomUUID, Buffer, console: { error() {}, log() {} },
+  return runInNewContext(`${source}; ({ workspacesPath, projectsPath, writeClientPrefs, readClientPrefs, readWorkspaces, writeWorkspaces, readLaunchSafety, workspaceRecovery })`, {
+    ...fs, ...path, ...overrides, ...ownedPaths, resolveDataRoot, ...processEngine, createHash, randomUUID, Buffer, console: { error() {}, log() {} },
     fileURLToPath: () => path.join(copy, "server/config.ts"),
-    process: { env: { CC_DATA_DIR: data } },
+    process: { env: { CC_DATA_DIR: data }, getBuiltinModule: (name: string) => name === "fs" ? { ...fs, ...overrides } : process.getBuiltinModule(name) },
   });
 }

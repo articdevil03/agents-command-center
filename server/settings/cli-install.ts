@@ -8,7 +8,8 @@ import type { ActionState, CliId, CliResult, RunCli, SettingsState } from "./typ
 import type { OpenCodeInstallOptions, InstallTransaction } from "./types.ts";
 import { installManagedRelease } from "./opencode/install.ts";
 import { RELEASE_TOOLS } from "./opencode/release-tools.ts";
-import { sweepCopilotInstalls } from "./opencode/sweep.ts";
+import { sweepManagedInstalls, SWEEP_WARNING } from "./opencode/sweep.ts";
+import { RATE_LIMIT_MESSAGE } from "./opencode/releases.ts";
 import { managedCli } from "./opencode/paths.ts";
 import { removeManagedInstall } from "./opencode/remove.ts";
 
@@ -92,11 +93,15 @@ export class CliInstaller {
   }
   private async execute(op: Operation): Promise<void> {
     let cleanupConfirmed = true;
+    let sweepIncomplete = false;
     let transaction: InstallTransaction | undefined;
     let previousFacts: Pick<import("./types.ts").InstalledTool, "installed" | "version" | "signedIn" | "supportedVersion" | "credentialSource"> | undefined;
     try {
       const deadline = Date.now() + (op.id === "copilot" ? RELEASE_TOOLS.copilot.timeoutMs : INSTALL_TIMEOUT_MS);
-      if (op.id === "copilot") await sweepCopilotInstalls(this.deps.env);
+      if (op.id === "copilot" || op.id === "opencode") {
+        sweepIncomplete = await sweepManagedInstalls(this.deps.env, op.id);
+        if (sweepIncomplete) this.update(op, { requestId: op.requestId, kind: "install", status: "running", phase: "checking", message: SWEEP_WARNING });
+      }
       await this.refresh();
       await detectCatalogTool(op.id, this.deps.state, this.deps.run, this.deps.env);
       const facts = this.deps.state.catalogTools[op.id];
@@ -141,9 +146,9 @@ export class CliInstaller {
         if (op.abort.signal.aborted) throw new InstallFailure("cancelled");
         if (managedCli(this.deps.env, op.id as "opencode" | "copilot") !== transaction.candidate) throw new InstallFailure("notFoundAfterInstall");
         this.deps.state.catalogTools[op.id].managedInstall = true;
-
+        sweepIncomplete = await sweepManagedInstalls(this.deps.env, op.id as "opencode" | "copilot");
       }
-      this.update(op, { requestId: op.requestId, kind: "install", status: "done", phase: null, reason: null, message: "Installed" });
+      this.update(op, { requestId: op.requestId, kind: "install", status: "done", phase: null, reason: null, message: sweepIncomplete ? `Installed. ${SWEEP_WARNING}` : "Installed" });
       if (op.id === "opencode") await this.deps.refreshModels?.().catch(() => {});
     } catch (error) {
       if (cleanupConfirmed) try { await transaction?.rollback?.(); } catch {
@@ -154,14 +159,15 @@ export class CliInstaller {
         const retry = op.result.retryCleanup;
         op.result.retryCleanup = async () => { if (!await retry?.()) return false; await transaction!.rollback!(); return true; };
       }
-      const reason = !cleanupConfirmed ? "cleanupUnconfirmed" : error instanceof InstallFailure ? error.reason : "installFailed";
+      const interrupted = error instanceof InstallFailure && (error.reason === "cancelled" || error.reason === "timeout");
+      const reason = !cleanupConfirmed ? "cleanupUnconfirmed" : interrupted ? error.reason : transaction?.failureReason ?? (error instanceof InstallFailure ? error.reason : "installFailed");
       if ((op.id === "opencode" || op.id === "copilot") && previousFacts) {
         const facts = cleanupConfirmed ? previousFacts : { installed: null, version: null, signedIn: null, supportedVersion: null, credentialSource: "unknown" };
         Object.assign(this.deps.state.catalogTools[op.id], facts);
         if (op.id === "opencode") Object.assign(this.deps.state.tools.opencode, facts);
       }
       // Only known preflight messages are retained. No exception/vendor text crosses state.
-      const message = error instanceof Error && ["CLI is already installed", "CLI installation status is unknown"].includes(error.message) ? error.message : INSTALL_MESSAGES[reason];
+      const message = reason === "rateLimited" ? RATE_LIMIT_MESSAGE : error instanceof Error && ["CLI is already installed", "CLI installation status is unknown"].includes(error.message) ? error.message : INSTALL_MESSAGES[reason];
       this.update(op, { requestId: op.requestId, kind: "install", status: "failed", phase: null, reason, message });
       throw new Error(message);
     } finally {

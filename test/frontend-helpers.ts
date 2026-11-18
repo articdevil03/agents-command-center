@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { recordingEvents } from "./recording-events.ts";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -55,7 +56,7 @@ export function pageHarness(options: { raf?: (fn: () => void) => number } = {}) 
     return nodes.get(id);
   };
   const closeAnswers: string[] = [];
-  const pageWindow: any = { cc: { appKey: async () => "k".repeat(64), answerClose: (answer: string) => closeAnswers.push(answer) } };
+  const pageWindow: any = { ...recordingEvents(), cc: { appKey: async () => "k".repeat(64), answerClose: (answer: string) => closeAnswers.push(answer) } };
   const sockets: any[] = [], notifications: { title: string; body: string }[] = [], timers: { fn: () => void; ms: number; cleared: boolean }[] = [], bodyClasses = new Set(["light", "boot"]);
   const mediaListeners: (() => void)[] = []; // the page's "change" listeners on the prefers-color-scheme query
   const media = { light: false, listeners: mediaListeners, change() { mediaListeners.forEach((listener) => listener()); } }; // light: what the PC's prefers-color-scheme: light answers
@@ -89,7 +90,7 @@ ${appSource.slice(0, end)}
       snap: () => ({ historyRunRequested, historyDetails, historyRunTokens, historyFullRequested, outputByRun, activity, stopStates, killOrder, historyInFlight, historyFailed, transcriptRequests, pendingActions, refreshState, stopAllTrack, clientPrefOverrides, railWide, sideOpen, seenNotices }),
     };
   })()`, {
-    document: { createElement: (tag: string) => { assert.equal(tag, "template"); return chatTemplate(); }, getElementById: node, querySelectorAll: () => [], querySelector: () => null, activeElement: null, hasFocus: () => false, body: { classList: { remove: (name: string) => bodyClasses.delete(name), toggle: (name: string, on?: boolean) => { if (on === false || (on === undefined && bodyClasses.has(name))) bodyClasses.delete(name); else bodyClasses.add(name); }, add: (name: string) => bodyClasses.add(name) } } },
+    document: { ...recordingEvents(), createElement: (tag: string) => { assert.equal(tag, "template"); return chatTemplate(); }, getElementById: node, querySelectorAll: () => [], querySelector: () => null, activeElement: null, hasFocus: () => false, body: { classList: { remove: (name: string) => bodyClasses.delete(name), toggle: (name: string, on?: boolean) => { if (on === false || (on === undefined && bodyClasses.has(name))) bodyClasses.delete(name); else bodyClasses.add(name); }, add: (name: string) => bodyClasses.add(name) } } },
     window: pageWindow, Notification: FakeNotification, WebSocket: FakeWebSocket,
     Map, Set, console, CSS: { escape: (s: string) => s }, Blob, TextEncoder, URL, atob, Uint8Array,
     location: { protocol: "http:", host: "127.0.0.1:1", hash: "" }, history: { replaceState() {} }, sessionStorage: { getItem: () => null, setItem() {}, removeItem() {} },

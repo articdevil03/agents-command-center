@@ -17,7 +17,7 @@ type Transaction = {
 function transactionPath(root: string, tabId: string): string {
   id(tabId);
   const path = join(resolve(root), "tasks", `${tabId}.rollover.json`);
-  refuseLinks(path);
+  refuseLinks(path, root);
   return path;
 }
 function manifestFor(tx: Omit<Transaction, "manifest">, reason: string, completedAt: string): ArchiveManifest {

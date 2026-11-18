@@ -89,7 +89,7 @@
     // Closing the app while a tab is working. window.__ccWinAskClose() plays electron/main.js asking this page; window.__ccWin.answers records
     // what the page told the window: "close" at once with nothing working, else "hold" with its warning up, then "keep" or "close".
     const answers = window.__ccWin.answers;
-    const ask = () => { const before = answers.length; window.__ccWinAskClose(); return answers.slice(before); };
+    const ask = async () => { const before = answers.length; window.__ccWinAskClose(); await waitFor(() => !$("confirmModal").hidden || answers.slice(before).includes("close"), "close request presented"); await new Promise(resolve => setTimeout(resolve, 450)); return answers.slice(before); };
     const warning = () => ({ open: !$("confirmModal").hidden && $("confirmModal").classList.contains("on") && $("confirmModal").getAttribute("aria-hidden") === "false", title: text("#confirmTitle"), body: text("#confirmBody"), keep: text("#confirmCancel"), close: text("#confirmOk"), danger: $("confirmOk").classList.contains("danger"), role: $("confirmModal").getAttribute("role"), focused: $("confirmModal").contains(document.activeElement), modals: document.querySelectorAll(".modal.on").length, scrim: $("scrim").classList.contains("on") });
     // Which tabs work comes from each tab's activeWork (the server's own check), never from derived.busy: the two are set opposite here.
     // A second and third fixed tab are whole idle copies of Beta's (the fixed clone helper: own preferences, seat keys and process state), built on a scratch copy of the seed so the
@@ -107,35 +107,35 @@
       window.__ccDeliver({ ...state, type: "state" });
     };
     withWork([]);
-    const idle = { answers: ask(), warning: warning() };
+    const idle = { answers: await ask(), warning: warning() };
     check("a close request with nothing working is answered close at once, with no warning", idle.answers.join() === "close" && !idle.warning.open && !idle.warning.scrim, idle);
 
     withWork(["alpha-dev", "beta-dev"]);
-    const first = { answers: ask(), warning: warning() };
+    const first = { answers: await ask(), warning: warning() };
     check("a close request while tabs are working holds the close and names them as Project · Tab in the app's own warning",
       first.answers.join() === "hold" && first.warning.open && first.warning.scrim && first.warning.role === "alertdialog" && first.warning.focused && first.warning.title === "Close Command Center?"
       && first.warning.body === "2 tabs are still working: Alpha\u00A0·\u00A0Development, Beta\u00A0·\u00A0Development. Closing stops them." && first.warning.keep === "Keep open" && first.warning.close === "Close anyway" && first.warning.danger, first);
-    const again = { answers: ask(), warning: warning() };
+    const again = { answers: await ask(), warning: warning() };
     check("a second close request while the warning shows redraws the same warning, never a second one", again.answers.join() === "hold" && again.warning.open && again.warning.modals === 1 && again.warning.body === first.warning.body, again);
 
     $("confirmCancel").click(); const keepButton = { answers: answers.slice(-1), warning: warning() };
-    const escapeAnswers = [...ask()]; pressEscape(); escapeAnswers.push(...answers.slice(-1)); const escapeWarning = warning();
-    const scrimAnswers = [...ask()]; $("scrim").click(); scrimAnswers.push(...answers.slice(-1)); const scrimWarning = warning();
+    const escapeAnswers = [...await ask()]; pressEscape(); escapeAnswers.push(...answers.slice(-1)); const escapeWarning = warning();
+    const scrimAnswers = [...await ask()]; $("scrim").click(); scrimAnswers.push(...answers.slice(-1)); const scrimWarning = warning();
     check("Keep open, Escape and a click outside cancel the warning and tell the window to stay open",
       keepButton.answers.join() === "keep" && !keepButton.warning.open && !keepButton.warning.scrim && escapeAnswers.join() === "hold,keep" && !escapeWarning.open && scrimAnswers.join() === "hold,keep" && !scrimWarning.open,
       { keepButton, escapeAnswers, escapeWarning, scrimAnswers, scrimWarning });
 
     const closeStart = answers.length;
-    ask(); $("confirmOk").click();
+    await ask(); $("confirmOk").click();
     const closeAnyway = { answers: answers.slice(closeStart), warning: warning() };
     check("Close anyway tells the window to close, and nothing after it says stay", closeAnyway.answers.join() === "hold,close" && !closeAnyway.warning.open, closeAnyway);
 
     withWork(["alpha-design"]);
-    const oneAnswers = ask(), one = warning(); $("confirmCancel").click();
+    const oneAnswers = await ask(), one = warning(); $("confirmCancel").click();
     withWork(["alpha-dev", "alpha-design", "beta-dev", "beta-qa", "beta-docs"]);
-    const fiveAnswers = ask(), five = warning(); pressEscape();
+    const fiveAnswers = await ask(), five = warning(); pressEscape();
     withWork([]);
-    const idleAgain = ask();
+    const idleAgain = await ask();
     check("the warning names one working tab as it, and more than three as the first three and +N more",
       oneAnswers.join() === "hold" && one.body === "1 tab is still working: Alpha\u00A0·\u00A0Design. Closing stops it." && fiveAnswers.join() === "hold"
       && five.body === "5 tabs are still working: Alpha\u00A0·\u00A0Development, Alpha\u00A0·\u00A0Design, Beta\u00A0·\u00A0Development +2 more. Closing stops them." && idleAgain.join() === "close" && !warning().open,
@@ -151,7 +151,7 @@
     $("createTab").click();
     const createSent = window.__sent.filter((message) => message.type === "addTab").length === 1;
     withWork(["alpha-dev"]);
-    const stackedAnswers = ask();
+    const stackedAnswers = await ask();
     const stacked = !$("modal").hidden && !$("confirmModal").hidden;
     const created = stateWith([["alpha-dev", "alpha-new", "New tab"]]);
     for (const tab of created.projects.flatMap((project) => project.tabs)) { tab.activeWork = tab.id === "alpha-dev"; tab.derived.busy = !tab.activeWork; }

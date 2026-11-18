@@ -126,7 +126,7 @@ function onSetPermissionMode(ws: WebSocket, message: any): void {
       if (message.mode !== "bypass") throw new Error(`${acpLeaderOf(tabId)?.name ?? "This leader"} can only run with Full access: it may edit files and run commands without asking, and Command Center cannot make it ask yet.`);
       return { tabId, mode: "bypass" };
     }
-    // A Codex turn keeps the policy it started with: say so, instead of letting the failed apply stop the chat.
+    // Codex and OpenCode keep the policy of the running turn. Refuse now, never queue a mode change for later.
     const busy = () => {
       const location = tabLocation(tabId);
       return new ModeBusyError(`Finish or stop ${(location && leaderSeatOf(location.tab))?.name ?? "the leader"}'s current turn first, then change the mode.`);

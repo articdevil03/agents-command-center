@@ -11,6 +11,21 @@ export const FORBIDDEN_PACKAGED_ENTRIES = [
   "backups", "tasks", "executions", "execution-logs", "logs", "scratch", "chats", "avatars", "example-project", "Microsoft",
 ];
 const refuse = (message) => { throw Object.assign(new Error(message), { exitCode: 2 }); };
+export const CONFIG_SEED_ENTRIES = new Set(["config/.gitkeep"]);
+const unknownConfig = (path) => path.startsWith("config/") && !CONFIG_SEED_ENTRIES.has(path);
+
+export function assertConfigClean(root) {
+  const config = join(root, "config");
+  let info;
+  try { info = lstatSync(config); } catch (error) { if (error.code === "ENOENT") return; throw error; }
+  if (info.isSymbolicLink() || !info.isDirectory()) refuse("private packaged entry: config must be a plain folder");
+  for (const name of readdirSync(config)) {
+    const path = `config/${name}`;
+    if (unknownConfig(path)) refuse(`private packaged entry: forbidden entry ${path} (config seed allow-list)`);
+    const seed = lstatSync(join(root, path));
+    if (seed.isSymbolicLink() || !seed.isFile()) refuse(`private packaged entry: ${path} must be a plain file`);
+  }
+}
 const PROFILE_OK = /^(example|runner|user|username|test|tester|x|public|default|me|you|name|yourname|someone)$/i;
 const PROFILE_TOKEN = /^(?:%[A-Za-z_]+%|\$env:[A-Za-z_]+|\$\{[^}]*\})$/i; // %USERNAME%, $env:USERNAME, ${...}, nothing looser
 const EMAIL_OK = /@(?:users\.noreply\.github\.com|noreply\.github\.com|(?:[a-z0-9-]+\.)*example(?:\.(?:com|org|net))?)$/i;
@@ -77,6 +92,7 @@ export function scanFiles(files, patterns, { packaged = false, reviewedFile, rep
     }
   }
   for (const { path, bytes } of files) {
+    if (unknownConfig(path)) hits.add(`${path}: forbidden config entry (config seed allow-list)`);
     const entry = byPath.get(path);
     if (entry) seen.add(path);
     if (packaged && reviewedPath(path) && entry) {
@@ -108,6 +124,7 @@ export function scanFiles(files, patterns, { packaged = false, reviewedFile, rep
 // Config paths and the private list are forbidden at any depth; data folders only at the root.
 export function packagedFiles(root) {
   if (!existsSync(root)) refuse("refusing packaged scan: folder is missing");
+  assertConfigClean(root);
   const files = [];
   function walk(full, rel = "") {
     const info = lstatSync(full);

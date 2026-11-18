@@ -1,16 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { EventEmitter } from "node:events";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeWithRetry } from "../scripts/mutation-proof.mjs";
+import { runOwnedProof } from "./audit-p9-processes.ts";
+import { writeFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
-test("dist staging, quarantine, restore, locks and publish ordering use temp fixtures", () => {
+test("dist staging, quarantine, restore, locks and publish ordering use temp fixtures", async () => {
   const proof = fileURLToPath(new URL("../scripts/packaged-smoke-proof.mjs", import.meta.url));
   // Measured alone 2026-10-30: 19 s. The bound is about 15x that because a busy PC (another terminal's browser, a build) has stretched it past 120 s.
-  const run = spawnSync(process.execPath, [proof, "--temp-only"], { encoding: "utf8", timeout: 300_000 });
+  const temp = mkdtempSync(join(tmpdir(), "cc-p9-dist-proof-"));
+  const preload = join(temp, 'direct-builder.mjs');
+  // Production starts Node directly. Its shell-only test override adds a cmd tree
+  // that taskkill cannot query in the sandbox. Keep the fabricated builder on the
+  // same direct-child boundary as the production builder, with a real timeout/kill.
+  writeFileSync(preload, `import assert from 'node:assert/strict'; import cp from 'node:child_process'; import {syncBuiltinESMExports} from 'node:module';
+const spawn=cp.spawn; cp.spawn=(command,args,options)=>{
+if(options?.shell && command===process.env.CC_DIST_BUILD_OVERRIDE){
+ const match=command.match(/^"([^"]+)" "([^"]+)"$/); assert.ok(match,'exact fabricated builder command'); assert.deepEqual(args,[]);
+ return spawn(match[1],[match[2]],{...options,shell:false});
+} return spawn(command,args,options); }; syncBuiltinESMExports();`);
+  try {
+  const run = await runOwnedProof(process.execPath, [proof, "--temp-only"], temp, { env: { ...process.env, TEMP: temp, TMP: temp, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` } });
   assert.equal(run.status, 0, `${run.stdout}\n${run.stderr}`);
+  assert.deepEqual(run.cleanupKilled, [], 'successful proof leaves no live descendants for test teardown');
   for (const marker of ["BUILDER FAILURE RED", "SMOKE FAILURE RED", "DIST SUCCESS GREEN", "EXE FINGERPRINT GREEN", "EXE FINGERPRINT FAILURE GREEN", "RESTORE FINGERPRINT GREEN",
     "SMOKE ORDER PREVIOUS BUILD GREEN", "DIST OVERLAP RED", "DIST INTERRUPTION GREEN",
     "DISPLACED EXE EPERM GREEN", "FAILED PUBLISH CLEANUP GREEN", "AGED LIVE LOCK RED",
@@ -22,6 +39,9 @@ test("dist staging, quarantine, restore, locks and publish ordering use temp fix
     "LEFTOVER SWEEP GREEN", "HUNG BUILDER RED", "HUNG SMOKE RED", "ISOLATED STOP FAILURE KEEPS CAUSE GREEN", "ISOLATED RUN ORDER GREEN",
     "WRITE OUTSIDE DATA RED", "WRITE INSIDE DATA GREEN", "ALL PACKAGED SMOKE GUARDS PASSED"]) {
     assert.ok(run.stdout.includes(marker), `missing ${marker}: ${run.stdout}`);
+  }
+  } finally {
+    assert.ok(removeWithRetry(temp));
   }
 });
 

@@ -42,10 +42,5 @@ export const pack29InstallerMutations = [
     "child = spawnProcess(exe, [...(permission",
     "child = spawnProcess(process.execPath, [...(permission"
   ],
-  [
-    "p29-installer-junction-guard",
-    "build/installer.nsh",
-    "System::Call 'kernel32::GetFileAttributesW(w R4) i.R5'",
-    "System::Call 'kernel32::GetFileAttributesW(w rR4) i.rR5'"
-  ]
+  ["p29-installer-junction-guard","build/installer.nsh","  IntOp $2 $3 & 0x400","  StrCpy $2 0"],
 ];

@@ -271,7 +271,7 @@
   // place if the outcome later gets confirmed.
   // Who launched a run: the leader or a seat that runs the process (the planner); null is the user's own Run, which needs no line.
   function launchedByText(launchedBy) { return launchedBy?.name ? ` · launched by ${launchedBy.name}` : ""; }
-  function noticeText(notice) { return `${notice.source ?? "Command Center"} requested ${notice.seatName ?? notice.seatId}${notice.headsUp ? ` · heads up: ${notice.headsUp}` : ""}${notice.pending ? " · outcome unconfirmed" : ""}`; }
+  function noticeText(notice) { return `${notice.source ?? "Command Center"} requested ${notice.seatName ?? seatNameOfKey(notice.seatKey ?? notice.seatId)}${notice.headsUp ? ` · heads up: ${notice.headsUp}` : ""}${notice.pending ? " · outcome unconfirmed" : ""}`; }
   function noteNotice(notice) {
     if (!notice?.id) return;
     const text = noticeText(notice), known = seenNotices.get(notice.id);
@@ -298,7 +298,10 @@
     if (dot > 0) { const tab = findTab(value.slice(0, dot)); return { tab, seat: seatFor(tab, value.slice(dot + 1)), slot: value.slice(dot + 1), key: value, legacy: false }; }
     return { tab: null, seat: null, slot: value, key: value, legacy: true };
   }
-  function seatNameOfKey(key) { return seatOfKey(key).seat?.name ?? String(key ?? "A seat"); }
+  function seatNameOfKey(key) {
+    const owner = seatOfKey(key);
+    return owner.seat?.name ?? serverState?.fixedCrewDefinitions?.find((item) => item.slot === owner.slot)?.label ?? "Earlier position";
+  }
   // The events worth a signal. The desktop notice follows Notifications; the chime follows the sound button, on its own.
   function notableEvent(kind) {
     if (kind === "routine") return false;

@@ -67,7 +67,7 @@ row("probe-updates", "server/settings/cli-runner.ts", '...options.env, OPENCODE_
 row("leader-updates", "server/leader-common/cli-path.ts", '...extra, OPENCODE_DISABLE_AUTOUPDATE: "1"', "...extra", resolution);
 row("demo-registry", "server/leader-common/path-refresh.ts", 'env.CC_DEMO_ISOLATED === "1" || ', "", "pack29-opencode-demo");
 row("demo-env-source", "server/leader-common/path-refresh.ts", 'env.CC_DEMO_ISOLATED === "1"', 'process.env.CC_DEMO_ISOLATED === "1"', "pack29-opencode-demo");
-row("demo-managed-profile", "paths", "const base = env.LOCALAPPDATA;", "const base = process.env.LOCALAPPDATA;", "pack29-opencode-demo");
+row("demo-managed-profile", "paths", "const base = process.platform === \"win32\" ? normalizeWindowsBase(env.LOCALAPPDATA) : env.LOCALAPPDATA;", "const base = process.platform === \"win32\" ? normalizeWindowsBase(process.env.LOCALAPPDATA) : process.env.LOCALAPPDATA;", "pack29-opencode-demo");
 row("r1-asset-origin", "server/settings/opencode/releases.ts", " || !safeAddress(asset.browser_download_url, true, tool)", "", "pack29-opencode-release");
 row("r1-managed-links", "paths", "    assertNoLinks(path);\n    if (!lstatSync(path).isFile() || !realpathSync(path).toLowerCase().startsWith(realpathSync(root).toLowerCase() + sep)) return null;\n", "", "pack29-opencode-resolution");
 row("r1-managed-containment", "paths", "!realpathSync(path).toLowerCase().startsWith(realpathSync(root).toLowerCase() + sep)", "false", "pack29-opencode-resolution");

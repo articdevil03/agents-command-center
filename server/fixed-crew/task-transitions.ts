@@ -116,7 +116,9 @@ export function transitionTask(current: Task, event: Event, actor: Actor, interr
       if (interruptedCancellation && next.stage === "interrupted" && !next.executions.some((e) => ["reserved", "running", "interrupted"].includes(e.status) || e.processEnd !== "confirmed" || e.status === "success" && !e.verified)) next.stage = "planned";
     } else if (event.type === "reconcile") {
       requireRole(actor, "leader"); text(event.reason); enumeration(event.processEnd, ["confirmed"]);
-      if (execution.status !== "interrupted" && execution.processEnd === "confirmed") throw new Error("No interrupted result to reconcile");
+      const unverifiedWorker = execution.status === "success" && !execution.verified && execution.processEnd === "confirmed"
+        && !["checkpoint", "commit", "push", "publish"].includes(execution.kind);
+      if (!unverifiedWorker && execution.status !== "interrupted" && execution.processEnd === "confirmed") throw new Error("No interrupted result to reconcile");
       if (execution.verified) throw new Error("Accepted evidence cannot be abandoned");
       execution.status = "failed"; execution.processEnd = "confirmed"; execution.evidence = []; execution.verified = false; execution.resultRevision = null;
       if (next.stage === "interrupted" && !next.executions.some((e) => ["reserved", "running", "interrupted"].includes(e.status) || e.processEnd !== "confirmed")) next.stage = "planned";

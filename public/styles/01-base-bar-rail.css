@@ -115,7 +115,7 @@ body:not(.light) .themetg button[aria-checked="true"]{background:var(--sel)}
 .winbtns{display:flex;gap:6px;margin-left:8px;flex:none}
 #winMax[data-maximized="true"] .wmax,#winMax:not([data-maximized="true"]) .wrestore{display:none}
 #winClose:hover{background:var(--close-hv);box-shadow:none;color:#fff}
-#conn{position:fixed;top:68px;left:50%;transform:translateX(-50%);z-index:30;padding:8px 14px;border-radius:12px;background:var(--sf);color:var(--warn-text);font-size:13px;font-weight:500;display:flex;gap:10px;align-items:center;box-shadow:var(--lift);white-space:nowrap}
+#conn{position:fixed;top:68px;left:50%;transform:translateX(-50%);z-index:60;padding:8px 14px;border-radius:12px;background:var(--sf);color:var(--warn-text);font-size:13px;font-weight:500;display:flex;gap:10px;align-items:center;box-shadow:var(--lift);white-space:nowrap}
 #conn.off{color:var(--danger-text)}
 #conn button{font-weight:600;text-decoration:underline}
 

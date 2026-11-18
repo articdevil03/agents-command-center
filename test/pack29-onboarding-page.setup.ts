@@ -65,7 +65,7 @@ export const guide = (ev: Ev, cli: string): Promise<Guide> => ev(`(()=>{const b=
   return {found:true,expanded:b.getAttribute('aria-expanded'),shown:!p.hidden&&p.checkVisibility(),steps:lis.map((li)=>[...li.childNodes].filter((n)=>n.nodeType===3).map((n)=>n.textContent).join('')),
   boxIn:lis.map((li)=>li.querySelectorAll('.frun-cmd').length),commands:all('.frun-cmd pre code').map((c)=>c.textContent),shells:all('.frun-cmd-h>span').map((s)=>s.textContent),
   copyNames:all('[data-frun-copy-cmd]').map((c)=>c.getAttribute('aria-label')+' / '+c.textContent),notes:all('.frun-req').map((n)=>n.textContent),hint:p.querySelector('.frun-hint').textContent,
-  page:p.querySelector('.frun-url code').textContent,copyAddress:p.querySelector('[data-frun-copy]').textContent,text:p.textContent}})()`);
+  page:p.querySelector('.frun-url code')?.textContent ?? '',copyAddress:p.querySelector('[data-frun-copy]')?.textContent ?? '',text:p.textContent}})()`);
 // A clipboard the test can read and refuse, and a text-copy fallback it controls (the page tries the clipboard first, then execCommand).
 export const stubClipboard = (ev: Ev): Promise<boolean> => ev(`(()=>{window.__copied=[];window.__refuse=false;window.__execOk=true;window.__execCalls=0;
   Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(v)=>{if(window.__refuse)throw new Error('refused');window.__copied.push(v);}}});

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, lstatSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { spawn } from "node:child_process";
+import { isMain } from "./is-main.mjs";
 
 export function configSnapshot(root) {
   const files = new Map();
@@ -47,7 +48,7 @@ export function runTests(args = ["--test", "test/*.test.ts"], env = process.env,
   });
 }
 
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   const code = await guardConfig(join(process.cwd(), "config"), () => runTests());
   process.exitCode = process.exitCode || code;
 }

@@ -306,7 +306,7 @@ test("pack 2: activeWork counts an unconfirmed process of an earlier session in 
   const tabOf = (id: string) => lastState(ws).projects.flatMap((project: any) => project.tabs).find((tab: any) => tab.id === id);
   assert.deepEqual([tabOf("alpha-dev").activeWork, tabOf("beta-dev").activeWork], [true, false]);
   assert.deepEqual(JSON.parse(JSON.stringify(lastState(ws).globalWork)), []);
-  ws.message({ type: "changeFolder", tabId: "alpha-dev", folder: server.testRoot });
+  ws.message({ type: "changeFolder", tabId: "alpha-dev", folder: "C:/work/other" });
   assert.match(ws.messages.at(-1).message, /cannot change the folder while the tab is busy/, "the same check refuses a folder change while that process may still be working");
   server.launchSafety.uncertain.push({ seatId: "sonny", pid: 77 });
   server.settingsService.refreshAll = () => new Promise(() => {});
@@ -338,4 +338,19 @@ test("pack 2: a burst of usage events sends one state at once and folds the rest
   await tick(520);
   assert.equal(states() - before, 2, "one trailing state carries the latest numbers");
   assert.equal(lastState(ws).projects[0].tabs[0].runs.find((run: any) => run.runId === entry.run.runId).usage.contextTokens, 20);
+});
+
+for (const [thrown, shown] of [
+  ["Planner has no model. Choose one in Settings before continuing.", "Planner has no model. Choose one in Settings before continuing."],
+  ["OpenCode 1 is needed.", "OpenCode 1 is needed."],
+  ["Install the tool first.", "Install the tool first."],
+  ["This tool is being removed. Try again when it finishes.", "This tool is being removed. Try again when it finishes."],
+  ["This tool is unavailable or its saved connection does not match. Check installation and add its connection again.", "This tool is unavailable or its saved connection does not match. Check installation and add its connection again."],
+  ["unknown failure at C:\Users\someone\secret", "The leader could not answer your message. Send it again."],
+]) test(`pack 3 R-3: a start failure the user can fix is said plainly (${thrown.slice(0, 30)})`, async () => {
+  const server = await loadFixed({ skipHealth: true, createLeaderThrows: thrown }), ws = connect(server);
+  ws.message({ type: "chat", tabId: "alpha-dev", text: "start please" });
+  await tick(10);
+  const error = ws.messages.find((message: any) => message.type === "chatError" && message.tabId === "alpha-dev");
+  assert.equal(error?.message, shown);
 });

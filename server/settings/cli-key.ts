@@ -4,10 +4,11 @@ import type { AcpCli } from "../config-acp.ts";
 import { acpKindOf } from "../config-acp.ts";
 import { assertCliNotRemoving } from "./cli-availability.ts";
 import { CLI_KEY_PROFILES, keyEnvFor, validateKeyRecord, type KeyRecord } from "./cli-key-profiles.ts";
-import { CredentialChangeUnconfirmed, IpcCredentialStore, UNSAFE_KEY_REMOVAL, UNSAFE_KEY_STORE, type CredentialStore } from "./cli-key-store.ts";
+import { CredentialChangeUnconfirmed, CredentialEncryptionUnavailable, IpcCredentialStore, UNSAFE_KEY_REMOVAL, UNSAFE_KEY_STORE, type CredentialStore } from "./cli-key-store.ts";
 import type { SettingsState } from "./types.ts";
 
 export type KeyLaunch = { env: Record<string, string>; secrets: string[] };
+const UNREADABLE_KEY = "The saved key for this tool cannot be read. Replace it or remove it in the tool's key settings in the app.";
 export class CliKeys {
   #cache = new Map<string, KeyRecord | null>();
   #loading = new Map<string, Promise<void>>();
@@ -30,7 +31,7 @@ export class CliKeys {
           let saved;
           try { saved = await this.store.get(tool); }
           catch {
-            if (!this.store.available()) return; // Encryption is unavailable here, so no key can exist.
+            if (!this.store.available()) return;
             await new Promise((resolve) => setTimeout(resolve, 50));
             if (this.#closed) throw new Error("Key storage is closed.");
             saved = await this.store.get(tool);
@@ -39,8 +40,16 @@ export class CliKeys {
           if (this.#closed) return;
           this.#cache.set(tool, record);
           this.state.catalogTools[tool].keySaved = record !== null;
+          this.state.catalogTools[tool].keyUnreadable = false;
           this.publish();
-        } catch { throw new Error("Command Center could not read the saved key safely on this PC."); }
+        } catch {
+          if (!this.#closed) {
+            this.state.catalogTools[tool].keyUnreadable = true;
+            this.state.catalogTools[tool].keySaved = false;
+            this.publish();
+          }
+          throw new Error("Command Center could not read the saved key safely on this PC. " + UNREADABLE_KEY);
+        }
         finally { this.#loading.delete(tool); }
       })();
       this.#loading.set(tool, loading);
@@ -64,6 +73,7 @@ export class CliKeys {
     const tool = catalogOwner(cli);
     if (!tool || !catalogLaunchAllowed(cli) || !Object.hasOwn(CLI_KEY_PROFILES, tool.id)) return { env: {}, secrets: [] };
     if (this.#busy.has(tool.id) || this.#loading.has(tool.id)) throw new Error("A key action is already running for this tool.");
+    if (this.state.catalogTools[tool.id].keyUnreadable) throw new Error("The saved key is not ready. " + UNREADABLE_KEY);
     if (!this.#cache.has(tool.id) && this.store.available()) throw new Error("The saved key is not ready. Try again.");
     const record = this.#cache.get(tool.id);
     return record ? { env: keyEnvFor(tool.id, record), secrets: [record.key] } : { env: {}, secrets: [] };
@@ -91,11 +101,13 @@ export class CliKeys {
         this.#cache.set(tool, record);
         const target = this.state.catalogTools[tool];
         target.keySaved = record !== null;
+        target.keyUnreadable = false;
         target.signedIn = null; target.connection = "unknown";
         if (Object.hasOwn(this.state.tools, tool)) this.state.tools[tool as keyof SettingsState["tools"]].signedIn = null;
         target.action = { requestId: message.requestId, status: "done", message: record ? "Key saved. Connection checked when you first chat." : "Key removed." };
         this.publish();
       } catch (error) {
+        if (error instanceof CredentialEncryptionUnavailable) throw new Error("Windows encryption is unavailable. The key was not saved. You can remove the saved key in Settings.");
         if (error instanceof CredentialChangeUnconfirmed) {
           this.#cache.delete(tool);
           throw error;

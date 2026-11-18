@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as path from "node:path";
 import { ChatStore } from "../server/chat-store.ts";
 import { config } from "./round2-setup.ts";
-import { tempWorkspaceFolders, loadFixed, startHelper, setAssignment, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
+import { plainRefusal, tempWorkspaceFolders, loadFixed, startHelper, setAssignment, connect, lastState, tick, waitFor } from "./round2-helpers.ts";
 
 const notesOf = (server: any, tabId: string): string | undefined => server.stateMessage().projects.flatMap((project: any) => project.tabs).find((tab: any) => tab.id === tabId)?.notes?.content;
 
@@ -144,7 +144,8 @@ test("a seat blocked after a stop refuses a new launch until the owner unblocks 
   const { runId } = await startHelper(server);
   ws.message({ type: "killRun", runId });
   await waitFor(() => server.blockedSeatKeys.has("alpha-dev.helper") && server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId === null, "the stopped seat is blocked and its process tree confirmed ended");
-  await assert.rejects(startHelper(server), /launch blocked after a prior stop: alpha-dev\.helper/);
+  await assert.rejects(startHelper(server), (error: Error) => { plainRefusal(error.message, "Helper", server.tabLocation("alpha-dev").tab.name); return true; });
+  assert.ok(server.blockedSeatKeys.has("alpha-dev.helper"));
   assert.equal(server.launched.length, 1, "no second run started");
   ws.message({ type: "unblockSeat", seatKey: "alpha-dev.helper", confirm: "allow this seat to launch again" });
   assert.equal(ws.messages.findLast((message: any) => message.type === "launchBlockCleared")?.cleared, true);

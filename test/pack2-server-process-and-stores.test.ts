@@ -101,8 +101,9 @@ test("a pasted image upload and a historical avatar GET work when the data root 
     const { path } = await upload("/api/paste-image", { "Content-Type": "image/png" });
     assert.ok(path.toLowerCase().startsWith(join(real, "scratch").toLowerCase()), `the upload reports the real path: ${path}`);
     // RETIRED (fixed-crew block 4): chat acceptance of the real, linked and differently cased image path, and the outside-path refusal.
-    // Startup recovery refuses a linked data root (noLinks in server/fixed-crew/recovery-backup.ts), so the workspace is "Workspace unavailable" and chat cannot run here.
-    assert.equal(client.state().projects[0].tabs[0].name, "Workspace unavailable", "documents the current behaviour: recovery blocks a data root behind a link");
+    // Audit fix C-6: a data root that is itself a relocation link is resolved once to its real path, so startup recovery works and the workspace is usable (before the fix it was "Workspace unavailable").
+    assert.notEqual(client.state().projects[0].tabs[0].name, "Workspace unavailable", "recovery works when the data root is reached through a link");
+    assert.equal(client.state().projects[0].tabs[0].name, "Development", "the saved workspace loads through the linked data root");
     const shown = await fetch(`http://127.0.0.1:${server.port}/api/paste-image?path=${encodeURIComponent(path)}`);
     assert.equal(shown.status, 200); await shown.arrayBuffer();
     // RETIRED (run 18): POST /api/avatar is gone. A historical avatar image written under the real data root is still served through the link.

@@ -1,4 +1,5 @@
 import nodeTest, { type TestContext } from "node:test";
+import { isMain } from "../scripts/is-main.mjs";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, unlinkSync, readdirSync, lstatSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,7 +30,7 @@ export function fixture(t: { after: (fn: () => void) => void }, overrides: Parti
   t.after(() => remove(root));
   const plan: Plan = { id: "plan1", scope: "Implement task", criteria: ["Works"], blocks: [{ id: "b1", scope: "Task", paths: ["a.txt"] }],
     risk: { level: "small", reason: "Contained", paths: ["a.txt"], verification: ["Focused check"] }, visibleWork: false, large: false, integration: false, design: false,
-    paths: ["a.txt"], consumers: [], sharedInputs: [], checks: ["unit"], shipping: ["commit", "push", "publish"], reviewReason: "Independent review", ...overrides };
+    paths: ["a.txt"], consumers: [], sharedInputs: [], checks: ["unit"], shipping: ["commit", "push"], reviewReason: "Independent review", ...overrides };
   const seats = Object.fromEntries(FIXED_CREW.map((s) => [s.slot, { ...s.preferred }]));
   const store = createTaskStore(root, () => project);
   const actors = { planner: store.actor("planner", "planner-session"), owner: store.actor("owner", "owner-session"), leader: store.actor("leader", "leader-session") };
@@ -53,7 +54,7 @@ export function fixture(t: { after: (fn: () => void) => void }, overrides: Parti
   return { root, project, plan, seats, store, actors, get, expected, apply, approve, verify, action, finish, run };
 }
 
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
 test("FCP material plan setters invalidate approvals and require final", (t) => {
   const f = fixture(t); f.approve(); const old = f.get();
   assert.doesNotThrow(() => f.apply({ type: "plan", plan: { ...f.plan, integration: true } }, f.actors.planner));

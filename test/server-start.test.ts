@@ -97,7 +97,7 @@ const OWN_CLEANUP: Record<string, string> = {
   "overlap.test.ts": "finally: kills the server and waits for exit",
   "pack18-editor-harness.ts": "finally: kills the server and waits for exit",
 };
-const HELPER_USERS = 13;
+const HELPER_USERS = 14;
 
 test("every file that spawns the server uses the shared wait or has its own stop-on-failure", () => {
   const directory = new URL("./", import.meta.url);

@@ -160,7 +160,7 @@ test("a message queued before the leader iterator fails is still reported and ne
   const instance = createLeader({ model: "claude-opus-5-5[1m]", effort: "high" }, "C:/work", null, { onDelta() {}, onDone() {}, onUsage() {}, onError: (value: string) => errors.push(value) });
   await tick(0); instance.send("first queued message"); instance.send("second queued message");
   reject(new Error("stream failed while input waited")); await tick(0);
-  assert.equal(instance.isDead(), true); assert.equal(errors.filter((value) => value.includes("stream failed")).length, 1);
+  assert.equal(instance.isDead(), true); assert.equal(errors.filter((value) => value === "The Claude run stopped with an error. Try again.").length, 1);
   assert.doesNotThrow(() => instance.send("later"));
 });
 

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { isMain } from "./is-main.mjs";
 
 // Usage: node scripts/mutation-repoint.mjs <catalogue.mjs> <old-path> <new-file>...
 // After code moved out of <old-path>, re-points each catalogue row whose from-text is no longer found exactly once there to the ONE new file
@@ -39,7 +40,7 @@ export async function repoint(catalogue, oldPath, newFiles) {
   return { moved, refused };
 }
 
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   const [catalogue, oldPath, ...newFiles] = process.argv.slice(2);
   if (!catalogue || !oldPath || !newFiles.length) throw new Error("usage: mutation-repoint.mjs <catalogue.mjs> <old-path> <new-file>...");
   const { moved, refused } = await repoint(catalogue, oldPath, newFiles);

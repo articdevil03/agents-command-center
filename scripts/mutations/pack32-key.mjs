@@ -17,7 +17,7 @@ export const pack32KeyMutations = [
   ["p32-key-minimum", "server/settings/cli-key-profiles.ts", "Buffer.byteLength(trimmed) < 8", "Buffer.byteLength(trimmed) < 1"],
   ["p32-key-runner-redaction", "server/runner.ts", "const secrets = secretVariants(keyLaunch?.secrets ?? []);", "const secrets = secretVariants([]);"],
   ["p32-key-case-env", "server/leader-common/cli-path.ts", "if (overridden.has(key.toLowerCase())) delete childEnv[key];", "if (overridden.has(key)) delete childEnv[key];"],
-  ["p32-fix-unavailable-read", "server/settings/cli-key.ts", "if (!this.store.available()) return; // Encryption is unavailable here, so no key can exist.", "/* mutation: no availability re-check */"],
+  ["p32-fix-unavailable-read", "server/settings/cli-key.ts", "if (!this.store.available()) return;\n            await new Promise", "await new Promise"],
   ["p32-fix-legacy-signin", "server/settings/cli-key.ts", 'this.state.tools[tool as keyof SettingsState["tools"]].signedIn = null;', 'this.state.tools[tool as keyof SettingsState["tools"]].signedIn = false;'],
   ["p32-fix-removal-text", "server/settings/cli-key.ts", "throw new Error(record ? UNSAFE_KEY_STORE : UNSAFE_KEY_REMOVAL);\n      }\n      finally", "throw new Error(UNSAFE_KEY_STORE);\n      }\n      finally"],
   ["p32-fix-model-trim", "server/settings/cli-key-profiles.ts", '.test(trimmed)) throw new Error("Invalid model name.");', '.test(value)) throw new Error("Invalid model name.");'],

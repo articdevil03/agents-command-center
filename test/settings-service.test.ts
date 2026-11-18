@@ -17,8 +17,8 @@ test("MCP add/remove and Claude plugin install/uninstall use exact argv and reje
     await service.addMcp("codex", "mcp_codex_command", "codex-tool", "npx -y codex-server");
     await service.addMcp("claude", "mcp_claude_command", "tool_1", "npx -y @scope/server");
     await service.addMcp("claude", "mcp_claude_url", "claude-tool", "https://claude.example/mcp");
-    await service.addMcp("opencode", "mcp_opencode_url", "open-tool", "https://open.example/mcp");
-    await service.addMcp("opencode", "mcp_opencode_command", "open-command", "npx -y open-server");
+    await assert.rejects(service.addMcp("opencode", "mcp_opencode_url", "open-tool", "https://open.example/mcp"), { message: "OpenCode MCP changes are not available yet. You can still use the tools already listed here." });
+    await assert.rejects(service.addMcp("opencode", "mcp_opencode_command", "open-command", "npx -y open-server"), { message: "OpenCode MCP changes are not available yet. You can still use the tools already listed here." });
     await service.removeMcp("codex", "mcp_remove_codex", "safe-name", true);
     await service.removeMcp("claude", "mcp_remove_claude", "tool_1", true);
     await service.installPlugin("plugin_install", "helper@official");
@@ -28,14 +28,13 @@ test("MCP add/remove and Claude plugin install/uninstall use exact argv and reje
     assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["codex", "mcp", "add", "codex-tool", "--", "npx", "-y", "codex-server"])));
     assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["claude", "mcp", "add", "-s", "user", "tool_1", "--", "npx", "-y", "@scope/server"])));
     assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["claude", "mcp", "add", "-s", "user", "--transport", "http", "claude-tool", "https://claude.example/mcp"])));
-    assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["opencode", "mcp", "add", "open-tool", "--url", "https://open.example/mcp"])));
-    assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["opencode", "mcp", "add", "open-command", "--", "npx", "-y", "open-server"])));
     assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["codex", "mcp", "remove", "safe-name"])));
     assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["claude", "mcp", "remove", "-s", "user", "tool_1"])));
     assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["claude", "plugin", "install", "helper@official"])));
     assert.ok(args.some((row) => JSON.stringify(row) === JSON.stringify(["claude", "plugin", "uninstall", "helper@official"])));
-    assert.equal(h.calls.filter((call) => call.args.join(" ") === "mcp list").length, 10, "every MCP and Claude plugin action refreshes inventory");
+    assert.equal(h.calls.filter((call) => call.args.join(" ") === "mcp list").length, 8, "every MCP and Claude plugin action refreshes inventory");
     assert.equal(h.calls.filter((call) => call.args.join(" ") === "plugin list").length, 5, "every Claude inventory change refreshes plugin inventory too");
+    assert.equal(args.some((row) => row[0] === "opencode" && row[1] === "mcp" && row[2] === "add"), false, "refused OpenCode changes never call the vendor");
     const before = h.calls.length;
     await assert.rejects(service.addMcp("codex", "mcp_bad_name", "../bad", "npx server"), /invalid MCP name/);
     for (const leading of ["-s", "--transport", "_x", ".x"]) {
@@ -52,7 +51,7 @@ test("MCP add/remove and Claude plugin install/uninstall use exact argv and reje
     assert.throws(() => parseMcpCommand("https://user:secret@mcp.example"), /without credentials/);
     assert.throws(() => parseMcpCommand("https://token@mcp.example"), /without credentials/);
     assert.equal(h.calls.slice(before).some((call) => call.args.some((arg) => arg.includes("secret") || arg.includes("token@"))), false, "a URL with credentials never reaches a CLI");
-    await assert.rejects(service.removeMcp("opencode", "mcp_no_remove", "safe", true), /unavailable/);
+    await assert.rejects(service.removeMcp("opencode", "mcp_no_remove", "safe", true), /OpenCode MCP changes are not available yet/);
     await assert.rejects(service.removeMcp("claude", "mcp_no_confirm", "safe", false), /confirmation is required/);
     await assert.rejects(service.uninstallPlugin("plugin_no_confirm", "helper", false), /confirmation is required/);
     assert.equal(h.calls.slice(before).some((call) => call.args.includes("../bad") || call.args.includes("whoami")), false);

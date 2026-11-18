@@ -13,7 +13,7 @@
     deepseek: { line: "Use DeepSeek models through OpenCode, or through Claude Code set up for DeepSeek.", chip: "Through OpenCode" },
     glm: { line: "Use GLM models through OpenCode with the Z.ai provider.", chip: "Through OpenCode" },
     nemotron: { line: "Use Nemotron models through OpenCode with the NVIDIA provider.", chip: "Through OpenCode" },
-    perplexity: { line: "Perplexity's own command line tool is for search, not coding. Using its models through OpenCode is not checked yet.", chip: "Not checked yet" },
+    perplexity: { line: "Perplexity's own tool is for search, not coding. Using its models through OpenCode is not checked yet.", chip: "Not checked yet" },
     muse: { line: "No verified official installation or supported provider connection yet.", chip: "Not available yet" },
   });
 
@@ -31,7 +31,7 @@
     needsNode: (name) => `${name} needs Node.js, which includes npm. Install it from nodejs.org, then press Check again.`,
     needsGit: (name) => `${name} needs Git for Windows. Install it from git-scm.com, then press Check again.`,
     needsWinget: (name) => `${name} needs App Installer. Get App Installer from the Microsoft Store, then press Check again.`,
-    needsPowerShell: (name) => `${name} needs a newer PowerShell. Get PowerShell from the Microsoft Store, then press Check again.`,
+    needsPowerShell: () => "This tool needs Windows PowerShell, which was not found on this PC. Restore it in Windows, then choose Check again.",
   });
   const FAILURE = Object.freeze({
     downloadFailed: "Could not download the installer. Check your internet connection, then try again.",
@@ -40,7 +40,8 @@
     cancelled: "Installation stopped. Changes already made may remain.",
     cleanupUnconfirmed: "Could not confirm the installer stopped.",
     timeout: "The installation took too long and was stopped. Check your internet connection, then try again.",
-    installFailed: "The installation did not finish. Try again, or use Install by hand.",
+    rateLimited: "GitHub is limiting requests right now. Wait a few minutes, then choose Try again.",
+    installFailed: "The installation did not finish. Choose Try again, then press Check again.",
   });
   const isPrereq = (reason) => Object.hasOwn(PREREQ, reason);
   function reasonText(reason, name, id) {
@@ -66,6 +67,18 @@
     if (uv && urls.length) return `Downloads and runs the uv installer from ${urls[0]}, then installs ${owner} ${uv[1]} with uv on this PC. uv may also download Python.`;
     if (urls.length) return `Downloads and runs ${owner} installer from ${urls[0]} on this PC.`;
     return `Downloads and runs ${owner} installer on this PC.`;
+  }
+
+  function mcpInputValid(name, commandOrUrl) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) return "MCP name must use 1-64 letters, numbers, underscores, or hyphens.";
+    if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(commandOrUrl) && !/^https:\/\//i.test(commandOrUrl)) return "MCP URLs must use HTTPS without credentials.";
+    if (/^https:\/\//i.test(commandOrUrl)) {
+      try { const url = new URL(commandOrUrl); if (url.protocol === "https:" && !url.username && !url.password) return ""; }
+      catch { /* the CLI will not receive a malformed URL */ }
+      return "MCP URLs must use HTTPS without credentials.";
+    }
+    if (!commandOrUrl.trim() || /[;&|<>`$(){}\[\]*?~%!^\r\n]/.test(commandOrUrl)) return "MCP commands must be non-empty and contain no shell metacharacters.";
+    return "";
   }
 
   function create(page) {
@@ -97,5 +110,5 @@
     }
     return { list, entry, leadIds, providerIds, ownedConnections, nameOf, providerText, guideInfo, matches };
   }
-  window.CC_FIRST_RUN_CATALOG = Object.freeze({ BUILT_IN, create, consentText, phaseText, reasonText, recheckAfter, isPrereq });
+  window.CC_FIRST_RUN_CATALOG = Object.freeze({ BUILT_IN, create, consentText, phaseText, reasonText, recheckAfter, isPrereq, mcpInputValid });
 })();

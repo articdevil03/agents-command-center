@@ -22,7 +22,10 @@ test("Copilot publishes only verified bytes, resolves managed native executable 
     assert.equal(fx.service.state.catalogTools.copilot.version, VERSION);
     assert.equal(fx.service.state.catalogTools.copilot.signedIn, null);
     assert.equal(managedCli(fx.env), old); assert.deepEqual(readFileSync(join(prior.root, "active.json")), descriptor);
-    assert.deepEqual(readdirSync(join(installed, "..")).sort(), ["copilot.exe"]);
+    assert.deepEqual(readdirSync(join(installed, "..")).sort(), [".command-center-owner.json", "copilot.exe"]);
+    assert.deepEqual(JSON.parse(readFileSync(join(installed, "..", ".command-center-owner.json"), "utf8")), {
+      owner: "com.agents.command-center", format: 1, tool: "copilot", entry: join(installed, "..").split(/[\\/]/).pop(),
+    });
     assert.equal(fx.requests.length, 2); fx.assertBoundaries();
     setCliSkipFolders(() => [fx.root]); assert.equal(resolveCliPath("copilot", fx.env, process.cwd()), null);
   } finally { setCliSkipFolders(() => []); await fx.close(); }

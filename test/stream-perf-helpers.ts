@@ -12,14 +12,20 @@ export { delay, J };
 const PROBE_JS = String.raw`
 (() => {
   window.__renders = 0;
+  window.__messageAdds = 0;
+  const insert = Node.prototype.insertBefore;
+  Node.prototype.insertBefore = function(node, before) {
+    if (this.matches?.('#view .thread') && node.matches?.('.msg')) window.__messageAdds++;
+    return insert.call(this, node, before);
+  };
   const d = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML");
-  Object.defineProperty(Element.prototype, "innerHTML", { configurable: true, get() { return d.get.call(this); }, set(v) { if (this.id === "view") window.__renders++; d.set.call(this, v); } });
+  Object.defineProperty(Element.prototype, "innerHTML", { configurable: true, get() { return d.get.call(this); }, set(v) { if (this.id === "view" || this.tagName === "TEMPLATE" && String(v).includes('class="thread"')) window.__renders++; d.set.call(this, v); } });
   const append = Element.prototype.append;
   Element.prototype.append = function(...nodes) {
     if (this.id === "view" && nodes.some(n => n.querySelector?.(".thread") || n.matches?.(".thread"))) window.__renders++;
     return append.apply(this, nodes);
   };
-  window.__restoreRenderProbe = () => { Object.defineProperty(Element.prototype, "innerHTML", d); Element.prototype.append = append; };
+  window.__restoreRenderProbe = () => { Object.defineProperty(Element.prototype, "innerHTML", d); Element.prototype.append = append; Node.prototype.insertBefore = insert; };
   window.__stream = async (tabId, parts, gap) => { for (const text of parts) { window.__ccDeliver({ type: "chatDelta", tabId, text }); await new Promise((ok) => setTimeout(ok, gap)); } return true; };
   window.__bubble = () => document.querySelector("#view [data-stream] .md")?.textContent ?? null;
   window.__gap = () => { const v = document.querySelector("#view"); return v.scrollHeight - v.scrollTop - v.clientHeight; };

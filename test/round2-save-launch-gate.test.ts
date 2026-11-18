@@ -147,7 +147,7 @@ test("Ask mode: a fixed launch asks the user first; Allow starts the run, Deny s
   await waitFor(() => pendingFor(server).length === 1, "launch approval");
   const [item] = pendingFor(server);
   assert.equal(item.tool, "fixed-action");
-  assert.equal(item.summary, "Action: assist\nPosition: Helper (helper)\nExecution: codex / gpt-6.1-sol / low\nFolder: C:/work/alpha\n\nLeader brief:\nFix the login bug\nthen run the tests", "the approval shows the WHOLE brief, line breaks kept");
+  assert.equal(item.summary, "Action: assist\nPosition: Helper\nExecution: codex / gpt-6.1-sol / low\nFolder: alpha\n\nLeader brief:\nFix the login bug\nthen run the tests", "the approval shows the WHOLE brief, line breaks kept");
   assert.equal(server.launched.length, 0, "nothing starts before Allow");
   assert.equal(lastState(ws).projects[0].tabs[0].pendingApprovals[0].tool, "fixed-action");
   ws.message({ type: "answerApproval", requestId: "launch_allow", tabId: "alpha-dev", approvalId: item.approvalId, allow: true });

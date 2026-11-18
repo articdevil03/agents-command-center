@@ -121,11 +121,11 @@
       window.__ccConfirmResult = false;
       requireElement("#runBlk [data-run-unblock]").click();
       const asked = !$("confirmModal").hidden && $("confirmPhrase").dataset.phrase === UNBLOCK_CONFIRM;
-      confirmIfAsked();
+      await confirmIfAsked();
       const cancelled = sentSince(from, "unblockSeat").length === 0;
       window.__ccConfirmResult = true;
       requireElement("#runBlk [data-run-unblock]").click();
-      confirmIfAsked();
+      await confirmIfAsked();
       const sent = sentSince(from, "unblockSeat");
       check("Allow again in the Run dialog asks for the typed phrase, then sends unblockSeat; cancelling sends nothing", shown && asked && cancelled && sent.length === 1 && sent[0].seatKey === `${tabId}.coder` && sent[0].confirm === UNBLOCK_CONFIRM, { shown, asked, cancelled, sent });
     });

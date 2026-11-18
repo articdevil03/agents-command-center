@@ -75,7 +75,8 @@ for (const failure of [false, true]) {
       const visible = deltas.join("") + errors.join("");
       assert.equal(visible.includes(key), false);
       assert.equal(visible.includes(JSON.stringify(key).slice(1, -1)), false);
-      assert.match(visible, /\[hidden\]/);
+      if (failure) { assert.deepEqual(errors, ["OpenCode could not finish this turn. Try again."]); assert.doesNotMatch(visible, /session|permission|POST/); }
+      else assert.match(visible, /\[hidden\]/);
       if (!failure) assert.match(deltas.join(""), /safe/);
       assert.equal(readFileSync(file, "utf8"), bytes);
     } finally {

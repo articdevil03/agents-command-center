@@ -1,4 +1,5 @@
 import "./runtime-env.ts";
+import { bindShutdown, shutdownRequested } from "./shutdown-latch.ts";
 import { createServer } from "node:http";
 import { spawnSync } from "node:child_process";
 import { mkdir } from "node:fs/promises";
@@ -7,9 +8,9 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import {
-  applyOpenCodeModels, readWorkspaces, adoptSavedValues, refreshDiscovery, readClientPrefs, readLaunchSafety, readAcpClis, acpClisPath, defaultWorkspaces,
+  applyOpenCodeModels, readWorkspaces, adoptSavedValues, refreshDiscovery, readClientPrefs, readAcpClis, acpClisPath, workspacesPath, defaultWorkspaces,
 } from "./config.ts";
-import { keepBadCopy } from "./safe-file.ts";
+import { preserveBadFile } from "./safe-file.ts";
 import { isRunning, stopAllRunning } from "./runner.ts";
 import { closeWorkerAdmission, drainWorkers } from "./runner/lifecycle.ts";
 import { resolveClaudeCli } from "./leader.ts";
@@ -24,7 +25,7 @@ import { SettingsService, runCli } from "./settings.ts";
 import { createTestCliRunner } from "./test-cli-runner.ts";
 import { broadcast, resyncClient, stateMessage } from "./main/broadcast.ts";
 import { handleHttpRequest } from "./main/http.ts";
-import { persistLaunchSafety } from "./main/launch-safety.ts";
+import { initializeLaunchSafety, launchSafetyRecoveryStatus, recoverLaunchSafety, releaseLaunchSafetyHold, persistLaunchSafety } from "./main/launch-safety.ts";
 import { leadersAndWaitingTurns, stopLeaderSession } from "./main/leader-session.ts";
 import { handleMessage } from "./main/messages/index.ts";
 import {
@@ -74,13 +75,17 @@ await cleanScratch();
 
 setClaudeCliPath(resolveClaudeCli());
 if (!claudeCliPath) console.log("Claude CLI not found; the leader will run without --effort");
-setWorkspaces(readWorkspaces());
+try { setWorkspaces(readWorkspaces()); }
+catch {
+  const preserved = preserveBadFile(workspacesPath).ok;
+  blockWorkspaceRecovery(`Workspace unavailable. The saved workspace cannot be used by this version. ${preserved ? "A copy of the original was kept." : "The original has been left untouched; a copy could not be made."} Your histories have been kept.`);
+  setWorkspaces(unavailableWorkspace(defaultWorkspaces));
+}
 try { setAcpClis(readAcpClis()); }
-catch (err) { console.error(describeError(err)); try { keepBadCopy(acpClisPath); } catch { /* nothing to keep */ } }
+catch { console.error(preserveBadFile(acpClisPath).ok ? "The saved tools list is damaged. A copy was kept." : "The saved tools list cannot be read or preserved. Changes will stay blocked while it is unavailable."); }
 // An unreadable brake is never reset on disk. Serve a blocked workspace so the
 // owner can see why startup is unavailable without allowing another writer.
-try { setLaunchSafety(readLaunchSafety()); }
-catch { blockWorkspaceRecovery(); setWorkspaces(unavailableWorkspace(defaultWorkspaces)); setLaunchSafety({ blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: [], uncertain: [], live: [] }); }
+initializeLaunchSafety();
 initializeFixedTasks();
 setCliSkipFolders(() => workspaces.projects.flatMap((project) => [project.folder, ...project.tabs.map((tab) => tab.folder)]));
 // Saved models and efforts are valid from the first request; discovery finishes later and may not list them.
@@ -119,14 +124,14 @@ setBlockedSeatKeys(new Set(launchSafety.blocked));
 setUnconfirmedRunIds(new Set(launchSafety.uncertain.map((row) => row.runId ?? row.seatId)));
 // A run the previous server never saw end (a crash or a hard kill) has a process nobody tracks any more, maybe still editing files:
 // its seat stays blocked until the user allows launching again, so a second writer cannot start on the same folder.
-if (launchSafety.live.length && !workspaceRecovery().blocked) {
+if (launchSafety.live.length && !workspaceRecovery().blocked && !launchSafetyRecoveryStatus().held) {
   for (const row of launchSafety.live) blockedSeatKeys.add(row.seatId);
   launchSafety.live = [];
   try { persistLaunchSafety(); } catch (err) { console.error(`could not save the blocks for runs the last session never saw end: ${describeError(err)}`); }
 }
 // A clean exit has already asked every worker to stop: nothing is left untracked, so the next start has nothing to block.
 process.on("exit", (code) => {
-  if (code !== 0 || !launchSafety.live.length) return;
+  if (code !== 0 || !launchSafety.live.length || launchSafetyRecoveryStatus().held) return;
   launchSafety.live = [];
   try { persistLaunchSafety(); } catch { /* the next start then blocks those seats: safe, if noisy */ }
 });
@@ -135,7 +140,10 @@ settingsService.setOnChange(() => {
   catch (err) { broadcast({ type: "error", message: `Crew discovery could not be saved: ${describeError(err)}` }); }
   broadcast(stateMessage());
 });
-if (!workspaceRecovery().blocked && !workspaceRecovery().recovered) for (const request of requestsStore.list()) if (request.status === "pending" && !tabLocation(request.toTabId)) requestsStore.markDestinationRemoved(request.toTabId);
+if (!workspaceRecovery().blocked && !workspaceRecovery().recovered) for (const request of requestsStore.list()) if (request.status === "pending" && !tabLocation(request.toTabId)) {
+  try { requestsStore.markDestinationRemoved(request.toTabId); }
+  catch { console.error("A saved request could not be updated. Its previous contents have been kept; the app will continue."); }
+}
 
 const server = createServer(handleHttpRequest);
 const wss = new WebSocketServer({
@@ -154,7 +162,27 @@ server.on("upgrade", (req, socket, head) => {
 });
 wss.on("connection", (ws) => {
   clients.add(ws);
-  ws.on("message", (data) => handleMessage(ws, data.toString()));
+  ws.on("message", (data) => {
+    let message: any;
+    try { message = JSON.parse(data.toString()); } catch { /* normal dispatcher reports malformed input */ }
+    if (message?.type === "recoverLaunchSafety" || message?.type === "releaseLaunchSafetyHold") {
+      try {
+        if (message.type === "releaseLaunchSafetyHold") releaseLaunchSafetyHold(message.confirm);
+        else if (recoverLaunchSafety()) {
+          adoptSavedValues(workspaces);
+          initializeFixedTasks();
+          // No leader exists for these tabs yet: the first leader turn on each starts one, and that start is what makes it read the handover first (path:recoverLaunchSafety in test/pack11-server-paths.test.ts).
+          for (const project of workspaces.projects) for (const tab of project.tabs) runtimeFor(tab);
+          watchTabFolders();
+        }
+        broadcast(stateMessage());
+      } catch (error) { ws.send(JSON.stringify({ type: "error", action: message.type, message: describeError(error) })); }
+      finally { broadcast(launchSafetyRecoveryStatus()); }
+      return;
+    }
+    handleMessage(ws, data.toString());
+    if (message?.type === "hello") ws.send(JSON.stringify(launchSafetyRecoveryStatus()));
+  });
   ws.on("close", () => { clients.delete(ws); laggingClients.delete(ws); });
   ws.on("error", () => { clients.delete(ws); laggingClients.delete(ws); });
 });
@@ -163,7 +191,8 @@ server.on("error", (err) => {
   console.error(`server error: ${describeError(err)}`);
   if (!serverListening) process.exit(1);
 });
-server.listen(PORT, HOST, () => {
+function listen(): void { server.listen(PORT, HOST, () => {
+  if (shutdownRequested()) return;
   serverListening = true;
   const address = server.address();
   const port = typeof address === "object" && address ? address.port : PORT;
@@ -178,7 +207,7 @@ server.listen(PORT, HOST, () => {
     void settingsService.refreshAll(selected?.tab.folder ?? null);
     if (selected) void refreshTabDetails(selected.tab.id);
   }
-});
+}); }
 
 let stallTimer: ReturnType<typeof setInterval> | undefined;
 stallTimer = setInterval(() => {
@@ -259,11 +288,5 @@ function requestShutdown(signal: string): void {
     try { await Promise.all([settingsService.models.drain(), fixedGitOperations.drain(), drainWorkers(), settingsService.installer.drain(), settingsService.login.drain()]); } finally { process.exit(1); }
   });
 }
-process.on("SIGINT", () => requestShutdown("SIGINT"));
-process.on("SIGTERM", () => requestShutdown("SIGTERM"));
-process.on("disconnect", () => requestShutdown("disconnect"));
-process.on("message", (message) => {
-  if (message === "shutdown") requestShutdown("IPC shutdown");
-});
-// The parent can disconnect before the IPC listener is registered.
-if (process.send && !process.connected) requestShutdown("disconnect");
+bindShutdown(requestShutdown);
+if (!shutdownRequested()) listen();

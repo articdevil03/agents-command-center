@@ -22,6 +22,8 @@ test("P26F runner retains finalization after root close", async () => {
   assert.equal((await settled(drain)).done, false, "the drain still waits: the sweep callback is held");
   assert.deepEqual(fx.events, ["status:working"], "neither final callback has run yet");
   sweep.resolve(0);
+  await tick(); await tick();
+  timers.fire(); // Missing completion must fail the drain assertion instead of waiting forever.
   assert.equal(await drain, true);
   assert.deepEqual(fx.events, ["status:working", "tree:confirmed", "status:done"]);
 });
@@ -188,7 +190,9 @@ test("P26F Electron allows the server drain budget", async () => {
   fn(); await Promise.resolve();
   assert.match(String(h.spawns[1][0]), /taskkill\.exe$/, "a genuinely hung server still reaches the finite backstop");
   h.killer.emit("close", 0);
-  await within(pending, "pending");
+  assert.equal(h.quits(), 0, "killer completion alone does not prove child exit");
+  h.proc.exitCode = 0; h.proc.emit("exit", 0);
+  assert.equal(await within(pending, "pending"), true);
 });
 
 test("P26F fresh startup does not create avatars", { timeout: 120_000 }, async () => {

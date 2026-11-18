@@ -40,7 +40,8 @@
     $("sideClose").addEventListener("click", () => { setSideOpen(false); $("sideBtn").focus(); });
     $("saveBtn").addEventListener("click", () => startSave(currentTab()));
     $("chatMore").addEventListener("click", (event) => togglePopover($("ctxPop"), event.currentTarget, () => chatMenu(event.currentTarget)));
-    $("scrim").addEventListener("click", () => closeLayer());
+    $("scrim").addEventListener("click", (event) => { if (currentLayer?.id !== "confirmModal" || confirmGestureAllowed(event)) closeLayer(); });
+    $("conn").addEventListener("pointerdown", (event) => { if (event.target.closest("[data-reconnect]") && currentLayer?.contains(document.activeElement)) event.preventDefault(); });
     $("browse").addEventListener("click", () => pickFolder((folder) => updateFolderDisplay("tab", folder)));
     $("pBrowse").addEventListener("click", () => pickFolder((folder) => updateFolderDisplay("project", folder)));
     $("createTab").addEventListener("click", createTab);
@@ -50,8 +51,8 @@
     $("runPrompt").addEventListener("input", () => { if (!pendingRun && !runUnknown) $("runStart").disabled = !$("runPrompt").value.trim(); });
     $("runStart").addEventListener("click", startRun);
     $("confirmOk").addEventListener("click", confirmAccepted);
-    $("confirmCancel").addEventListener("click", () => setLayer($("confirmModal"), false, null, true));
-    $("confirmPhrase").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); confirmAccepted(); } });
+    $("confirmCancel").addEventListener("click", (event) => { if (confirmGestureAllowed(event)) setLayer($("confirmModal"), false, null, true); });
+    $("confirmPhrase").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); confirmAccepted(event); } });
     $("renameSave").addEventListener("click", renameAccepted);
     $("renameInput").addEventListener("keydown", (event) => { if (event.key === "Enter") { event.preventDefault(); renameAccepted(); } });
     $("sendBtn").addEventListener("click", sendChat);
@@ -227,7 +228,7 @@
       await Promise.all(items.map((item) => item.promise).filter(Boolean));
       if (composerGeneration !== generation || $("ci").value.trim() !== text) return; // the tab changed or the text was edited while a file loaded
       const kept = items.filter((item) => attachmentList(tabId).includes(item) && !item.released);
-      if (kept.some((item) => item.status !== "ready" || !item.path)) { showToast("Remove or retry the attachment that could not be loaded"); return; }
+      if (kept.some((item) => item.status !== "ready" || !item.path)) { showToast("Remove the attachment that could not be loaded and attach it again"); return; }
       // How did the reply end while the file loaded? A Clear leaves the message in the box; a Stop or failure queues it held; a normal end queues it behind the earlier ones and it goes out in order.
       const ended = replyEnds.get(tabId) !== endAtStart ? replyEnds.get(tabId).kind : replyActive(tabId) ? null : "done";
       if (ended === "cleared") return;
@@ -250,7 +251,7 @@
     if (!item || !tab || item.state !== "waiting") return;
     const steer = replyActive(tabId);
     if (steer && (tab.pendingApprovals?.length || savePending.has(tabId))) return;
-    if (item.items.some((attachment) => attachment.released || attachment.status !== "ready" || !attachment.path)) { showToast("Remove or retry the attachment that could not be loaded"); return; }
+    if (item.items.some((attachment) => attachment.released || attachment.status !== "ready" || !attachment.path)) { showToast("Remove the attachment that could not be loaded and attach it again"); return; }
     const requestId = newChatRequestId();
     const images = item.items.filter((attachment) => attachment.kind === "image").map((attachment) => attachment.path);
     const files = item.items.filter((attachment) => attachment.kind === "file").map((attachment) => attachment.path);
@@ -309,7 +310,7 @@
       if (composerGeneration !== generation || pendingChatByTab.get(tabId) !== requestId) return; // tab switch abandons an upload still being read
       const stillAttached = queued.filter((item) => attachmentList(tabId).includes(item) && !item.released);
       if (stillAttached.some((item) => item.status !== "ready" || !item.path)) {
-        showToast("Remove or retry the attachment that could not be loaded");
+        showToast("Remove the attachment that could not be loaded and attach it again");
         settleChatRequest(request, false);
         return;
       }

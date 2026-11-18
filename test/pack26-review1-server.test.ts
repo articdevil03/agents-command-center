@@ -140,7 +140,7 @@ test("P26 trusted approval names selected reviewer and server Git ahead of misle
     }
     const before = f.journal().executions.length;
     const review = await askAction(f, "review", "Look at this code");
-    assert.match(review.item.summary, /^Action: review\nPosition: Reviewer \(reviewer2\)\nExecution: claude \/ claude-sonnet-5-5\[1m\] \/ medium\nFolder:/);
+    assert.match(review.item.summary, /^Action: review\nPosition: Reviewer\nExecution: claude \/ claude-sonnet-5-5\[1m\] \/ medium\nFolder:/);
     assert.equal(f.journal().executions.length, before, "approval creates no reservation");
     const run = await review.answer(true); assert.equal(run.ok, true, String(run.value));
     assert.equal(run.value.selectedSlot, "reviewer2", "execution uses the approved reviewer");
@@ -149,7 +149,7 @@ test("P26 trusted approval names selected reviewer and server Git ahead of misle
     const commit = await f.action("commit"); assert.equal(commit.ok, true, commit.text);
     assert.equal((await f.verify(commit.value.runId)).ok, true);
     const push = await askAction(f, "push", "Review the code");
-    assert.match(push.item.summary, /^Action: push\nPosition: Leader \(leader\)\nExecution: server Git\nFolder:/);
+    assert.match(push.item.summary, /^Action: push\nPosition: Leader\nExecution: server Git\nFolder:/);
     assert.ok(push.item.summary.endsWith("Leader brief:\nReview the code"));
     const commandsBefore = readFileSync(join(f.server.temp, "git-observed.jsonl"), "utf8");
     assert.equal((await push.answer(false)).ok, false);

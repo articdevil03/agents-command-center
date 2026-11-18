@@ -1,3 +1,4 @@
+import { plainFailure, vendorRemedy } from "./leader-common/plain-failure.ts";
 import { secretVariants, redactSecrets } from "./secret-redaction.ts";
 import type { KeyLaunch } from "./settings/cli-key.ts";
 import { readFileSync } from "node:fs";
@@ -16,7 +17,6 @@ const KILL_GRACE_MS = 200;
 const MAX_LINE = 8 * 1024 * 1024;
 // JSON-RPC / ACP error code for "sign in first" (spec: auth_required); a CLI that uses another code is still caught by its message.
 const AUTH_REQUIRED = -32000;
-const AUTH_WORDS = /auth|sign.?in|log.?in|credential|unauthori[sz]ed|api.?key|token/i;
 
 // The step line from the tool's KIND only (spec: read, edit, delete, move, search, execute, think, fetch, switch_mode, other), never its title, path, command or content.
 const KIND_STEPS: Record<string, string> = {
@@ -49,7 +49,6 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
   let child: ReturnType<AcpSpawn> | null = null;
   let nextId = 1;
   let caps: Json = {};
-  let authText = "";
   let modelName: string | null = null;
   let usage: { used: number | null; size: number | null; cost: number | null } = { used: null, size: null, cost: null };
   let messageKey = 0;
@@ -135,12 +134,16 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
     });
   }
 
-  // What to say when the CLI refuses because nobody is signed in: its own description of how to sign in (from initialize), cleaned.
+  // Known remedies are fixed app instructions, including at session start.
   function failureText(error: Json): string {
     const message = safe(error?.message, 200);
-    if (error?.code === AUTH_REQUIRED || AUTH_WORDS.test(message)) return `${name} is not signed in${authText ? `: ${authText}` : message ? `: ${message}` : ""}`;
-    return `${name} reported an error${message ? `: ${message}` : ""}`;
+    return vendorRemedy(name, message, error?.code === AUTH_REQUIRED) ?? plainFailure("ACP", "", [], sessionId ? `${name} could not finish this turn. Try again.` : `${name} could not start. Try again.`, "error-reply");
   }
+  // Only the program-lookup remedies are kept (the server turns them into a path-free message); any other start failure is plain and generic.
+  const startText = (raw: string): string => {
+    const text = plainFailure("ACP", raw, [/ was not found on PATH$/, / was found only inside a project folder \(/], `${name} could not start. Try again.`, "start");
+    return text === raw ? `${name} failed to start: ${raw}` : text;
+  };
   const asError = (error: Json): Error => Object.assign(new Error(failureText(error)), { acp: true });
 
   // The CLI asks before it does something: in Full access every request is allowed once (allow_always only when that is the one allow choice).
@@ -210,7 +213,7 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
     child.stderr?.resume();
     const gone = (): void => die(sessionId ? `${name} stopped unexpectedly; a new one will start on the next message` : `${name} exited before it started; is it installed?`);
     child.stdin?.on("error", gone); // a broken pipe while the process stays alive would strand the turn
-    child.on("error", (error) => die(`${name} could not start: ${error.message}`));
+    child.on("error", () => die(plainFailure("ACP", "", [], `${name} could not start. Try again.`, "spawn")));
     child.on("exit", gone);
     child.stdout?.on("end", gone); child.stdout?.on("close", gone);
     let buffer = "";
@@ -231,8 +234,6 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
     const init = await request("initialize", { protocolVersion: 1, clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false }, clientInfo: { name: "command-center", title: "Command Center", version: "1.0.0" } });
     if (init.protocolVersion !== 1) throw new Error(`${name} speaks ACP version ${safe(init.protocolVersion, 10)}, which this app does not support`);
     caps = init.agentCapabilities ?? {};
-    const methods: Json[] = Array.isArray(init.authMethods) ? init.authMethods : [];
-    authText = safe(methods.find((method) => method?.description)?.description ?? methods.find((method) => method?.name)?.name, 200);
     const http = caps.mcpCapabilities?.http === true;
     if (deps.bridge && deps.needHttp && !http) throw Object.assign(new Error(`${name} does not take tool servers over HTTP, so it cannot run the process (the crew tools need HTTP)`), { acp: true });
     const session = await request("session/new", {
@@ -247,7 +248,7 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
     if (typeof modelOption?.currentValue === "string") { modelName = safe(modelOption.currentValue, 100) || null; if (modelName) cb.onModel?.(modelName); }
     if (deps.bridge && !http) cb.onNotice?.(`The crew tools are not available for ${name}: it does not take tool servers over HTTP.`);
   })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, `${name} did not start within ${LEADER_START_TIMEOUT_MS / 1000} seconds`);
-  ready.catch((error: Error) => die((error as { acp?: boolean }).acp ? error.message : `${name} failed to start: ${error.message}`));
+  ready.catch((error: Error) => die((error as { acp?: boolean }).acp ? error.message : startText(error.message)));
 
   function blocks(text: string, images: string[]): Json[] {
     const parts: Json[] = [{ type: "text", text }];
@@ -280,7 +281,7 @@ export function createAcpLeader(_seat: LeaderSeat, tabFolder: string, cb: Leader
       if (reason === "end_turn") { const count = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) ? value : 0);
         if (usage.used === null && result?.usage) usage = { ...usage, used: count(result.usage.inputTokens) + count(result.usage.cachedReadTokens) || null }; endTurn(); }
       else endTurn((Object.hasOwn(STOP_TEXT, reason) ? STOP_TEXT[reason] : null) ?? `${name} stopped (${safe(reason, 40)}).`);
-    }, (error: Error) => { if (!stopped && !dead) endTurn((error as { acp?: boolean }).acp ? error.message : `leader turn failed: ${error.message}`); });
+    }, (error: Error) => { if (!stopped && !dead) endTurn((error as { acp?: boolean }).acp ? error.message : plainFailure("ACP", "", [], `${name} could not finish this turn. Try again.`, "turn")); });
   }
 
   function stop(): void {

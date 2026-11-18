@@ -9,7 +9,7 @@ row("masked", login, 'type="password" autocomplete="off"', 'type="text" autocomp
 row("secret-attribute", login, 'data-secret="true"', 'data-secret="false"');
 row("clear-before-send", login, 'clearInputs(cli);\n      if (!code)', '/* clear omitted */\n      if (!code)', settings);
 row("clear-after-send", login, 'clearInputs(cli);\n      if (!code)', 'queueMicrotask(() => clearInputs(cli));\n      if (!code)', settings);
-row("clear-on-failure", "public/first-run/login.js", "clearInputs(cli);\n      if (!code) return false;\n      input.value = \"\"; input.disabled = true;", "if (!code) return false;\n      input.disabled = true;");
+row("clear-on-failure", "public/first-run/login.js", "clearInputs(cli);\n      if (!code) { if (cli === \"opencode\") { parts.hint.textContent = REASON.invalidKey; input.disabled = false; } return false; }\n      input.value = \"\"; input.disabled = true;", "if (!code) return false;\n      input.disabled = true;");
 row("clear-other-surface", login, 'if (panel.cli === cli) panel.parts.input.value = "";', 'if (panel.cli === cli && panel.root.contains(document.activeElement)) panel.parts.input.value = "";', settings);
 row("secret-state", "public/first-run/login.js", "mine.codeSent = event.revision; // Consume before send", "mine.event.apiKey = code; mine.codeSent = event.revision; // Consume before send");
 row("secret-storage", login, 'mine.codeSent = event.revision; // Consume before send', 'localStorage.setItem("opencode-key", code); mine.codeSent = event.revision; // Consume before send');

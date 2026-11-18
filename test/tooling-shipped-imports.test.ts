@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, win32 } from "node:path";
 import path from "node:path";
 import { tmpdir } from "node:os";
@@ -10,6 +10,8 @@ import { tempRoot } from "./temp-root.ts";
 import { spawnSync } from "node:child_process";
 import { assertMatchingBuildArtifacts, isOutsideRepo, runPackagedSmoke } from "../scripts/packaged-smoke.mjs";
 import { bareImportsOf, undeclaredImports, realShippedFiles } from "./tooling-imports-helpers.ts";
+import { localImportClosure, missingFromShipped, packageScriptEntries } from "./tooling-script-graph.ts";
+import { removeOwnedTree } from "../scripts/dist-installer.mjs";
 
 const root = realpathSync(fileURLToPath(new URL("..", import.meta.url)));
 
@@ -87,9 +89,12 @@ test("standalone packaged checks require app and exe from the same explicit buil
 test("runPackagedSmoke rejects the default <root>/dist publish folder", async () => {
   const simRoot = mkdtempSync(join(realpathSync(tmpdir()), "cc-sim-repo-"));
   try {
-    mkdirSync(join(simRoot, "scripts"));
-    for (const name of ["packaged-smoke.mjs", "packaged-smoke-permissions.mjs"]) {
-      writeFileSync(join(simRoot, "scripts", name), readFileSync(join(root, "scripts", name)));
+    // The files come from the real import graph of the entry script, so a new local import is copied without editing this list.
+    const needed = localImportClosure(root, "scripts/packaged-smoke.mjs");
+    assert.ok(needed.includes("scripts/is-main.mjs"), `the import graph must reach is-main.mjs; got ${JSON.stringify(needed)}`);
+    for (const file of needed) {
+      mkdirSync(dirname(join(simRoot, file)), { recursive: true });
+      writeFileSync(join(simRoot, file), readFileSync(join(root, file)));
     }
     const app = join(simRoot, "dist", "win-unpacked", "resources", "app");
     const exe = join(simRoot, "dist", "Command Center.exe");
@@ -256,4 +261,72 @@ test("shipped dependency call site rejects round-2 constructs and undeclared rea
   const green = run();
   assert.equal(green.status, 0, green.stdout + green.stderr);
   console.log(`removed zod declaration: RED exit ${red.status}, GREEN exit ${green.status}`);
+});
+
+// Every local file an entry script imports must ship with it. Shipped = what the public export copies (git-tracked files),
+// and entries = every `node scripts/<file>` the project's own npm scripts run. Nothing here is a hand-picked list.
+test("every local import of every shipped entry script is itself shipped, and the check goes red when one is missing", () => {
+  const tracked = spawnSync("git", ["ls-files", "-z"], { cwd: root, encoding: "utf8" });
+  assert.equal(tracked.status, 0, tracked.stderr);
+  const shipped = new Set(tracked.stdout.split("\0").filter(Boolean));
+  // Plus every top-level script that guards its own start with isMain(): it is run directly too (mutation-proof, pack29-installer-proof, ...).
+  const direct = [...shipped].filter((file) => /^scripts\/[^/]+\.mjs$/.test(file) && readFileSync(join(root, file), "utf8").includes("isMain(import.meta.url)"));
+  const entries = [...new Set([...packageScriptEntries(JSON.parse(readFileSync(join(root, "package.json"), "utf8"))), ...direct])].sort();
+  assert.ok(entries.length >= 5 && entries.includes("scripts/packaged-smoke.mjs"), `entries found: ${JSON.stringify(entries)}`);
+  assert.deepEqual(missingFromShipped(root, entries, shipped), []);
+  const without = new Set([...shipped].filter((file) => file !== "scripts/is-main.mjs"));
+  const red = missingFromShipped(root, entries, without);
+  assert.ok(red.length >= 6 && red.every((line) => line.endsWith("needs scripts/is-main.mjs")), `removing is-main.mjs must flag every entry that imports it; got ${JSON.stringify(red)}`);
+  for (const dynamic of ['scripts/packaged-smoke-proof/steps-dist-1.mjs', 'scripts/sweep/main.mjs', 'scripts/sweep/run.mjs', 'scripts/sweep/lanes.mjs']) {
+    assert.ok(shipped.has(dynamic), `dynamic import target FOUND: ${dynamic}`);
+    const missing = missingFromShipped(root, entries, new Set([...shipped].filter((file) => file !== dynamic)));
+    assert.ok(missing.some((line) => line.endsWith(`needs ${dynamic}`)), `removing dynamic target must fail the shipped check: ${dynamic}; got ${JSON.stringify(missing)}`);
+  }
+});
+
+// Every P9 file the scan must cover, taken from the real folders (never a typed list).
+function p9ScanFiles(): string[] {
+  const names = (dir: string, match: RegExp) => readdirSync(join(root, dir)).filter((name) => match.test(name)).map((name) => `${dir}/${name}`);
+  return [
+    ...names('test', /^audit-p9-/),
+    ...names('build', /^installer.*\.(?:nsh|ps1)$/),
+    ...names('scripts', /^installer-.*\.mjs$/),
+    'scripts/is-main.mjs', 'scripts/pack29-installer-proof.mjs', 'scripts/mutations/audit-p9.mjs',
+    'test/tooling-script-graph.ts', 'test/tooling-shipped-imports.test.ts',
+  ].sort();
+}
+const controlBytes = (bytes: Buffer) => [...bytes].filter((byte) => byte < 32 && ![9, 10, 13].includes(byte));
+
+test('P9 test sources contain no raw control bytes', () => {
+  const files = p9ScanFiles();
+  // Control: a scan that found nothing, or lost a known file, must go RED rather than pass over an empty list.
+  assert.ok(files.length >= 15, `scan list too short: ${files.join(', ')}`);
+  for (const known of ['test/audit-p9-installer.test.ts', 'test/audit-p9-drain.ts', 'build/installer-process.ps1', 'build/installer-lifecycle.nsh', 'scripts/installer-fixtures.mjs', 'scripts/mutations/audit-p9.mjs']) assert.ok(files.includes(known), `scan list holds ${known}`);
+  for (const file of files) {
+    const bytes = readFileSync(join(root, file));
+    assert.equal(bytes.indexOf(0), -1, `raw NUL in ${file}`);
+    assert.deepEqual(controlBytes(bytes), [], `raw control bytes in ${file}`);
+  }
+});
+
+test('the control-byte scan detects a seeded bad byte in a temp copy', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'cc-p9-control-bytes-'));
+  try {
+    const copy = join(fixture, 'seeded.ts');
+    writeFileSync(copy, Buffer.concat([readFileSync(join(root, 'test/audit-p9-processes.ts')), Buffer.from([0x01, 0x00])]));
+    const bytes = readFileSync(copy);
+    assert.notEqual(bytes.indexOf(0), -1, 'seeded NUL detected');
+    assert.deepEqual(controlBytes(bytes), [1, 0]);
+  } finally { removeOwnedTree(fixture); }
+});
+
+test('local script graph follows literal dynamic imports and import(new URL) transitively', () => {
+  const fixture = mkdtempSync(join(tmpdir(), 'cc-p9-import-graph-'));
+  try {
+    writeFileSync(join(fixture, 'entry.mjs'), 'await import("./child.mjs");');
+    writeFileSync(join(fixture, 'child.mjs'), 'await import(new URL("./leaf.mjs", import.meta.url));');
+    writeFileSync(join(fixture, 'leaf.mjs'), 'export const leaf = true;');
+    assert.deepEqual(localImportClosure(fixture, 'entry.mjs'), ['child.mjs', 'entry.mjs', 'leaf.mjs']);
+    assert.deepEqual(missingFromShipped(fixture, ['entry.mjs'], new Set(['entry.mjs', 'child.mjs'])), ['entry.mjs needs leaf.mjs']);
+  } finally { removeOwnedTree(fixture); }
 });

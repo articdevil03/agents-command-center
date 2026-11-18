@@ -10,7 +10,7 @@ export const INSTALL_MESSAGES: Record<InstallReason, string> = {
   needsNode: "This tool needs Node.js and npm. Install Node.js from nodejs.org, then try again.",
   needsGit: "Kimi needs Git for Windows including Git Bash. Install it, then try again.",
   needsWinget: "This tool needs WinGet. Install it, then try again.",
-  needsPowerShell: "This tool needs a supported PowerShell installation. Install it, then try again.",
+  needsPowerShell: "This tool needs Windows PowerShell, which was not found on this PC. Restore it in Windows, then choose Try again.",
   downloadFailed: "The download failed. Check your connection and try again.",
   blockedByWindows: "Windows or an administrator blocked installation, or a non-elevated installation could not be verified.",
   notFoundAfterInstall: "The installer finished, but Command Center could not find the tool.",

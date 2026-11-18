@@ -1,36 +1,5 @@
 // Command Center page script, part 8 of 12: a crew member's view, background jobs and details. Ordered classic scripts (index.html loads public/app/*.js in name order) share one scope.
   "use strict";
-  function renderChat(tab) {
-    const messages = transcript(tab).map((message) => renderMessage(tab, message)).join("");
-    const draft = streamingByTab.get(tab.id);
-    const lead = leader(tab);
-    const step = `<span class="act" data-activity${stepByTab.get(tab.id) ? "" : " hidden"}>${esc(stepByTab.get(tab.id) ?? "")}</span>`;
-    const stream = draft ? `<div class="msg" data-stream>${seatImg(lead)}<div class="body"><span class="meta"><b>${esc(lead?.name ?? "Lead")}</b>Replying${step}</span><div class="md">${mdHtml(draft)}</div></div></div>`
-      : tab.derived?.leaderTurnActive && !tab.pendingApprovals?.length ? `<div class="msg">${seatImg(lead)}<div class="body"><span class="meta"><b>${esc(lead?.name ?? "Lead")}</b>Replying${step}</span><span class="typing" role="img" aria-label="Replying"><i></i><i></i><i></i></span></div></div>` : "";
-    // The server could not read this tab's saved transcript (the file is kept as it is): say why the chat is empty.
-    const problem = tab.chatProblem ? `<p class="action-status" data-status="failed" role="alert" data-chat-problem>This chat could not be read (${esc(tab.chatProblem)}). Clear the chat to start a new one; the damaged file is kept as a copy.</p>` : "";
-    const view = $("view");
-    const taskPanel = $("fixedView"), markup = document.createElement("template");
-    const previousScrollTop = view.scrollTop;
-    const stickToBottom = view.dataset.tabId !== tab.id || view.dataset.mode !== "chat" || view.scrollHeight - view.scrollTop - view.clientHeight <= 4;
-    if (!lead && tab.fixedCrew) {
-      markup.innerHTML = `<div class="thread" aria-label="Saved leader chat">${problem}${messages}${stream}<p class="empty-chat">Leader has no model. Choose a model for Leader in the task panel to continue.</p></div>`;
-    } else if (!messages && !stream) {
-      const name = lead?.name ?? "The leader";
-      markup.innerHTML = `<div class="thread" aria-label="Chat with ${esc(name)}">${problem}<div class="empty empty-chat">${seatImg(lead)}<h2>${esc(name)} is ready</h2><p>Tell ${esc(name)} what you want. The crew picks it up from there, and anything that needs you shows up in Needs you at the top.</p><div class="chips">${["Where did we leave off?", "What is left?", "What should we build next?"].map((text) => `<button type="button" data-suggest>${esc(text)}</button>`).join("")}</div></div></div>`;
-    } else markup.innerHTML = `<div class="thread" aria-label="Chat with ${esc(lead?.name ?? "the leader")}">${problem}${messages}${stream}</div>`;
-    for (const child of [...view.children]) if (child !== taskPanel) child.remove();
-    view.append(markup.content);
-    if (!view.contains(taskPanel)) view.prepend(taskPanel);
-    view.dataset.tabId = tab.id; view.dataset.mode = "chat";
-    view.querySelectorAll("[data-open-shot]").forEach((button) => button.addEventListener("click", () => openScreenshotViewer(tab.id, button.dataset.openShot, button)));
-    view.querySelectorAll("[data-suggest]").forEach((button) => {
-      button.disabled = chatSendLocked(tab.id) || savePending.has(tab.id);
-      button.addEventListener("click", () => { $("ci").value = button.textContent; draftsByTab.set(tab.id, $("ci").value); noteTextEdit(tab.id); updateChatLoading(tab.id); sendChat(); });
-    });
-    if (messages || stream) view.scrollTop = stickToBottom ? view.scrollHeight : previousScrollTop;
-  }
-
   // ---------- a crew member's own view, past sessions and saved runs ----------
   function historyStatus(outcome) {
     return outcome && typeof outcome === "object" && typeof outcome.status === "string" ? outcome.status : "unknown";
@@ -83,8 +52,8 @@
     return historyFailed.has(key) && !Array.isArray(runs) ? '<p class="faint">Could not load the saved runs just now. <button type="button" class="btn sm" data-history-retry>Try again</button></p>' : "";
   }
   function bindHistoryView(view, tab, seat, key) {
-    view.querySelector("[data-history-retry]")?.addEventListener("click", () => { requestHistory(tab, seat, true); renderStage(); });
-    view.querySelector("[data-full-log]")?.addEventListener("click", (event) => {
+    bindConversationEvent(view.querySelector("[data-history-retry]"), "click", () => { requestHistory(tab, seat, true); renderStage(); });
+    bindConversationEvent(view.querySelector("[data-full-log]"), "click", (event) => {
       const timestamp = Number(event.currentTarget.dataset.fullTimestamp), detailKey = `${key}:${timestamp}`;
       if (historyFullRequested.has(detailKey)) return;
       // A failed send changes nothing; each fuller-log request has its own token so an older timer cannot clear a newer request.
@@ -95,7 +64,7 @@
       renderStage();
     });
     // The list stays until the saved run arrives; only the newest pick can open (a late reply for an older pick is ignored).
-    view.querySelectorAll("[data-history-timestamp]").forEach((button) => button.addEventListener("click", () => {
+    view.querySelectorAll("[data-history-timestamp]").forEach((button) => bindConversationEvent(button, "click", () => {
       const timestamp = Number(button.dataset.historyTimestamp);
       // A failed send leaves an earlier request (and its timer) exactly as it was.
       if (!send({ type: "historyRun", seatKey: key, timestamp })) return;
@@ -107,18 +76,19 @@
       button.setAttribute("aria-busy", "true");
       const note = button.querySelector("small"); if (note) note.textContent = "Reading its saved files…";
     }));
-    view.querySelector("[data-back-history]")?.addEventListener("click", () => { const requested = historyRunRequested.get(key); historyDetails.delete(`${key}:${requested}`); historyFullRequested.delete(`${key}:${requested}`); historyRunRequested.delete(key); renderStage(); });
-    view.querySelectorAll("[data-chat-live]").forEach((button) => button.addEventListener("click", () => { selectedView = "live"; renderStage(); renderCrew(); }));
+    bindConversationEvent(view.querySelector("[data-back-history]"), "click", () => { const requested = historyRunRequested.get(key); historyDetails.delete(`${key}:${requested}`); historyFullRequested.delete(`${key}:${requested}`); historyRunRequested.delete(key); renderStage(); });
+    view.querySelectorAll("[data-chat-live]").forEach((button) => bindConversationEvent(button, "click", () => { selectedView = "live"; renderStage(); renderCrew(); }));
   }
   function renderLeaderHistory(tab, seat) {
     const view = $("view"), key = seatKeyOf(tab, seat), runs = historyBySeat.get(key);
     if (!historyRequested.has(key) && !historyFailed.has(key)) requestHistory(tab, seat);
     const requested = historyRunRequested.get(key);
     const detail = requested !== undefined ? historyDetails.get(`${key}:${requested}`) : null;
-    if (detail) { view.innerHTML = historyDetailMarkup(seat, key, detail); view.dataset.tabId = tab.id; view.dataset.mode = "history"; bindHistoryView(view, tab, seat, key); return; }
+    const sameView = view.dataset.tabId === tab.id && view.dataset.mode === "history";
+    if (detail) { paintRunView(view, historyDetailMarkup(seat, key, detail), sameView); view.dataset.tabId = tab.id; view.dataset.mode = "history"; bindHistoryView(view, tab, seat, key); return; }
     const entries = Array.isArray(runs) ? runs : [];
     const loading = !Array.isArray(runs) && historyInFlight.has(key);
-    view.innerHTML = `<div class="wv runs"><button type="button" class="back" data-chat-live data-session-action="chat">${ICONS.back}<span>Back to the chat</span></button><div class="wvhead">${seatImg(seat)}<div><b>Past sessions</b><small>${esc(seat.name)} · opening one reads its saved files, no AI is called</small></div></div>${loading ? '<p class="faint"><span class="spin" aria-hidden="true" style="margin-right:8px"></span>Loading saved runs…</p>' : historyFailure(key, runs) || `<span class="lbl">${entries.length} saved run${entries.length === 1 ? "" : "s"}</span>${historyRows(entries) || '<p class="faint">No runs yet. Save writes one.</p>'}`}${retiredRows(tab, seat)}</div>`;
+    paintRunView(view, `<div class="wv runs"><button type="button" class="back" data-chat-live data-session-action="chat">${ICONS.back}<span>Back to the chat</span></button><div class="wvhead">${seatImg(seat)}<div><b>Past sessions</b><small>${esc(seat.name)} · opening one reads its saved files, no AI is called</small></div></div>${loading ? '<p class="faint"><span class="spin" aria-hidden="true" style="margin-right:8px"></span>Loading saved runs…</p>' : historyFailure(key, runs) || `<span class="lbl">${entries.length} saved run${entries.length === 1 ? "" : "s"}</span>${historyRows(entries) || '<p class="faint">No runs yet. Save writes one.</p>'}`}${retiredRows(tab, seat)}</div>`, sameView);
     view.dataset.tabId = tab.id; view.dataset.mode = "history";
     bindHistoryView(view, tab, seat, key);
   }
@@ -171,26 +141,26 @@
     const logState = previousLog ? { id: previousLog.dataset.outputRun, top: previousLog.scrollTop, near: nearEnd(previousLog) } : null;
     const sameView = view.dataset.tabId === tab.id && view.dataset.mode === `worker:${seat.slot}`;
     const scrollTop = view.scrollTop;
-    view.innerHTML = `<div class="wv" style="gap:18px">${head}${body}</div>`;
+    paintRunView(view, `<div class="wv" style="gap:18px">${head}${body}</div>`, sameView);
     view.dataset.tabId = tab.id; view.dataset.mode = `worker:${seat.slot}`;
     view.scrollTop = sameView ? scrollTop : 0;
     const log = view.querySelector("[data-output-run]");
     if (log) { if (logState && logState.id === log.dataset.outputRun && !logState.near) log.scrollTop = logState.top; else log.scrollTop = log.scrollHeight; jumpButton(log); }
-    view.querySelector("[data-back-chat]").addEventListener("click", () => { selectedSeatByTab.set(tab.id, leader(tab)?.slot); selectedView = "live"; renderStage(); renderCrew(); });
-    view.querySelector("[data-run-seat]")?.addEventListener("click", (event) => openRunDialog(tab, seat, event.currentTarget));
-    view.querySelectorAll("[data-stop-seat]").forEach((button) => button.addEventListener("click", () => stopSeat(tab, seat)));
-    view.querySelector("[data-seat-more]")?.addEventListener("click", (event) => togglePopover($("seatPop"), event.currentTarget, () => openSeatCard(tab, seat, event.currentTarget)));
-    view.querySelector("[data-seat-unblock]")?.addEventListener("click", (event) => unblockWithConfirm(tab, seat, event.currentTarget));
-    view.querySelectorAll("[data-run-view]").forEach((button) => button.addEventListener("click", () => {
+    bindConversationEvent(view.querySelector("[data-back-chat]"), "click", () => { selectedSeatByTab.set(tab.id, leader(tab)?.slot); selectedView = "live"; renderStage(); renderCrew(); });
+    bindConversationEvent(view.querySelector("[data-run-seat]"), "click", (event) => openRunDialog(tab, seat, event.currentTarget));
+    view.querySelectorAll("[data-stop-seat]").forEach((button) => bindConversationEvent(button, "click", () => stopSeat(tab, seat)));
+    bindConversationEvent(view.querySelector("[data-seat-more]"), "click", (event) => togglePopover($("seatPop"), event.currentTarget, () => openSeatCard(tab, seat, event.currentTarget)));
+    bindConversationEvent(view.querySelector("[data-seat-unblock]"), "click", (event) => unblockWithConfirm(tab, seat, event.currentTarget));
+    view.querySelectorAll("[data-run-view]").forEach((button) => bindConversationEvent(button, "click", () => {
       selectedView = button.dataset.runView;
       if (selectedView === "history") { historyRunRequested.delete(key); requestHistory(tab, seat); }
       renderStage(); renderCrew();
       if (button.hasAttribute("data-last-history")) $("view").querySelector('[data-run-view="history"]')?.focus({ preventScroll: true });
     }));
-    view.querySelectorAll("[data-run-tab]").forEach((button) => button.addEventListener("click", () => { selectedRunBySeat.set(seat.slot, button.dataset.runTab); renderStage(); }));
-    view.querySelectorAll("[data-stop-run]").forEach((button) => button.addEventListener("click", () => killRun(button.dataset.stopRun)));
-    view.querySelector("[data-jump-log]")?.addEventListener("click", () => { const pre = view.querySelector("[data-output-run]"); if (pre) { pre.scrollTop = pre.scrollHeight; jumpButton(pre); } });
-    view.querySelector("[data-output-run]")?.addEventListener("scroll", (event) => jumpButton(event.currentTarget));
+    view.querySelectorAll("[data-run-tab]").forEach((button) => bindConversationEvent(button, "click", () => { selectedRunBySeat.set(seat.slot, button.dataset.runTab); renderStage(); }));
+    view.querySelectorAll("[data-stop-run]").forEach((button) => bindConversationEvent(button, "click", () => killRun(button.dataset.stopRun)));
+    bindConversationEvent(view.querySelector("[data-jump-log]"), "click", () => { const pre = view.querySelector("[data-output-run]"); if (pre) { pre.scrollTop = pre.scrollHeight; jumpButton(pre); } });
+    bindConversationEvent(view.querySelector("[data-output-run]"), "scroll", (event) => jumpButton(event.currentTarget));
     if (historyOpen) bindHistoryView(view, tab, seat, key);
     restoreRunViewFocus(view, focused, historyOpen ? "history" : "live");
   }

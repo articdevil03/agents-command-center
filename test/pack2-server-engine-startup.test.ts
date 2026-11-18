@@ -46,7 +46,7 @@ test("a run settled without an end time ends now, not at its own start", () => {
 // The rule both sides report: the server refuses only a path no worker can run in (not absolute, climbing out with "..", control
 // characters, a path that does not exist or is not a folder). Parentheses, & ^ % in a name and a drive root are fine: the runner puts
 // the folder in the environment and quotes a trailing backslash, so every folder the server accepts can be launched in.
-test("the folder rule: ( ) & ^ % in a name and a drive root are accepted for a tab; a relative, climbing, control-character, missing or file path is refused", async () => {
+test("the folder rule: ( ) & ^ % in a name is accepted and a drive root is refused for a tab; a relative, climbing, control-character, missing or file path is refused", async () => {
   const data = makeData();
   const work = mkdtempSync(join(tmpdir(), "cc-pack2-folders-"));
   const odd = join(work, "My App (v2) & Co ^ 100%");
@@ -66,8 +66,8 @@ test("the folder rule: ( ) & ^ % in a name and a drive root are accepted for a t
     assert.equal(await addTab(odd, "f_odd"), "added", "( ) & ^ % in the name");
     assert.ok(tabsOf().some((tab: any) => tab.folder === odd));
     assert.match(driveRoot, /^[A-Za-z]:\\$/, "the temp folder sits on a lettered drive, so the drive-root checks below always run");
-    assert.equal(await addTab(driveRoot, "f_root"), "added", `a drive root (${driveRoot})`);
-    assert.ok(tabsOf().some((tab: any) => tab.folder === driveRoot));
+    assert.match(((await addTab(driveRoot, "f_root")) as any).message, /Choose a project folder/);
+    assert.equal(tabsOf().some((tab: any) => tab.folder === driveRoot), false);
     const refused = async (folder: string, requestId: string, pattern: RegExp) => assert.match(((await addTab(folder, requestId)) as any).message, pattern, requestId);
     await refused("relative\\dir", "f_rel", /absolute directory path/);
     await refused(work + "/../x", "f_dots", /without traversal/);

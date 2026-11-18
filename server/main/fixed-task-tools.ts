@@ -19,7 +19,7 @@ import { announceFolderBusy } from "./launch-gates.ts";
 import { executeFixedGit, fixedGitOperations } from "./fixed-task-actions.ts";
 import { applyTaskEvent, fixedExecution, fixedArchiveRuntimeBlocked, isCurrentFixedLeader, requireFixedAssignment, selectFixedExecution, reserveFixedExecution, rejectFixedLaunch, type FixedLeaderActor } from "./fixed-task-launch.ts";
 import { listTaskArchives, readTaskArchive, readExecutionArchive, optionalArchiveBytes, readArchiveBytes } from "../fixed-crew/task-archive-files.ts";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { completionExecutions } from "../fixed-crew/task-journal-archive.ts";
 import { effectiveMode, tabLocation } from "./tabs.ts";
 import { dataRoot, fixedTasks, leaders, runRecords, launchSafety } from "./state.ts";
@@ -113,7 +113,11 @@ export function reconcileTaskExecution(actor: FixedLeaderActor, expected: Expect
     && JSON.stringify(readJournalSnapshot(dataRoot, actor.tabId)) === JSON.stringify(journal)
     && JSON.stringify(JSON.parse(readArchiveBytes(join(dataRoot, "tasks", `${actor.tabId}.json`)).toString("utf8"))) === JSON.stringify(task);
   const acceptedPlanner = journalOnly && (execution.consumed || !!task?.coordinatorSessions.includes(runId));
-  if (acceptedPlanner || !journalOnly && execution.consumed || run?.verified || !(refusedStart || unusedPlanner && ["done", "failed"].includes(execution.status) || execution.status === "interrupted" || run?.status === "interrupted" || operation && !operation.finalized && operation.terminal)) {
+  // Successful process exit is not accepted evidence. Abandon a report that
+  // cannot be ingested while its task action still awaits a result.
+  const unacceptedWorker = !journalOnly && execution.status === "done" && (run?.status === "running" || run?.status === "success" && run.processEnd === "confirmed")
+    && !["checkpoint", "commit", "push", "publish"].includes(execution.kind);
+  if (acceptedPlanner || !journalOnly && execution.consumed || run?.verified || !(refusedStart || unacceptedWorker || unusedPlanner && ["done", "failed"].includes(execution.status) || execution.status === "interrupted" || run?.status === "interrupted" || operation && !operation.finalized && operation.terminal)) {
     throw new Error("No interrupted execution or finalization brake to reconcile.");
   }
   // Publish the exact brake FIRST. A failed task write must keep all tabs held.
@@ -122,7 +126,7 @@ export function reconcileTaskExecution(actor: FixedLeaderActor, expected: Expect
   saveJournal(dataRoot, actor.tabId, journal);
   // A failed journal publication can leave this exact failed task disposition.
   // A fresh retry completes it without re-running the action or re-applying evidence.
-  const taskSettled = run?.status === "failed" && run.processEnd === "confirmed" && !run.verified && !run.evidence.length && run.resultRevision === null;
+  const taskSettled = run?.status === "failed" && run.processEnd === "confirmed" && !run.verified && !run.evidence.length;
   if (task && run && !taskSettled) applyTaskEvent(actor.tabId, task,
     { type: "reconcile", executionId: runId, processEnd: "confirmed", reason }, fixedTasks.actor("leader", actor.sessionId));
   execution.status = "failed"; execution.consumed = true;
@@ -149,8 +153,14 @@ export async function launchFixedAction(actor: FixedLeaderActor, expected: Expec
   const kind = typeof action === "object" ? action.kind : action;
   const git = ["checkpoint", "commit", "push"].includes(kind);
   const position = FIXED_CREW.find((seat) => seat.slot === selection.selectedSlot)!;
-  const summary = `Action: ${kind}\nPosition: ${position.role} (${selection.selectedSlot})\nExecution: ${git ? "server Git" : `${selection.assignment.cli} / ${selection.assignment.model} / ${selection.assignment.effort}`}\nFolder: ${tabLocation(actor.tabId)!.tab.folder}\n\nLeader brief:\n${brief}`;
-  if (effectiveMode(actor.tabId) === "ask" || liveMode() === "default") {
+  if (["check", "visualCheck"].includes(kind) && selection.assignment.cli.startsWith("acp:")) throw new Error(
+    `The ${position.role} position in ${tabLocation(actor.tabId)!.tab.name} cannot run checks with this CLI. Choose a Claude, OpenCode or Codex position for checks.`);
+  const folderName = basename(tabLocation(actor.tabId)!.tab.folder.replace(/\\/g, "/"));
+  const commandAccess = ["check", "visualCheck"].includes(kind)
+    ? `\nThis position will run commands and may write files in ${folderName}.` : "";
+  const summary = `Action: ${kind}\nPosition: ${position.role}\nExecution: ${git ? "server Git" : `${selection.assignment.cli} / ${selection.assignment.model} / ${selection.assignment.effort}`}\nFolder: ${folderName}${commandAccess}\n\nLeader brief:\n${brief}`;
+  if (effectiveMode(actor.tabId) === "ask" || liveMode() === "default"
+    || ["check", "visualCheck"].includes(kind) && effectiveMode(actor.tabId) === "accept") {
     const allow = await askApproval(actor.tabId, { kind: "leader", instance: actor.instance }, "fixed-action", { command: summary });
     if (!allow) throw new Error("The owner denied this action.");
   }
@@ -280,16 +290,16 @@ export function fixedLeaderSpecs(tabId: string, instance: object): LeaderToolSpe
       { kind: z.enum(["task", "execution"]), id: z.string() },
       ({ kind, id }) => { archiveTabReady(); return kind === "task" ? readTaskArchive(dataRoot, tabId, id) : readExecutionArchive(dataRoot, tabId, id); }),
     tool("get_fixed_task", "Read the current saved task, approval state and identified execution reports. processEnded is the app's persisted whole-process-tree confirmation, not a root exit or model assertion. Read before every mutation.", {}, () => ({ task: fixedTasks.get(tabId), executions: executionJournal(dataRoot, tabId).executions })),
-    tool("reconcile_task_execution", "Abandon an identified journal-backed execution only after app-confirmed process end, or cancel an authenticated task-only reservation proven never admitted. Unknown tree end stays held. No force or action replay; read get_fixed_task first.",
+    tool("reconcile_task_execution", "Abandon an identified execution after app-confirmed process end, including a successful worker whose report was rejected or stale. Records failure, never successful evidence. Can also cancel a reservation proven never started. Unknown tree end stays held. Read get_fixed_task first.",
       { expected: expectedShape, runId: z.string().min(1).max(128), reason: z.string().trim().min(1).max(8192) },
       ({ expected, runId, reason }) => reconcileTaskExecution(actor, expected, runId, reason)),
-    tool("begin_planning", "Ask the assigned read-only Planner for a plan or finding triage. It has no launch tools.",
+    tool("begin_planning", "Ask the assigned read-only Planner for a plan or finding triage. It has no launch tools. Publishing is not supported here; ship with commit and push only.",
       { expected: expectedShape, brief: z.string().min(1).max(200_000), triage: z.boolean().optional() },
       ({ expected, brief, triage }) => launchFixedAction(actor, expected, triage ? "triage" : "planning", brief)),
     tool("accept_planner_report", "Accept only the structured report bound to the identified ended Planner run. Never supply a path or invented result.",
       { expected: expectedShape, runId: z.string() }, ({ expected, runId }) => acceptPlannerReport(actor, expected, runId)),
     tool("request_task_action", "Request one action through the approved task gate. The server selects the assigned position and starts a fresh run. Shipping is limited to the approved scope.",
-      { expected: expectedShape, kind: z.enum(["assist", "rough", "build", "polish", "check", "visualCheck", "inspect", "review", "checkpoint", "fix", "final", "commit", "push", "publish"]),
+      { expected: expectedShape, kind: z.enum(["assist", "rough", "build", "polish", "check", "visualCheck", "inspect", "review", "checkpoint", "fix", "final", "commit", "push"]),
         route: z.enum(["normal", "minimal", "postFinal"]).default("normal"), change: z.enum(["none", "minimal", "logic"]).default("none"), brief: z.string().min(1).max(200_000), reservedExecutionId: z.string().optional() },
       ({ expected, kind, route, change, brief, reservedExecutionId }) => launchFixedAction(actor, expected, { kind, route, change }, brief, undefined, reservedExecutionId)),
     tool("verify_task_evidence", "Record your independent verification of the identified successful, ended, current run. Findings and coverage come from that run's report.",

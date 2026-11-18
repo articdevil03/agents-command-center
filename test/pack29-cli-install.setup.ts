@@ -32,9 +32,18 @@ export function fixture(rootDir = logRoot) {
       for (const name of readdirSync(dir)) {
         const path = join(dir, name), info = lstatSync(path);
         assert.equal(info.isSymbolicLink(), false, path);
-        if (info.isDirectory()) remove(path); else unlinkSync(path);
+        if (info.isDirectory()) remove(path); else retryBusy(() => unlinkSync(path));
       }
-      assert.deepEqual(readdirSync(dir), []); rmdirSync(dir);
+      assert.deepEqual(readdirSync(dir), []); retryBusy(() => rmdirSync(dir));
+    };
+    // Windows can hold a folder for a moment after a child that used it has ended (indexer, scanner): retry only a busy or denied removal, briefly, then fail with the real error.
+    const retryBusy = (action: () => void) => {
+      for (let attempt = 0; ; attempt++) {
+        try { action(); return; } catch (error: any) {
+          if (attempt >= 40 || (error?.code !== "EBUSY" && error?.code !== "EPERM")) throw error;
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
+        }
+      }
     };
     remove(root);
   };

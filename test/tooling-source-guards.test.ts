@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { mutations, COPIED_PATHS, hasDesignFolder, isRealRed, removeWithRetry } from "../scripts/mutation-proof.mjs";
-import { tempRoot } from "./temp-root.ts";
+import { runOwnedProof } from "./audit-p9-processes.ts";
 import { harnessSource } from "./source-text.ts";
 import { spawn, spawnSync } from "node:child_process";
 
@@ -45,8 +45,10 @@ test("browser tests remove their temp folder even when stopServer rejects, and t
 
 // scripts/live-null-check.mjs runs a copy of itself against a stand-in server/index.ts that accepts the socket and never answers: with the script's
 // 10 s limit cut to 1.5 s in the copy, the limit must end the waits, so the script exits non-zero, stops the server and removes its data folder.
-test("live-null-check: a server that stops answering ends the script at its time limit, with the server stopped and the data folder removed", { timeout: 60_000 }, () => {
-  const dir = tempRoot();
+test("live-null-check: a server that stops answering ends the script at its time limit, with the server stopped and the data folder removed", { timeout: 60_000 }, async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cc-p9-live-null-'));
+  try {
+  cpSync(join(root, 'node_modules/ws'), join(dir, 'node_modules/ws'), { recursive: true });
   mkdirSync(join(dir, "scripts")); mkdirSync(join(dir, "server"));
   const original = readFileSync(join(root, "scripts/live-null-check.mjs"), "utf8");
   assert.ok(original.includes("}, 10000);"), "the script's time limit is where this test expects it");
@@ -62,18 +64,20 @@ test("live-null-check: a server that stops answering ends the script at its time
   // The script gets its own TEMP/TMP, so the only cc-live-null-* folders in it are this invocation's.
   const privateTmp = join(dir, "tmp"); mkdirSync(privateTmp);
   const folders = () => readdirSync(privateTmp).filter((name) => name.startsWith("cc-live-null-"));
-  const run = spawnSync(process.execPath, ["scripts/live-null-check.mjs"], { cwd: dir, encoding: "utf8", timeout: 20_000, windowsHide: true, env: { ...process.env, TEMP: privateTmp, TMP: privateTmp } });
+  const run = await runOwnedProof(process.execPath, ["scripts/live-null-check.mjs"], dir, { cwd: dir, timeoutMs: 20000, env: { ...process.env, TEMP: privateTmp, TMP: privateTmp } });
   const pidFile = join(dir, "server.pid");
   const serverPid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8")) : 0;
   const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   const stoppedByScript = serverPid > 0 && !alive(serverPid);
   const output = `${run.stdout}\n${run.stderr}`;
   assert.equal(run.error, undefined, `the script did not hang past 20 s: ${run.error?.message}\n${output}`);
+  assert.deepEqual(run.cleanupKilled, [], 'the script stopped its own server\n' + output);
   assert.notEqual(run.status, 0, `the script fails when the server stops answering\n${output}`);
   assert.match(output, /timed out/);
   assert.ok(serverPid > 0, "the stand-in server started");
   assert.equal(stoppedByScript, true, "the script stopped the server itself");
-  assert.deepEqual(folders(), [], "the script's data folder was removed");
+  assert.deepEqual(folders(), [], "the script's data folder was removed\n" + output);
+  } finally { assert.ok(removeWithRetry(dir)); }
 });
 
 // design/simple/mutate.py counts a mutation as caught only by a finished run with a real failed check; --check-parser runs those rules with no browser.

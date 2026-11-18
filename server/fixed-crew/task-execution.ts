@@ -19,7 +19,7 @@ export function assertJournalCapacity(count: number): void {
   if (!journalHasCapacity(count)) throw new Error("Fixed execution journal capacity (2,000) reached; no safe settled entries can be reclaimed.");
 }
 const journals = new Map<string, Journal>();
-const fileFor = (root: string, tabId: string) => { id(tabId); const file = join(root, "executions", `${tabId}.json`); refuseLinks(file); return file; };
+const fileFor = (root: string, tabId: string) => { id(tabId); const file = join(root, "executions", `${tabId}.json`); refuseLinks(file, root); return file; };
 export function invalidateJournal(root: string, tabId: string): void { journals.delete(fileFor(root, tabId)); }
 export function readJournalSnapshot(root: string, tabId: string): Journal {
   const file = fileFor(root, tabId);

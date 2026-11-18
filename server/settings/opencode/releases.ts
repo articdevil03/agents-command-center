@@ -4,9 +4,13 @@ import { RELEASE_TOOLS, type ReleaseTool } from "./release-tools.ts";
 
 export const RELEASE_API = "https://api.github.com/repos/anomalyco/opencode/releases";
 export const DOWNLOAD_LIMIT = 128 * 1024 * 1024;
+export const RATE_LIMIT_MESSAGE = "GitHub is limiting requests right now. Wait a few minutes, then choose Try again.";
 export class ReleaseFailure extends Error {
   readonly transport: boolean;
-  constructor(transport = false) { super("OpenCode release verification failed"); this.transport = transport; }
+  readonly rateLimited: boolean;
+  constructor(transport = false, rateLimited = false) {
+    super("OpenCode release verification failed"); this.transport = transport; this.rateLimited = rateLimited;
+  }
 }
 export type ReleaseAsset = { version: string; url: string; size: number; hash: string };
 export function operationSignal(signal: AbortSignal, deadline: number): AbortSignal {
@@ -45,7 +49,12 @@ export async function request(transport: InstallTransport, url: string, signal: 
     try { response = await transport(url, { signal, redirect: "manual", headers: { Accept: "application/octet-stream", "User-Agent": "Command-Center" } }); }
     catch { signal.throwIfAborted(); throw new ReleaseFailure(true); }
   }
-  if (!response.ok) { await response.body?.cancel(); throw new ReleaseFailure(response.status >= 500 || response.status === 429); }
+  if (!response.ok) {
+    const rateLimited = safeAddress(url, false, tool) && (response.status === 429 ||
+      response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0" || response.headers.has("retry-after"));
+    await response.body?.cancel();
+    throw new ReleaseFailure(!rateLimited && (response.status >= 500 || response.status === 429), rateLimited);
+  }
   if (!response.body) throw new ReleaseFailure();
   return response;
 }

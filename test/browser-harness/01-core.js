@@ -115,7 +115,8 @@
   const openChatMenu = () => { showChat(); if ($("ctxPop").hidden) $("chatMore").click(); return requireElement('#ctxPop[aria-hidden="false"]'); };
   const pressEscape = () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
   // Confirmations are the app's own dialog now: answer it the way window.confirm used to be answered, and record what it asked.
-  const confirmIfAsked = () => {
+  const confirmIfAsked = async () => {
+    await new Promise(resolve => setTimeout(resolve, 450));
     if ($("confirmModal").hidden) return false;
     window.__ccConfirms.push(`${text("#confirmTitle")} ${text("#confirmBody")}`);
     if (window.__ccConfirmResult === false) $("confirmCancel").click();

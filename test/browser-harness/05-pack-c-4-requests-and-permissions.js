@@ -49,7 +49,7 @@
     check(`Needs you returns focus to its opener at ${innerWidth}px`, requestsFocusRestored, { focused: document.activeElement?.id, opener: requestOpener.id, closed: $("inboxPop").hidden });
     return devLeader;
   };
-  const checkPermissionPicker = (markUnique, devLeader) => {
+  const checkPermissionPicker = async (markUnique, devLeader) => {
     let before;
     const permissionStart = window.__sent.length;
     const permissionButton = $("permBtn"); permissionButton.focus(); permissionButton.click();
@@ -68,7 +68,7 @@
     check(`Pack C permission picker matches approved labels and descriptions at ${innerWidth}px`, permissionLook, { heading: text("#permPop .lbl"), matchedPermissions, removedSavedFooter: !text("#permPop").includes("Saved mode:") });
     window.__ccConfirmResult = false; before = window.__sent.length;
     requireElement('[data-permission-mode="bypass"]').click();
-    const bypassDenied = confirmIfAsked() && !window.__sent.slice(before).some((item) => item.type === "setPermissionMode");
+    const bypassDenied = await confirmIfAsked() && !window.__sent.slice(before).some((item) => item.type === "setPermissionMode");
     window.__ccConfirmResult = true;
     $("permBtn").click(); requireElement('#permPop [data-permission-mode="plan"]').click();
     const permission = window.__sent.slice(permissionStart).find((item) => item.type === "setPermissionMode");
@@ -78,7 +78,7 @@
     const permissionFailed = $("permBtn").textContent.includes("Not changed") && $("permBtn").title.includes("Permission change refused by the server") && !$("permBtn").disabled;
     const permissionFocusRestored = document.activeElement === $("permBtn");
     $("permBtn").click(); window.__ccConfirmResult = true;
-    requireElement('[data-permission-mode="bypass"]').click(); confirmIfAsked();
+    requireElement('[data-permission-mode="bypass"]').click(); await confirmIfAsked();
     const bypass = window.__sent.slice(permissionStart).filter((item) => item.type === "setPermissionMode").at(-1);
     const bypassRunning = $("permBtn").disabled && $("permBtn").textContent.includes("Applying");
     const bypassExact = bypass?.tabId === "alpha-dev" && bypass.mode === "bypass" && bypass.confirm === true && markUnique(bypass.requestId);

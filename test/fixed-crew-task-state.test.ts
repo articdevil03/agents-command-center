@@ -13,7 +13,7 @@ test("FCT approval check review and stage setters form a complete lifecycle", (t
   f.run("build"); f.run("check", { checkName: "unit" }); assert.equal(f.get().checks.length, 1);
   assert.doesNotThrow(() => f.apply({ type: "stage", stage: "review" })); assert.equal(f.get().stage, "review");
   f.run("review"); assert.equal(f.get().reviews.length, 1);
-  for (const kind of ["commit", "push", "publish"] as const) f.run(kind);
+  for (const kind of ["commit", "push"] as const) f.run(kind);
   f.apply({ type: "stage", stage: "complete" }); assert.equal(f.get().stage, "complete");
 });
 test("FCT visible rough approval is revision bound and does not spawn", (t) => {
@@ -51,8 +51,8 @@ nodeTest("FCT browser dispatch limits authority and broadcasts only compact task
   await assert.doesNotReject(async () => {
     const f = fixture(t), copy = tempRoot(["server"]);
     const load = (file: string) => import(pathToFileURL(join(copy, "server", file)).href);
-    const { modules: { state, config, messages, broadcast, tasks } } = await importWithTempDataRoot(async () => ({
-      state: await load("main/state.ts"), config: await load("config.ts"), messages: await load("main/messages/index.ts"), broadcast: await load("main/broadcast.ts"), tasks: await load("main/fixed-tasks.ts"),
+    const { modules: { state, config, messages, broadcast, tasks, sessions } } = await importWithTempDataRoot(async () => ({
+      state: await load("main/state.ts"), config: await load("config.ts"), messages: await load("main/messages/index.ts"), broadcast: await load("main/broadcast.ts"), tasks: await load("main/fixed-tasks.ts"), sessions: await load("main/leader-session.ts"),
     }));
     const workspace = config.defaultWorkspaces(f.project); workspace.projects[0].tabs[0].id = "tab1";
     state.setWorkspaces(workspace); state.setSelectedTabId("tab1"); state.setFixedTasks(f.store); state.setDataRoot(f.root);
@@ -64,6 +64,11 @@ nodeTest("FCT browser dispatch limits authority and broadcasts only compact task
       installed: null, version: null, signedIn: null, registered: false, leaderEligible: false, connection: "unknown",
     }]));
     state.setSettingsService({ state: { tools: { claude: {}, codex: {}, opencode: {} }, catalogTools, permissionActions: {}, uploads: {}, vault: { path: null, status: "disconnected" } }, installer: { busy: false }, login: { busy: false }, models: { busy: false }, snapshot: () => ({}), permissionMode: () => "ask" });
+    state.setFolderActivity({ beginOwn: () => 0, endOwn() {}, watchFolders() {} } as any);
+    // Keep the permission/dispatch test at its transport boundary, without a vendor start.
+    state.leaders.set("tab1", { isDead: () => false, send() {}, stop() {} } as any);
+    sessions.leaderVaultPaths.set("tab1", null);
+    state.fixedLeaderSettings.set("tab1", sessions.fixedLeaderSignature("tab1"));
     const replies: any[] = [], socket = { send: (raw: string) => replies.push(JSON.parse(raw)) };
     const dispatch = (type: string, extra: Record<string, unknown> = {}) => {
       messages.handleMessage(socket, JSON.stringify({ type, requestId: `browser${replies.length}`, tabId: "tab1", ...extra })); return replies.at(-1);

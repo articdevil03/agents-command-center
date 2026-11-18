@@ -41,6 +41,7 @@
         input.autocomplete = "off"; input.spellcheck = false;
         if (field.placeholder) input.placeholder = field.placeholder;
         if (field.kind === "choice") {
+          const placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = "Choose..."; input.append(placeholder);
           for (const choice of field.choices) { const option = document.createElement("option"); option.value = choice.value; option.textContent = choice.label; input.append(option); }
         } else { input.type = field.kind === "secret" ? "password" : "text"; input.maxLength = field.maxLength; }
         input.required = field.required === true;
@@ -59,7 +60,7 @@
       button("Cancel", "cancel", formActions).onclick = () => {
         if (busy(cli)) return;
         pending.delete(cli); panel.dataset.open = "false"; clear(panel); update(cli, panel);
-        panel.querySelector(`[data-key-act="${facts(cli)?.keySaved ? "replace" : "add"}"]`)?.focus();
+        panel.querySelector(`[data-key-act="${facts(cli)?.keySaved || facts(cli)?.keyUnreadable ? "replace" : "add"}"]`)?.focus();
       };
       form.addEventListener("submit", (event) => { event.preventDefault(); send(cli, panel, false); });
       panel.append(status, actions, form);
@@ -67,16 +68,17 @@
     }
     function update(cli, panel) {
       const request = pending.get(cli), result = request?.id ? page.actionStateFor(request.id) : null;
-      const working = busy(cli), saved = facts(cli)?.keySaved === true;
+      const working = busy(cli), saved = facts(cli)?.keySaved === true, unreadable = facts(cli)?.keyUnreadable === true;
+      const existing = saved || unreadable;
       if (result?.status === "done") { panel.dataset.open = "false"; clear(panel); }
       const status = panel.querySelector(".cli-key-status");
-      status.textContent = request?.error || (result?.status === "failed" || result?.status === "unknown" ? result.message || "Could not save. Try again." : working ? "Saving..." : saved ? SAVED : "");
+      status.textContent = request?.error || (result?.status === "failed" || result?.status === "unknown" ? result.message || "Could not save. Try again." : working ? "Saving..." : unreadable ? "The saved key for this tool cannot be read. Replace it or remove it here." : saved ? SAVED : "");
       const open = panel.dataset.open === "true";
       panel.querySelector("form").hidden = !open;
       for (const button of panel.querySelectorAll("button")) {
         button.disabled = working;
         const act = button.dataset.keyAct;
-        button.hidden = act === "add" ? saved || open : act === "replace" ? !saved || open : act === "remove" ? !saved : false;
+        button.hidden = act === "add" ? existing || open : act === "replace" ? !existing || open : act === "remove" ? !existing : false;
       }
     }
     function updateAll(cli) { for (const [key, panel] of panels) if (key.endsWith(":" + cli)) update(cli, panel); }

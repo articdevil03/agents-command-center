@@ -113,7 +113,7 @@ test("FCX a rejected real runner start leaves no stall tracker, context, notice 
     const before = modules.journal.executionJournal(root, tab.id);
     assert.equal(before.executions.length, 0);
     await assert.rejects(modules.tools.launchFixedAction(actor, null, "planning", "rejected brief"), {
-      message: `buildCommand: refusing invalid model for "${tab.id}.planner": ${unavailable.model}`,
+      message: `buildCommand: refusing invalid model for the Planner position: ${unavailable.model}`,
     });
     const journal = modules.journal.executionJournal(root, tab.id);
     assert.equal(journal.executions.length, 1, "fixed execution was reserved before real runner refusal");

@@ -4,17 +4,22 @@ import { join } from "node:path";
 import { dataRoot, liveFilesProtected, publishConfigFile } from "../config-files.ts";
 import { backupInventory, copyBackup, hashBytes, noLinks, saveRecoveryRecord, verifyBackup, type BackupEntry } from "./recovery-backup.ts";
 import type { Workspaces } from "../config.ts";
+import { readFileWithRetry } from "../safe-file.ts";
 
 type RecoveryRecord = { version: 1; status: "prepared" | "complete"; archive: string; entries: BackupEntry[]; freshBytes: string };
 export type RecoveryState = { blocked: boolean; recovered: boolean; notice?: string; archive?: string };
 let state: RecoveryState = { blocked: false, recovered: false };
+let launchSafetyHeld = false;
+export function holdLaunchSafety(held = true): void { launchSafetyHeld = held; }
 export function workspaceRecovery(): RecoveryState { return { ...state }; }
-export function blockWorkspaceRecovery(): void {
-  state = { ...state, blocked: true, notice: "Workspace unavailable. Your old files have been kept. Recovery could not safely finish. Check the data folder and restart Command Center." };
+export function blockWorkspaceRecovery(notice = "Workspace unavailable. Your old files have been kept. Recovery could not safely finish. Check the data folder and restart Command Center."): void {
+  state = { ...state, blocked: true, notice };
 }
 export function assertWorkspaceRecoveryReady(operation: string): void {
   if (state.blocked) throw new Error(`${state.notice} (${operation})`);
+  if (launchSafetyHeld && operation !== "workspace") throw new Error("Launch safety is held because earlier process history could not be read. No process has been confirmed ended. Your saved tasks are available to inspect.");
 }
+export function restoreWorkspaceRecovery(previous: RecoveryState): void { state = { ...previous }; }
 export function assertTaskRecoveryReady(): void { assertWorkspaceRecoveryReady("task-action"); }
 
 // Presence is the discriminator. Damaged fixed preferences are handled by the
@@ -34,16 +39,16 @@ export function workspaceFormat(bytes: string | null): "missing" | "old" | "fixe
   }
   return old ? future ? "future-mixed" : "old" : "fixed";
 }
-function optionalBytes(path: string): string | null {
-  noLinks(path);
-  try { return readFileSync(path, "utf8"); }
+function optionalBytes(path: string, root: string): string | null {
+  noLinks(path, root);
+  try { return readFileWithRetry(path).toString("utf8"); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 function freshId(root: string, entries: BackupEntry[], uuid: () => string): string {
   const sourceText = entries.filter((entry) => entry.sha256 && !entry.path.startsWith("avatars/"))
     .map((entry) => readFileSync(join(root, entry.path), "utf8")).join("\n");
   const histories = ["chats", "logs", "tasks", "executions"].flatMap((folder) => {
-    const dir = join(root, folder); noLinks(dir);
+    const dir = join(root, folder); noLinks(dir, root);
     try { return readdirSync(dir).map((name) => name.toLowerCase()); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   });
@@ -55,8 +60,8 @@ function freshId(root: string, entries: BackupEntry[], uuid: () => string): stri
   }
   throw new Error("Could not allocate a history-free workspace identity.");
 }
-function readRecord(path: string): RecoveryRecord | null {
-  const bytes = optionalBytes(path);
+function readRecord(path: string, root: string): RecoveryRecord | null {
+  const bytes = optionalBytes(path, root);
   if (bytes === null) return null;
   const record = JSON.parse(bytes) as RecoveryRecord;
   if (record.version !== 1 || !["prepared", "complete"].includes(record.status)
@@ -71,20 +76,21 @@ function readRecord(path: string): RecoveryRecord | null {
 }
 function hasLogEntries(root: string): boolean {
   const logs = join(root, "logs");
-  noLinks(logs);
+  noLinks(logs, root);
   try { return readdirSync(logs).length > 0; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
 export function recoverWorkspace(root: string, defaults: (folder: string) => Workspaces, uuid: () => string = randomUUID): RecoveryState {
   const workspace = join(root, "config", "workspaces.json"), marker = join(root, "config", "fixed-crew-recovery.json");
   try {
-    noLinks(root);
-    let record = readRecord(marker);
+    noLinks(root, root);
+    for (const folder of ["config", "tasks", "executions", "backups"]) noLinks(join(root, folder), root);
+    let record = readRecord(marker, root);
     if (record?.status === "complete") {
-      if (workspaceFormat(optionalBytes(workspace)) !== "fixed") throw new Error("Completed workspace is missing or was replaced with legacy data.");
+      if (workspaceFormat(optionalBytes(workspace, root)) !== "fixed") throw new Error("Completed workspace is missing or was replaced with legacy data.");
       return { blocked: false, recovered: true, archive: join(root, "backups", record.archive) };
     }
-    const current = optionalBytes(workspace), format = workspaceFormat(current);
+    const current = optionalBytes(workspace, root), format = workspaceFormat(current);
     const priorData = () => ["config/projects.json", "config/setups.json", "config/launch-safety.json", "requests.json", "chats", "tasks", "executions", "avatars"]
       .some((path) => existsSync(join(root, path))) || hasLogEntries(root);
     if (!record && (format === "fixed" || format === "missing" && !priorData())) return { blocked: false, recovered: false };
@@ -96,20 +102,20 @@ export function recoverWorkspace(root: string, defaults: (folder: string) => Wor
       fresh.projects[0].folder = join(root, "example-project", id);
       fresh.projects[0].tabs[0].folder = fresh.projects[0].folder;
       const archive = `fixed-crew-v1-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
-      noLinks(join(root, "backups"));
+      noLinks(join(root, "backups"), root);
       mkdirSync(join(root, "backups"), { recursive: true });
       mkdirSync(join(root, "backups", archive));
       record = { version: 1, status: "prepared", archive, entries, freshBytes: JSON.stringify(fresh, null, 2) + "\n" };
-      saveRecoveryRecord(marker, record);
+      saveRecoveryRecord(marker, record, root);
     }
     const archive = join(root, "backups", record.archive);
-    noLinks(archive);
+    noLinks(archive, root);
     // After publication, restart may only finish the journal, never recopy the
     // new workspace over its old backup or allocate another history identity.
     const published = current !== null && hashBytes(current) === hashBytes(record.freshBytes);
-    if (!published) copyBackup(root, archive, record.entries);
-    verifyBackup(archive, record.entries);
-    saveRecoveryRecord(join(archive, "manifest.json"), record);
+    if (!published) copyBackup(root, archive, record.entries, root);
+    verifyBackup(archive, record.entries, root);
+    saveRecoveryRecord(join(archive, "manifest.json"), record, root);
     const expected = record.entries.map((entry) => published && entry.path === "config/workspaces.json"
       ? { ...entry, size: Buffer.byteLength(record!.freshBytes), sha256: hashBytes(record!.freshBytes) } : entry);
     if (JSON.stringify(backupInventory(root)) !== JSON.stringify(expected)) throw new Error("Recovery source changed during preparation.");
@@ -117,15 +123,15 @@ export function recoverWorkspace(root: string, defaults: (folder: string) => Wor
     if (!published) {
       const folder = JSON.parse(record.freshBytes).projects[0].folder;
       if (typeof folder !== "string" || folder !== join(root, "example-project", JSON.parse(record.freshBytes).projects[0].tabs[0].id)) throw new Error("Invalid fresh workspace folder.");
-      noLinks(folder);
+      noLinks(folder, root);
       mkdirSync(folder, { recursive: true });
       const freshBytes = record.freshBytes;
       publishConfigFile(freshBytes, workspace, true);
-      if (optionalBytes(workspace) !== freshBytes) throw new Error("Fresh workspace publication failed.");
+      if (optionalBytes(workspace, root) !== freshBytes) throw new Error("Fresh workspace publication failed.");
     }
     record.status = "complete";
-    saveRecoveryRecord(marker, record);
-    saveRecoveryRecord(join(archive, "manifest.json"), record);
+    saveRecoveryRecord(marker, record, root);
+    saveRecoveryRecord(join(archive, "manifest.json"), record, root);
     return { blocked: false, recovered: true, archive };
   } catch {
     return { blocked: true, recovered: false, notice: "Workspace unavailable. Your old files have been kept. Recovery could not safely finish. Check the data folder and restart Command Center." };

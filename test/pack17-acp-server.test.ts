@@ -284,8 +284,8 @@ test("D5: the nine fixed tools reach an ACP leader through the real bridge with 
     await useAcp(c, tabId(6), "auth");
     await c.chat(tabId(6), "hello");
     await c.finished(tabId(6), 1, "auth failure");
-    assert.equal(c.errors(tabId(6)).at(-1).message, "Fake auth is not signed in: Run `fakecli auth login` in the terminal");
-    assert.equal(c.answers(tabId(6)).at(-1)!.text, "Fake auth is not signed in: Run `fakecli auth login` in the terminal", "the plain error is saved as the reply");
+    assert.equal(c.errors(tabId(6)).at(-1).message, "Fake auth is not signed in. Open Settings and check the tool's sign-in or key settings, then try again.");
+    assert.equal(c.answers(tabId(6)).at(-1)!.text, "Fake auth is not signed in. Open Settings and check the tool's sign-in or key settings, then try again.", "the plain error is saved as the reply");
     // Death mid-turn.
     await useAcp(c, tabId(7), "die");
     await c.chat(tabId(7), "hello");
@@ -313,12 +313,13 @@ test("D6: a program found only inside the tab folder is refused at the start; a 
     // Saved as the leader already: the start is refused, nothing runs.
     await c.chat("p17-evil", "hello");
     await c.finished("p17-evil", 1, "evil start");
-    assert.match(c.errors("p17-evil").at(-1).message, /evilacp was found only inside a project folder/);
+    assert.equal(c.errors("p17-evil").at(-1).message, "The CLI was found only inside a project folder. Choose a different project folder or install it outside project folders.");
+    assert.doesNotMatch(c.errors("p17-evil").at(-1).message, /evilacp|Users/);
     assert.equal(fakeLog(server).filter((row) => row.cli === "acp").length, 0, "no ACP process was started");
     // A leader whose CLI left the list.
     await c.chat("p17-ghost", "hello");
     await c.finished("p17-ghost", 1, "ghost start");
-    assert.match(c.errors("p17-ghost").at(-1).message, /The CLI "ghost" was removed in Settings\. Pick another leader CLI for /);
+    assert.equal(c.errors("p17-ghost").at(-1).message, "The CLI was removed in Settings. Pick another leader CLI for this tab.");
     assert.equal(c.tabState("p17-ghost").permissionMode, "bypass", "a leader of this kind has Full access, listed or not");
   } finally { c.close(); await server.stop(); }
 });

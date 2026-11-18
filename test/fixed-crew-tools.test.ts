@@ -126,7 +126,7 @@ test("FCXT high-risk lifecycle triages a report, requires final, and consumes ch
     const commits = commands.filter((args) => args[0] === "commit"); assert.equal(commits.length, 2);
     assert.ok(commits[0].includes("checkpoint: Change the owned file"));
     assert.deepEqual(commits.map((args) => args.slice(-2)), [["--", "owned.txt"], ["--", "owned.txt"]]);
-    assert.deepEqual(commands.filter((args) => args[0] === "push"), [["push"]], "one approved structured push, through the fake boundary only");
+    assert.deepEqual(commands.filter((args) => args[0] === "push"), [["push", "--no-follow-tags", "--", "origin", `${"c".repeat(40)}:refs/heads/main`]], "one approved structured push, through the fake boundary only");
   } finally { await f.close(); }
 });
 
@@ -140,7 +140,8 @@ test("FCXT checkpoint refuses a Git result containing unrelated files and never 
     assert.match(checkpoint.text, /Git did not verify a commit containing only pack-owned files/);
     assert.equal(f.task().checkpoints.length, 0);
     const journal = JSON.parse(readFileSync(join(f.server.data, "executions", "fixed.json"), "utf8"));
-    assert.equal(journal.executions.at(-1).status, "failed", "a known completed command with rejected verification records failure");
+    assert.equal(journal.executions.at(-1).status, "interrupted", "a completed command with rejected verification retains the reconciliation brake");
+    assert.equal(journal.activeExecutionId, journal.executions.at(-1).id);
     const count = readFileSync(join(f.server.temp, "git-observed.jsonl"), "utf8").split("\n").filter(Boolean).length;
     const failed = journal.executions.at(-1);
     const replay = await f.action("checkpoint", { reservedExecutionId: failed.id });

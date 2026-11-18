@@ -230,6 +230,22 @@
       head.append(node("span", "fct-ttl", title));
       const models = button("Choose models in Settings", "btn sm", { fctKey: "settings" }); models.id = "fcWorkSettings";
       head.append(models); out.push(head);
+      const recovery = FC.launchSafetyRecovery;
+      if (recovery?.required || recovery?.held) {
+        const safety = card("stop", "Launch safety needs attention", "launch-safety");
+        safety.append(node("p", "", recovery.message));
+        if (recovery.required) {
+          const retry = button("Recover saved workspace", "btn", { fctRecoverSafety: "", fctKey: "recover-safety" });
+          retry.disabled = !f.connected;
+          safety.append(retry);
+        }
+        if (recovery.held) {
+          const release = button("Allow new launches again", "btn", { fctReleaseSafety: "", fctKey: "release-safety" });
+          release.disabled = !f.connected;
+          safety.append(release);
+        }
+        out.push(safety);
+      }
       if (tab.fixedCrew.unavailable) {
         const el = card("stop", "This crew is unavailable.", "unavailable");
         el.append(node("p", "", tab.fixedCrew.notice ?? "Its saved data cannot be used by this version."), archiveView.unavailable());
@@ -259,7 +275,7 @@
       const f = facts(tab), task = f.task;
       const keys = task ? ["plan", "rough"].map((kind) => [taskState.outcomeOf(tab.id, task, kind), taskState.pending.has(taskState.approvalKey(tab.id, task.id, task.planVersion, kind))]) : [];
       const next = JSON.stringify([tab.id, f.summary, f.requestId, f.fresh, f.connected, f.error, keys, task ? taskState.expanded.has(taskState.panelKey(tab.id, task.id, task.planVersion)) : false,
-        tab.fixedCrew.preferences, tab.fixedCrew.notices, tab.fixedCrew.unavailable, tab.fixedCrew.notice, crewView.definitions().length, tab.name, archive.signature(tab.id)]);
+        tab.fixedCrew.preferences, tab.fixedCrew.notices, tab.fixedCrew.unavailable, tab.fixedCrew.notice, FC.launchSafetyRecovery, crewView.definitions().length, tab.name, archive.signature(tab.id)]);
       if (next === signature && view.firstElementChild) return;
       signature = next;
       const scroll = page.$("view"), focused = document.activeElement?.closest?.("#fixedView") ? document.activeElement.dataset.fctKey : null, top = scroll.scrollTop;

@@ -22,6 +22,8 @@ export type Execution = {
   revision: string; resultRevision: string | null; processEnd: "unknown" | "confirmed" | "failed";
   verified: boolean; evidence: string[]; findings: string[]; route: "normal" | "minimal" | "postFinal";
   change: "none" | "minimal" | "logic"; batch: string[];
+  // Absent on older records and ordinary read-only workers. Commands can write files.
+  executionCapability?: "run-commands";
 };
 export type Evidence = { executionId: string; revision: string; evidence: string[] };
 export type Review = Evidence & { final: boolean; findings: string[]; resolved: string[]; baseFinal: string | null; unchanged: string[] };
@@ -125,10 +127,14 @@ export function validateTask(raw: unknown): Task {
   const revisions = new Set(raw.revisions.map((r: Revision) => r.digest));
   if (revisions.size !== raw.revisions.length || !revisions.has(raw.revision.digest)) throw new Error("Invalid revision references");
   array(raw.executions, (e) => {
-    object(e, ["id", "taskId", "planVersion", "role", "sessionId", "kind", "status", "revision", "resultRevision", "processEnd", "verified", "evidence", "findings", "route", "change", "batch"]);
+    object(e, ["id", "taskId", "planVersion", "role", "sessionId", "kind", "status", "revision", "resultRevision", "processEnd", "verified", "evidence", "findings", "route", "change", "batch", ...(Object.hasOwn(e, "executionCapability") ? ["executionCapability"] : [])]);
     id(e.id); id(e.sessionId); integer(e.planVersion); enumeration(e.role, Object.keys(raw.seats));
     if (e.taskId !== raw.id || e.planVersion > raw.planVersion) throw new Error("Wrong execution identity");
     enumeration(e.kind, ACTIONS); enumeration(e.status, ["reserved", "running", "success", "failed", "interrupted"]);
+    if (Object.hasOwn(e, "executionCapability")) {
+      enumeration(e.executionCapability, ["run-commands"]);
+      if (e.role !== "leader" || !["check", "visualCheck"].includes(e.kind)) throw new Error("Invalid execution capability for this action or position");
+    }
     hash(e.revision); if (e.resultRevision !== null) hash(e.resultRevision);
     if (!revisions.has(e.revision) || e.resultRevision !== null && !revisions.has(e.resultRevision)) throw new Error("Unknown execution coverage");
     enumeration(e.processEnd, ["unknown", "confirmed", "failed"]); bool(e.verified); unique(e.evidence, path); unique(e.findings, id);

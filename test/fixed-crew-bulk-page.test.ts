@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { editorTestMs, J, withPage, skipped, click, deliver, deliverState, setValue, press, taskFixture, type Page } from "./pack18-editor-harness.ts";
+import { editorTestMs, J, withPage, skipped, click, deliver, deliverState, setValue, press, delay, taskFixture, type Page } from "./pack18-editor-harness.ts";
 
 const BULK = "#setModal [data-fc-bulk]";
 const STATUS = `document.querySelector(".fc-bulk-status").textContent`;
@@ -26,6 +26,7 @@ async function choose(p: Page, keyboard = false) {
   assert.ok(await p.ev(`document.querySelector(${J(selector)})`), "codex choice FOUND");
   if (keyboard) { await p.ev(`document.querySelector(${J(selector)}).focus()`); await press(p.page, "Enter"); }
   else await click(p.ev, selector);
+  await delay(450); // queued confirmations present and settle before a physical gesture
 }
 const answer = (p: Page, sent: any, extra = {}) => deliver(p.ev, { type: "actionResult", action: "setCrewModelForAll", requestId: sent.requestId, tabId: sent.tabId,
   changed: [{ slot: "coder", label: "Coder" }], skipped: [{ slot: "leader", label: "Leader" }], notice: "Crew choices updated.", ...extra });
@@ -113,15 +114,25 @@ test("FCBUI result identity, busy notices, tab isolation and dropped reply recon
     assert.notEqual(second.requestId, first.requestId, "new request identity FOUND");
     await answer(p, first, { notice: "old response" });
     assert.equal(await ev(STATUS), "Saving…", "late previous reply cannot replace pending result");
+    await deliverState(ev, discovered, `state.requestActions={${J(second.requestId)}:{status:"running"}}`);
     await ev("window.__socket.close()");
     await p.waitFor(`(${STATUS}).startsWith('Not confirmed')`, "lost reply becomes unknown");
     await p.waitFor(`window.__socket.readyState===1&&document.querySelector('#conn').hidden`, "reconnect without resending");
     assert.match(await ev(STATUS), /^Not confirmed/, "unknown until reconciled");
-    assert.equal(await ev(`document.querySelector(${J(BULK)}).disabled`), true, "unknown bulk request stays locked until reconciled");
+    assert.equal(await ev(`document.querySelector(${J(BULK)}).disabled`), true, "a listed running bulk request stays held");
     assert.equal((await writes(ev)).length, 2, "no replay on reconnect");
     await deliverState(ev, discovered, `state.requestActions={${J(second.requestId)}:{status:"done",message:"Done"}}`);
     assert.match(await ev(STATUS), /^The server confirmed this request completed/, "server request ledger reconciles completion without invented counts");
     assert.equal(await ev(`document.querySelector(${J(BULK)}).disabled`), false, "reconciled request unlocks the button");
+    await choose(p);
+    await deliverState(ev, discovered, "state.requestActions={}");
+    const beforeLoss = (await writes(ev)).length;
+    await ev("window.__socket.close()");
+    await p.waitFor(`window.__socket.readyState===1&&document.querySelector('#conn').hidden`, "absent reconnect");
+    assert.match(await ev(STATUS), /^Not confirmed: the server has no record/);
+    assert.doesNotMatch(await ev(STATUS), /done|completed|saved/i);
+    assert.equal(await ev(`document.querySelector(${J(BULK)}).disabled`), false, "absent request releases control");
+    assert.equal((await writes(ev)).length, beforeLoss, "absent request is never replayed");
     await click(ev, '#setModal [data-close]');
     await click(ev, `#tabs [data-tab-id="${secondFixed.id}"]`); await click(ev, '#setBtn');
     assert.equal(await ev(STATUS), "", "second tab has its own result");

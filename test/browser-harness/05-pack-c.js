@@ -11,7 +11,7 @@
     await checkSettingsActions(settingsAction);
     await checkObsidianOpen();
     const devLeader = checkRequestsDrawer(markUnique);
-    checkPermissionPicker(markUnique, devLeader);
+    await checkPermissionPicker(markUnique, devLeader);
     const { uploadRequests, nativeFetch } = await checkUploadsAndScreenshots();
     await checkFileAttachments(uploadRequests);
 

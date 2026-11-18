@@ -87,7 +87,7 @@ export const serverOtherCoreMutations = [
   ["fct-read-evidence", "server/fixed-crew/task-transitions.ts", 'if (!["rough", "build", "polish", "fix"].includes(execution.kind) && execution.revision !== next.revision.digest) throw new Error("Read-only evidence changed its covered revision");', 'if (false) throw new Error("Read-only evidence changed its covered revision");'],
   ["fct-replay-conflict", "server/fixed-crew/task-store.ts", 'if (previous.digest !== requestDigest) throw new Error("Request ID was reused with different contents");', 'if (false) throw new Error("Request ID was reused with different contents");'],
   ["fct-record-setter", "server/fixed-crew/task-store.ts", 'result.task.recordRevision++;', 'void result.task.recordRevision;'],
-  ["fct-link-gate", "server/fixed-crew/task-revision.ts", 'if (lstatSync(file).isSymbolicLink()) throw new Error("Linked task paths are refused");', 'if (false) throw new Error("Linked task paths are refused");'],
+  ["fct-link-gate","server/fixed-crew/task-revision.ts","const check = (file: string) => assertOwnedPath(boundary, file, { allowMissingLeaf: true });","const check = (file: string) => file;"],
   ["fct-verify-setter", "server/fixed-crew/task-transitions.ts", 'execution.verified = true;', 'void execution;'],
   ["fct-checkpoint-setter", "server/fixed-crew/task-transitions.ts", 'if (execution.kind === "checkpoint") next.checkpoints.push(evidence);', 'if (false) next.checkpoints.push(evidence);'],
   ["fct-rough-revision-setter", "server/fixed-crew/task-transitions.ts", 'next.roughRevision = next.revision.digest;', 'void next.revision.digest;'],
@@ -219,7 +219,7 @@ export const serverOtherCoreMutations = [
   // bug, restored (finishRemoval runs regardless of `confirmed`).
   // Defect 5 (P2): sandbox mode follows the role, not the kind -- an
   // Underground coder needs write access, a reviewer stays read-only.
-  ["guard-codex-sandbox-follows-canwrite", "server/runner.ts", "--sandbox ${run.canWrite ? \"workspace-write\" : \"read-only\"}", "--sandbox read-only"],
+  ["guard-codex-sandbox-follows-canwrite", "server/runner.ts", "--sandbox ${run.canWrite || run.executionCapability === \"run-commands\" ? \"workspace-write\" : \"read-only\"}", "--sandbox read-only"],
   // Round 2 defects: a name denylist alone is bypassable through a custom
   // opencode model id, an opencode reviewer was always write-enabled, a
   // kind-change to opencode could submit a stale/invalid effort, and the
@@ -233,7 +233,7 @@ export const serverOtherCoreMutations = [
   // Guard 1, the most important guard in the pack: a claude seat used to run
   // acceptEdits unconditionally with no role check -- dropping this ternary
   // reverts exactly that P1 (a reviewer switched to claude silently writes).
-  ["guard-buildcommand-claude-role-check","server/runner.ts","const mode = run.canWrite ? CLAUDE_WRITE_FLAGS : CLAUDE_READ_ONLY_FLAGS;","const mode = CLAUDE_WRITE_FLAGS;"],
+  ["guard-buildcommand-claude-role-check","server/runner.ts","const mode = run.canWrite ? CLAUDE_WRITE_FLAGS : run.executionCapability === \"run-commands\" ? CLAUDE_CHECK_FLAGS : CLAUDE_READ_ONLY_FLAGS;","const mode = CLAUDE_WRITE_FLAGS;"],
   ["guard-claude-readonly-no-prompts", "server/runner.ts",
     'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";',
     'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";'],

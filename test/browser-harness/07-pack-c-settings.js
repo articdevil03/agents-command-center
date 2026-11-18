@@ -43,7 +43,11 @@
       const button = requireElement(selector); const form = button.form;
       if (type === "mcpAdd" && form) { form.elements.name.value = fields.name; form.elements.commandOrUrl.value = fields.commandOrUrl; }
       if (type === "pluginInstall" && form) form.elements.name.value = fields.name;
-      button.focus(); button.click(); confirmIfAsked();
+      button.focus(); button.click();
+      // The control must be disabled while its request is pending: read it right after the click, or right after OK when a confirmation was asked (the helper waits for the dialog, so reading later would see the finished request).
+      const disabledAfterClick = requireElement(selector).disabled;
+      const asked = await confirmIfAsked();
+      const disabledAfterAnswer = requireElement(selector).disabled;
       const sent = window.__sent.slice(start).filter((item) => item.type === type).at(-1);
       const idGood = uniqueId(sent?.requestId);
       const expected = { type, ...fields };
@@ -52,7 +56,7 @@
         && Object.entries(expected).every(([key, value]) => sent[key] === value)
         && Object.keys(sent).every((key) => key === "requestId" || Object.hasOwn(expected, key)));
       const pendingButton = requireElement(selector);
-      const disabledWhilePending = pendingButton.disabled;
+      const disabledWhilePending = asked ? disabledAfterAnswer : disabledAfterClick;
       await waitFor(() => actionState(sent?.requestId)?.status === result, `${name} server action result`);
       const final = actionState(sent.requestId);
       const github = type === "cliLogin" && fields.cli === "github";
@@ -88,7 +92,7 @@
     const geminiInstall = requireElement('#s-tools [data-setting-action="install-cli"][data-cli="gemini"]');
     window.__ccConfirmResult = false;
     let start = window.__sent.length; geminiInstall.click();
-    const installDenied = confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "installCli");
+    const installDenied = await confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "installCli");
     window.__ccConfirmResult = true;
     check(`real Gemini remains install-only with server instruction inventory at ${innerWidth}px`, geminiSafe && installedHasNoInstall && installDenied, { gemini: { installed: gemini.installed, signedIn: gemini.signedIn }, geminiFiles, instructionScopes: settings.skills.gemini.instructionFiles.map((item) => item.scope), geminiHasGlobalInstructions, geminiHasProjectInstructions, skills: settings.skills.gemini.skills, mcp: settings.skills.gemini.mcpServers, plugins: settings.skills.gemini.plugins, geminiSafe, installedHasNoInstall, installDenied });
 
@@ -148,7 +152,7 @@
     const mcpForm = requireElement('#s-skills [data-mcp-form="claude"]');
     const mcpRemove = requireElement('#s-skills [data-setting-action="mcp-remove"][data-cli="claude"][data-name="claude_mcp"]');
     window.__ccConfirmResult = false; start = window.__sent.length; mcpRemove.click();
-    const mcpRemoveDenied = confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "mcpRemove");
+    const mcpRemoveDenied = await confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "mcpRemove");
     window.__ccConfirmResult = true;
     const mcpAdd = await serverAction({ name: "MCP add", section: "skills", selector: '#s-skills [data-mcp-form="claude"] button[type="submit"]', type: "mcpAdd", fields: { cli: "claude", name: "valid_mcp", commandOrUrl: "npx -y server" }, message: "MCP add failed" });
     await serverAction({ name: "MCP remove", section: "skills", selector: '#s-skills [data-setting-action="mcp-remove"][data-cli="claude"][data-name="claude_mcp"]', type: "mcpRemove", fields: { cli: "claude", name: "claude_mcp", confirm: true }, message: "MCP removal failed" });
@@ -156,7 +160,7 @@
     await serverAction({ name: "Plugin install", section: "skills", selector: '#s-skills [data-plugin-form] button[type="submit"]', type: "pluginInstall", fields: { name: "sample-plugin" }, message: "plugin install failed" });
     const pluginRemove = requireElement('#s-skills [data-setting-action="plugin-remove"][data-name="sample-plugin"]');
     window.__ccConfirmResult = false; start = window.__sent.length; pluginRemove.click();
-    const pluginRemoveDenied = confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "pluginUninstall");
+    const pluginRemoveDenied = await confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "pluginUninstall");
     window.__ccConfirmResult = true;
     await serverAction({ name: "Plugin remove", section: "skills", selector: '#s-skills [data-setting-action="plugin-remove"][data-name="sample-plugin"]', type: "pluginUninstall", fields: { name: "sample-plugin", confirm: true }, message: "plugin uninstall failed" });
     check(`real MCP and plugin actions use server refusals and require confirmation at ${innerWidth}px`, mcpRemoveDenied && pluginRemoveDenied && Boolean(mcpAdd?.requestId), { mcpRemoveDenied, pluginRemoveDenied, mcpAdd: mcpAdd ?? null });
@@ -168,7 +172,7 @@
     const savedAccept = document.querySelector('[data-permission-mode="accept"]')?.getAttribute("aria-pressed") === "true";
     window.__ccConfirmResult = false; start = window.__sent.length;
     requireElement('[data-permission-mode="bypass"]').click();
-    const bypassDenied = confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "setPermissionMode");
+    const bypassDenied = await confirmIfAsked() && !window.__sent.slice(start).some((item) => item.type === "setPermissionMode");
     window.__ccConfirmResult = true;
     permissionButton.click(); requireElement('#permPop [data-permission-mode="plan"]').click();
     const plan = window.__sent.slice(permissionStart).find((item) => item.type === "setPermissionMode");
@@ -177,7 +181,7 @@
     const planShown = permissionButton.textContent.includes("Plan only") && !permissionButton.querySelector(".perm-state") && permissionButton.title.includes("Done") && !permissionButton.disabled;
     const permissionFocus = document.activeElement === permissionButton;
     permissionButton.click(); window.__ccConfirmResult = true;
-    requireElement('[data-permission-mode="bypass"]').click(); confirmIfAsked();
+    requireElement('[data-permission-mode="bypass"]').click(); await confirmIfAsked();
     const bypass = window.__sent.slice(permissionStart).filter((item) => item.type === "setPermissionMode").at(-1);
     const bypassIdGood = uniqueId(bypass?.requestId) && bypass?.tabId === "alpha-dev" && bypass.mode === "bypass" && bypass.confirm === true;
     await waitFor(() => actionState(bypass?.requestId)?.status === "done", "real bypass permission result");

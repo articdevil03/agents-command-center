@@ -3,7 +3,7 @@ import type { Options, Query, SDKUserMessage, McpServerConfig } from "@anthropic
 import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, resolve, isAbsolute, relative } from "node:path";
 import { IMAGE_EXT_TO_MIME } from "./config.ts";
 import { usageDeltaFromResult } from "./usage.ts";
 import { permissionModeForSdk, type PermissionMode } from "./settings.ts";
@@ -11,6 +11,7 @@ import { cleanJobDescription, cleanSkillName, createActivityTracker, createParag
 
 export type { LeaderCallbacks, AskApproval, LeaderHandle };
 export { resolveClaudeCli } from "./leader/claude-cli.ts";
+const QUESTION_UNAVAILABLE = "Questions cannot be answered here. Decide yourself, state your assumption in the reply, and continue.";
 
 export type LeaderOptions = {
   env: NodeJS.ProcessEnv;
@@ -38,12 +39,46 @@ export type LeaderTools = { mcpServers: Record<string, McpServerConfig>; allowed
 // advisor: the Claude model passed as --advisor; it is read when the session starts and only with the native CLI.
 export type LeaderSettings = { model: string; effort: string; advisor?: string };
 // holdsPlan: the tab is meant to be in Plan. An approved ExitPlanMode puts the live session back in its earlier mode (edits allowed), which must not read as "the user allowed edits".
-export function buildLeaderOptions(seat: LeaderSettings, tabFolder: string, cliPath: string | null, tools?: LeaderTools, mode: PermissionMode = "accept", ask: AskApproval = async () => false, savedAsks: () => boolean = () => false, observeMode: (mode: string) => void = () => {}, holdsPlan: () => boolean = () => mode === "plan", vaultPath: string | null = null): LeaderOptions {
+export function buildLeaderOptions(seat: LeaderSettings, tabFolder: string, cliPath: string | null, tools?: LeaderTools, mode: PermissionMode = "accept", ask: AskApproval = async () => false, savedAsks: () => boolean = () => false, observeMode: (mode: string) => void = () => {}, holdsPlan: () => boolean = () => mode === "plan", vaultPath: string | null = null, currentMode: () => PermissionMode = () => mode): LeaderOptions {
   // The path is resolved once but used for every tab: an executable inside this tab's folder is a planted one.
   if (cliPath && isInsideFolder(cliPath, tabFolder)) throw new Error(`The Claude CLI (${cliPath}) lies inside the tab folder (${tabFolder}); refusing to start it from there.`);
   const approve: AskApproval = async (tool, input, signal) => {
     try { return !signal?.aborted && await ask(tool, input, signal) && !signal?.aborted; }
     catch { return false; }
+  };
+  const effectiveMode = (): PermissionMode => savedAsks() ? "ask" : holdsPlan() ? "plan" : currentMode();
+  // Ignore special characters belonging to either allowed root, but ask for ambiguous filenames below it.
+  const allowedRoots = [tabFolder, vaultPath].filter((root): root is string => !!root);
+  const expandsOutside = (value: string): boolean => {
+    const text = value.trim();
+    const root = isAbsolute(text) ? allowedRoots.find((root) => isInsideFolder(resolve(text), root)) : undefined;
+    return /^~/.test(text) || /[%$]/.test(root ? relative(root, resolve(text)) : text);
+  };
+  const safeLocalTool = (tool: string, input: Record<string, unknown>): boolean => {
+    if (!["Read", "Glob", "Grep", "LS", "Edit", "MultiEdit", "Write", "NotebookEdit"].includes(tool)) return tools?.allowedTools.includes(tool) ?? false;
+    const pattern = typeof input.pattern === "string" ? input.pattern.trim() : "";
+    if (tool === "Glob" && (isAbsolute(pattern) || pattern.split(/[\\/]/).includes("..") || expandsOutside(pattern))) return false;
+    const value = input.file_path ?? input.notebook_path ?? input.path ?? ".";
+    if (typeof value !== "string") return false;
+    const path = value.trim();
+    return !expandsOutside(value) && allowedRoots.some((root) => isInsideFolder(resolve(tabFolder, path), root));
+  };
+  // Built-ins that run nothing and touch no file.
+  const harmless = new Set(["TodoWrite", "Task", "Agent", "Skill", "ToolSearch", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TodoRead", "KillShell", "ListMcpResources"]);
+  // The CLI's own prompts (sensitive files, the user's ask rules) arrive in canUseTool: only these never need a card there.
+  const needsNoCard = (tool: string): boolean => harmless.has(tool) || (tools?.allowedTools.includes(tool) ?? false);
+  const refusal = (tool: string, input: Record<string, unknown>): string | null => {
+    if (tool === "AskUserQuestion") return QUESTION_UNAVAILABLE;
+    return null;
+  };
+  const needsApproval = (tool: string, input: Record<string, unknown>): boolean => {
+    const effective = effectiveMode();
+    if (effective === "bypass") return false;
+    // Crew tools enforce their own app policy at their entry points.
+    if (needsNoCard(tool)) return false;
+    const readOnly = ["Read", "Glob", "Grep", "LS"].includes(tool);
+    if (readOnly && safeLocalTool(tool, input)) return false;
+    return effective !== "accept" || !safeLocalTool(tool, input);
   };
   const options: LeaderOptions = {
     env: leaderChildEnv(),
@@ -58,20 +93,30 @@ export function buildLeaderOptions(seat: LeaderSettings, tabFolder: string, cliP
     settingSources: ["user", "project", "local"],
     hooks: { PreToolUse: [{ timeout: 86400, hooks: [async (event, _id, context) => {
       try {
-      if (event.hook_event_name === "PreToolUse" && event.permission_mode) observeMode(event.permission_mode);
-      // Ask when the live SDK mode is "default" OR the tab is saved as Ask OR the tab is meant to be in Plan but the live mode left it (after ExitPlanMode): a subagent's own permissionMode or a mode the SDK lands in must not skip the question.
-      if (event.hook_event_name !== "PreToolUse" || (event.permission_mode !== "default" && !savedAsks() && !(holdsPlan() && event.permission_mode !== "plan"))) return {};
-      if (!["Edit", "MultiEdit", "Write", "NotebookEdit", "Bash", "PowerShell"].includes(event.tool_name)) return {};
-      const allow = await approve(event.tool_name, event.tool_input as Record<string, unknown>, context.signal);
+      if (event.hook_event_name !== "PreToolUse") return {};
+      // This SDK hook has no agent identifier: preserve its observed live mode.
+      if (event.permission_mode) observeMode(event.permission_mode);
+      // The CLI enforces its live Plan mode, including the existing local Save path.
+      if (holdsPlan() && event.permission_mode === "plan") return {};
+      if (holdsPlan() && !["Edit", "MultiEdit", "Write", "NotebookEdit", "Bash", "PowerShell"].includes(event.tool_name)) return {};
+      const denied = refusal(event.tool_name, event.tool_input as Record<string, unknown>);
+      if (denied) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: denied } };
+      const input = event.tool_input as Record<string, unknown>;
+      if (!needsApproval(event.tool_name, input) && !(effectiveMode() !== "bypass" && event.permission_mode === "default" && ["Edit", "MultiEdit", "Write", "NotebookEdit", "Bash", "PowerShell"].includes(event.tool_name))) return {};
+      const allow = await approve(event.tool_name, input, context.signal);
       return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: allow ? "allow" : "deny", ...(allow ? {} : { permissionDecisionReason: USER_DENIED }) } };
       } catch { return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: USER_DENIED } }; }
     }] }] },
     // There is no screen for a question: "Allow" would hand the model an empty answer. Say so, as the Codex and OpenCode leaders do.
-    canUseTool: async (tool, input, context) => tool === "AskUserQuestion"
-      ? { behavior: "deny", message: "Questions cannot be answered here. Decide yourself, state your assumption in the reply, and continue." }
-      : await approve(tool, input, context.signal)
-        ? { behavior: "allow", updatedInput: input }
-        : { behavior: "deny", message: USER_DENIED },
+    canUseTool: async (tool, input, context) => {
+      try {
+        const denied = refusal(tool, input);
+        if (denied) return { behavior: "deny", message: denied };
+        return (!context.signal?.aborted && (needsNoCard(tool) || await approve(tool, input, context.signal)))
+          ? { behavior: "allow", updatedInput: input }
+          : { behavior: "deny", message: USER_DENIED };
+      } catch { return { behavior: "deny", message: USER_DENIED }; }
+    },
   };
   // The SDK's own spawn kills only claude.exe on abort; this one tracks and kills the whole tree (background shells, MCP servers).
   options.spawnClaudeCodeProcess = spawnTrackedClaude;
@@ -154,7 +199,7 @@ export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: s
     }
   }
 
-  const options: Options = { abortController, ...buildLeaderOptions(seat, tabFolder, cliPath, tools, mode, ask, savedAsks, (value) => { liveMode = value; }, () => requestedMode === "plan", vaultPath) };
+  const options: Options = { abortController, ...buildLeaderOptions(seat, tabFolder, cliPath, tools, mode, ask, savedAsks, (value) => { if (liveMode !== value) { liveMode = value; cb.onPermissionMode?.(); } }, () => requestedMode === "plan", vaultPath, () => requestedMode) };
 
   // The SDK's own spawn is replaced by the tracked one, so a kill that cannot be confirmed is reported and remembered for the tab's next leader.
   let claudeChild: ChildProcess | null = null;
@@ -228,14 +273,18 @@ export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: s
           // A result answers the messages the CLI had started on (all of them when this CLI never echoes: then there is no steering either).
           for (const [id, started] of [...waiting]) if (started || !replaySeen) waiting.delete(id);
           // A failed turn still ends with a result; it must never read as success.
-          if (message.is_error) failedTurn = `leader turn failed: ${message.subtype}`;
+          if (message.is_error) {
+            console.warn("[Claude] Turn failed", { reason: "result", kind: ["error_during_execution", "error_max_turns", "error_max_budget_usd", "error_max_structured_output_retries"].includes(message.subtype) ? message.subtype : "unknown" });
+            failedTurn = "The Claude leader turn failed. Try again.";
+          }
           // A steer the CLI has not started on yet keeps the turn open (also behind a failed one): its own result ends it, so its answer is never dropped.
           if (!waiting.size) { const ended = failedTurn; failedTurn = undefined; if (ended) cb.onError(ended); else cb.onDone(); }
         }
       }
     } catch (err) {
       if (!stopped) {
-        failure = (err as Error).message;
+        console.warn("[Claude] Run failed", { reason: "stream", kind: err instanceof Error ? err.name.slice(0, 64) : "unknown" });
+        failure = "The Claude run stopped with an error. Try again.";
       }
     } finally {
       // The CLI can exit 0 and simply end the iterator without ever throwing.
@@ -244,7 +293,7 @@ export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: s
       // The death is announced (onStop) before the error, like the Codex and OpenCode leaders do.
       dead = true;
       cb.onStop?.();
-      if (!stopped) cb.onError(failure ?? "leader session ended; a new one will start on the next message");
+      if (!stopped) cb.onError(failure ?? "The Claude leader session ended. Send your message again.");
     }
   })();
 
@@ -270,7 +319,7 @@ export function createLeader(seat: LeaderSettings, tabFolder: string, cliPath: s
   function send(text: string, images: string[] = []): void {
     if (stopped) return;
     if (dead) {
-      cb.onError("leader is not available (the agent process ended); starting a new one on the next message");
+      cb.onError("The Claude leader is not available. Send your message again.");
       return;
     }
     give(text, images);

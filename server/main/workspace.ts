@@ -1,6 +1,7 @@
 import { readdirSync, realpathSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join, isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, isAbsolute, parse } from "node:path";
 import { WebSocket } from "ws";
 import { writeWorkspaces } from "../config.ts";
 import { isRunning, logsDir } from "../runner.ts";
@@ -12,12 +13,35 @@ import { broadcast, sendError, stateMessage } from "./broadcast.ts";
 import { persistLaunchSafety } from "./launch-safety.ts";
 import { stopLeaderSession } from "./leader-session.ts";
 import {
-  activeLeaderTurns, blockedSeatKeys, changeGeneration, changesByTab, chatClearGenerations, chatStore, cliRunner, describeError, expiredClearUndos,
+  acpClis, activeLeaderTurns, blockedSeatKeys, changeGeneration, changesByTab, chatClearGenerations, chatStore, cliRunner, describeError, expiredClearUndos,
   handoverReadTurns, launchSafety, notesByTab, pendingClearUndos, pendingHandoverReads, requestActions, requestsStore, runContexts, savingTabs,
   selectedTabId, setSelectedTabId, setWorkspaces, settingsService, tabs, workspaces, type WorkspacesShape,
   dataRoot, vaultSaveRetries, vaultCopyAttention,
 } from "./state.ts";
 import { clone, runtimeFor, tabLocation, watchTabFolders } from "./tabs.ts";
+import { isInsideFolder, KNOWN_CLI_NAMES, resolveCliPath } from "../leader-common/cli-path.ts";
+import { resolveClaudeCli } from "../leader/claude-cli.ts";
+import { RELEASE_TOOLS } from "../settings/opencode/release-tools.ts";
+
+function isBroadProjectFolder(folder: string): boolean {
+  if (dirname(folder) === folder) return true;
+  const env = process.env, home = homedir(), drive = parse(home).root;
+  const protectedPaths = [home, env.USERPROFILE, dirname(env.USERPROFILE || home),
+    env.APPDATA, env.LOCALAPPDATA, env.ProgramFiles, env["ProgramFiles(x86)"], env.ProgramW6432,
+    env.SystemRoot || join(drive, "Windows"), env.windir, join(drive, "Program Files")];
+  if (protectedPaths.some((path) => path && isInsideFolder(path, folder))) return true;
+  // Use the same resolvers and catalogue as launches, ignoring saved skip folders:
+  // an old broad workspace must not hide an installation from this admission check.
+  const names = new Set([...KNOWN_CLI_NAMES, ...Object.keys(RELEASE_TOOLS), ...acpClis.map((cli) => cli.program)]);
+  const installs = [resolveClaudeCli(env), ...[...names].map((name) => resolveCliPath(name, env, undefined, true))];
+  const pathKey = Object.keys(env).find((key) => key.toLowerCase() === "path");
+  for (const entry of (pathKey ? env[pathKey] ?? "" : "").split(";")) {
+    // Inspect each PATH entry so a second installation is protected too.
+    const pathEnv = { ...env, [pathKey ?? "PATH"]: entry, PATH: entry, LOCALAPPDATA: undefined, CLAUDE_CLI_PATH: undefined };
+    installs.push(resolveClaudeCli(pathEnv, ""), ...[...names].map((name) => resolveCliPath(name, pathEnv, undefined, true)));
+  }
+  return installs.some((path) => path && isInsideFolder(dirname(path), folder));
+}
 
 export function requiredRequestId(value: unknown): string {
   const requestId = readChatRequestId(value);
@@ -36,6 +60,7 @@ export function validateFolderPath(value: unknown, label = "folder"): string {
   let canonical: string;
   try { canonical = realpathSync(input); } catch { throw new Error(`${label} folder does not exist`); }
   if (!statSync(canonical).isDirectory()) throw new Error(`${label} must be a directory`);
+  if (isBroadProjectFolder(canonical)) throw new Error("Choose a project folder, not your whole home folder or a system folder.");
   return canonical;
 }
 export function rememberRequestAction(requestId: string, status: "running" | "done" | "failed", message: string): void {
@@ -81,10 +106,12 @@ export async function refreshTabDetails(tabId: string): Promise<void> {
   notesByTab.set(tabId, notes);
   broadcast(stateMessage());
 }
-export function syncWorkspace(next: WorkspacesShape): void {
+export function syncWorkspace(next: WorkspacesShape, afterPersist?: () => void): void {
   const nextTabIds = new Set(next.projects.flatMap((project) => project.tabs.map((tab) => tab.id)));
   const removedTabs = workspaces.projects.flatMap((project) => project.tabs).filter((tab) => !nextTabIds.has(tab.id));
   writeWorkspaces(next);
+  setWorkspaces(next);
+  afterPersist?.();
   // Only after the write holds: a failed write must leave the removed tabs' saved Ask/Plan modes alone.
   try { settingsService.removePermissionModes(removedTabs.map((tab) => tab.id)); }
   catch (err) { broadcast({ type: "error", message: `could not clear saved modes for removed tabs: ${describeError(err)}` }); }
@@ -110,7 +137,6 @@ export function syncWorkspace(next: WorkspacesShape): void {
       try { persistLaunchSafety(); } catch (err) { broadcast({ type: "error", message: `could not clear launch blocks of removed tabs: ${describeError(err)}` }); }
     }
   }
-  setWorkspaces(next);
   for (const project of workspaces.projects) for (const tab of project.tabs) runtimeFor(tab);
   watchTabFolders();
   if (!tabLocation(selectedTabId)) setSelectedTabId(workspaces.projects[0]?.tabs[0]?.id ?? "");

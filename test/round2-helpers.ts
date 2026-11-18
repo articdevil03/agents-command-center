@@ -3,6 +3,9 @@ export { connect, lastState, settleLeaderTurns, tick, waitFor, flushMicrotasks }
 import { loadRunnerHarness, isolatedRunnerProc } from "./round2-runner-fixture.ts";
 export { loadRunnerHarness, isolatedRunnerProc, isolatedRunnerCapture, isolatedRun, startIsolatedRunner } from "./round2-runner-fixture.ts";
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import { KNOWN_CLI_NAMES, resolveCliPath } from "../server/leader-common/cli-path.ts";
+import { RELEASE_TOOLS } from "../server/settings/opencode/release-tools.ts";
 import { spawnSync } from "node:child_process";
 import { writeProjectRules } from "../server/project-rules.ts";
 import { EventEmitter } from "node:events";
@@ -28,7 +31,8 @@ import * as leaderCommon from "../server/leader-common.ts";
 import * as changesApi from "../server/changes.ts";
 import * as vaultApi from "../server/vault.ts";
 import { leaderChildEnv, withResolvedCli, isInsideFolder, setCliSkipFolders, windowsTaskkillPath, resolveCliOrThrow, leaderKindOf, USER_DENIED } from "../server/leader-common.ts";
-import { keepBadCopy } from "../server/safe-file.ts";
+import { keepBadCopy, preserveBadFile, readFileWithRetry } from "../server/safe-file.ts";
+import * as ownedPaths from "../server/owned-path.js";
 import { scratchDir, tempRoot, newAppKey } from "./temp-root.ts";
 import { sourceText } from "./source-text.ts";
 import { config, leaderApi, createCodexLeader, createOpencodeLeader, createAcpLeader, createLeaderBridge, buildLeaderToolSpecs } from "./round2-setup.ts";
@@ -48,12 +52,12 @@ import { cliAvailability, assertCliAvailable } from "../server/settings/cli-avai
 import { fixtureTab, fixtureWorkspaces, tempWorkspaceFolders } from "./round2-workspaces.ts";
 export { fixtureTab, fixtureWorkspaces, tempWorkspaceFolders } from "./round2-workspaces.ts";
 
-export const source = stripTypeScriptTypes(sourceText("server/index.ts"))
+export const source = stripTypeScriptTypes(readFileSync("server/shutdown-latch.ts", "utf8") + "\n" + sourceText("server/index.ts"))
   .replace(/^import\s+(?:.|\r?\n)*?from\s+["'][^"']+["'];\r?\n/gm, "")
   .replace(/^export /gm, "")
   .replaceAll("import.meta.url", '"file:///server/index.ts"');
 
-export async function loadServer(options: { testRoot?: string; serverSource?: string; fixed?: boolean; treeWatch?: () => leaderCommon.TreeWatch | null; relaunchable?: boolean; failSafety?: () => boolean; onSafetyWrite?: (value: config.LaunchSafety) => void; skipHealth?: boolean; leaderDelayMs?: number; hangLeader?: boolean; hangTab?: string; hangSave?: boolean; failSave?: boolean; writeHandover?: boolean; safetyPath?: string; deferKill?: boolean; rejectNextRun?: boolean; query?: (args: any) => any; readdir?: typeof readdir; console?: Console; releaseUnconfirmed?: (runId: string) => boolean; workspaces?: any; leaderDead?: boolean; setModelResult?: boolean; setPermissionResult?: boolean; deferFirstPermission?: boolean; usageDelta?: any; realLeaderOptions?: boolean; sdkLeader?: (args: any) => any; stat?: typeof stat; now?: () => number; leaderSeamOnly?: boolean; bothSeams?: boolean; gitChanges?: (folder: string) => Promise<any>; runCli?: any; seatCapability?: () => boolean; claudeCli?: string; preload?: (testRoot: string) => void; failWorkspaceWrite?: () => boolean; createLeaderThrows?: boolean; opencodeThrows?: boolean; failAssistantAppend?: boolean; neverListen?: boolean; writeFile?: typeof writeFile } = {}) {
+export async function loadServer(options: { testRoot?: string; serverSource?: string; fixed?: boolean; treeWatch?: () => leaderCommon.TreeWatch | null; relaunchable?: boolean; failSafety?: () => boolean; onSafetyWrite?: (value: config.LaunchSafety) => void; skipHealth?: boolean; leaderDelayMs?: number; hangLeader?: boolean; hangTab?: string; hangSave?: boolean; failSave?: boolean; writeHandover?: boolean; safetyPath?: string; deferKill?: boolean; rejectNextRun?: boolean; query?: (args: any) => any; readdir?: typeof readdir; console?: Console; releaseUnconfirmed?: (runId: string) => boolean; workspaces?: any; leaderDead?: boolean; setModelResult?: boolean; setPermissionResult?: boolean; deferFirstPermission?: boolean; usageDelta?: any; realLeaderOptions?: boolean; sdkLeader?: (args: any) => any; stat?: typeof stat; now?: () => number; leaderSeamOnly?: boolean; bothSeams?: boolean; gitChanges?: (folder: string) => Promise<any>; runCli?: any; seatCapability?: () => boolean; claudeCli?: string; preload?: (testRoot: string) => void; failWorkspaceWrite?: () => boolean; createLeaderThrows?: boolean | string; opencodeThrows?: boolean; failAssistantAppend?: boolean; neverListen?: boolean; writeFile?: typeof writeFile } = {}) {
   const testRoot = options.testRoot ?? tempRoot();
   mkdirSync(path.join(testRoot, "server"), { recursive: true });
   mkdirSync(path.join(testRoot, "logs"), { recursive: true });
@@ -176,6 +180,7 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
   };
   const readPrefsPath = path.join(testRoot, "client-prefs.json");
   const recoveryState = { blocked: false, recovered: false };
+  let safetyHeld = false;
   const testEnv: NodeJS.ProcessEnv = {
     CC_DATA_DIR: testRoot,
     HOME: path.join(testRoot, "home"),
@@ -192,6 +197,7 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
   if (options.leaderSeamOnly) delete testEnv.CC_TEST_FAKE_CLI;
   const testPathExists = (value: string) => /^C:[\\/]work(?:[\\/]|$)/i.test(value);
   const dependencies = {
+    ...ownedPaths,
     ...vaultApi,
     ...fixedDependencies, structuredClone,
     // These fixtures are existing installs. The real first-run registry and state are exercised in pack29-first-run.test.ts.
@@ -199,9 +205,11 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
     createTaskStore, isFixedTab, fixedMembers, fixedState, fixedCrewOf, DEFAULTS_VERSION, FIXED_CREW,
     // The start-up recovery runs in its own tests (fixed-crew-recovery*.test.ts); here the saved workspace is the one the test gives, so recovery state is per server and starts clear.
     workspaceRecovery: () => ({ ...recoveryState }), blockWorkspaceRecovery: () => { recoveryState.blocked = true; }, unavailableWorkspace,
-    assertWorkspaceRecoveryReady: (operation: string) => { if (recoveryState.blocked) throw new Error(`Workspace unavailable (${operation})`); },
+    holdLaunchSafety: (held = true) => { safetyHeld = held; },
+    restoreWorkspaceRecovery: (value: any) => Object.assign(recoveryState, value),
+    assertWorkspaceRecoveryReady: (operation: string) => { if (recoveryState.blocked) throw new Error(`Workspace unavailable (${operation})`); if (safetyHeld && operation !== "workspace") throw new Error("Launch safety is held"); },
     assertTaskRecoveryReady: () => { if (recoveryState.blocked) throw new Error("Workspace unavailable (task-action)"); },
-    ...path,
+    ...path, homedir, KNOWN_CLI_NAMES, resolveCliPath, RELEASE_TOOLS,
     ...config,
     ...security,
     ...usage,
@@ -245,7 +253,7 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
       return options.query ? options.query(args) : { [Symbol.asyncIterator]: async function* () { yield { type: "result" }; }, return: async () => ({ done: true }) };
     },
     resolveClaudeCli: () => options.claudeCli ?? null,
-    isInsideFolder, setCliSkipFolders, windowsTaskkillPath, resolveCliOrThrow, leaderKindOf, keepBadCopy, USER_DENIED,
+    isInsideFolder, setCliSkipFolders, windowsTaskkillPath, resolveCliOrThrow, leaderKindOf, keepBadCopy, preserveBadFile, readFileWithRetry, USER_DENIED,
     // Check again / Install / Sign in re-read the Windows PATH first (Pack 29 W3a); the fixture never reads the real registry.
     refreshProcessPath: async () => ({ added: [] }),
     cliAvailability, assertCliAvailable,
@@ -255,7 +263,7 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
     KILL_TIMEOUT_MS: leaderCommon.KILL_TIMEOUT_MS, KILL_CONFIRM_MS: leaderCommon.KILL_CONFIRM_MS,
     sweepOrphans: async () => ({ checked: 0, killed: 0, finished: true, late: Promise.resolve({ checked: 0, killed: 0 }) }),
     buildLeaderOptions: options.realLeaderOptions ? leaderApi.buildLeaderOptions : (settings: any, folder: string) => ({ model: settings.model, cwd: folder, settingSources: ["user", "project", "local"] }),
-    createLeader: options.createLeaderThrows ? () => { throw new Error("leader could not start"); } : options.sdkLeader ? loadLeaderHarness(options.sdkLeader) : createLeaderStub,
+    createLeader: options.createLeaderThrows ? () => { throw new Error(typeof options.createLeaderThrows === "string" ? options.createLeaderThrows : "leader could not start"); } : options.sdkLeader ? loadLeaderHarness(options.sdkLeader) : createLeaderStub,
     createLeaderTools: (deps: any) => { leaderDeps.set(deps.tabName, deps); return { deps }; },
     createCodexLeader, createAcpLeader, createOpencodeLeader: options.opencodeThrows ? () => { throw new Error("opencode could not start"); } : createOpencodeLeader, createLeaderBridge, buildLeaderToolSpecs,
     runSeat: runSeatReal,
@@ -300,7 +308,7 @@ export async function loadServer(options: { testRoot?: string; serverSource?: st
       activeLeaderTurns, pendingHandoverReads, pendingClearUndos, expiredClearUndos, runOutput, runUsage, isRunning,
       cleanScratch, scratchDir, stallTrackers, launchWorker, listHistory, getQueue: () => Promise.all([...chatOperationQueues.values()]), unconfirmedRunIds, pendingApprovals, leaderInstances, savingTabs, approvalSummary,
       chatStore, leaderSeats, leaderBridge, blockedSeatKeys, requestActions,
-      fixedTasks, runRecords, createTabLeader, stopLeaderSession, launchFixedAction, reserveFixedExecution, assertFixedTaskLaunch,
+      fixedTasks, runRecords, createTabLeader, stopLeaderSession, fixedLeaderSpecs, launchFixedAction, reserveFixedExecution, assertFixedTaskLaunch,
       acceptPlannerReport, verifyFixedEvidence, tabLocation, sendLeaderTurn, executionJournal, fixedExecution,
       currentActor: (tabId) => ({ tabId, instance: leaderInstances.get(tabId), sessionId: "fixture-" + tabId }) };
   })()`, dependencies);
@@ -335,4 +343,11 @@ export async function fixedGateServer(mode: "ask" | "plan" | "accept" | "bypass"
     catch (error) { return { ok: false, error: (error as Error).message }; }
   };
   return { server, ws, deps: { ...server.leaderDeps.get("Development"), launch } };
+}
+
+export function plainRefusal(message: string, position: string, tabName: string, legacy = false): void {
+  assert.ok(message.includes(`${position} position in ${tabName} cannot start:`), message);
+  assert.match(message, legacy ? /an earlier position/ : /earlier process may still be running|launch blocked after a prior stop/);
+  assert.match(message, /Needs you/);
+  for (const raw of ["alpha-dev", "alpha-dev.helper", "sonny", "vera"]) assert.equal(message.includes(raw), false, message);
 }

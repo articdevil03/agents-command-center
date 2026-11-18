@@ -17,23 +17,23 @@ export const pack34CopilotMutations = [
   ["p34-leader-update", "server/leader-acp.ts", "leaderChildEnv(key?.env, deps.cli.program, tabFolder)", "leaderChildEnv(key?.env)"],
   ["p34-deadline", "server/settings/opencode/release-tools.ts", "timeoutMs: 1_500_000", "timeoutMs: 600_000"],
   ["p34-sweep-active", "server/settings/opencode/sweep.ts", "if (dir === active || candidatesInProgress.has(dir)) continue;", "if (candidatesInProgress.has(dir)) continue;"],
-  ["p34-sweep-start", "server/settings/cli-install.ts", "if (op.id === \"copilot\") await sweepCopilotInstalls(this.deps.env);", "/* mutation: orphan sweep skipped */"],
+  ["p34-sweep-start", "server/settings/cli-install.ts", "sweepIncomplete = await sweepManagedInstalls(this.deps.env, op.id);", "/* mutation: orphan sweep skipped */"],
   ["p34-no-manual", "public/first-run/catalog.js", "if (id === \"copilot\") return null;", "/* mutation: manual fallback restored */"],
   ["p34-config-hash", "scripts/config-guard.mjs", "old.hash !== now.hash", "false"],
   ["p34-config-exit", "scripts/config-guard.mjs", "process.exitCode = 1", "void 0"],
   ["p34-sweep-inprogress", "server/settings/opencode/paths.ts", "candidatesInProgress.add(dir);", "/* mutation: candidate not tracked */"],
   ["p34-sweep-commit", "server/settings/opencode/install.ts", "candidatesInProgress.delete(candidate!.dir);", "/* mutation: committed candidate stays in progress */"],
   ["p34-config-lifecycle", "scripts/config-guard.mjs", "env: { ...env, npm_lifecycle_event: \"test\" }", "env"],
-  ["p34-sweep-shape", "server/settings/opencode/sweep.ts", "if (typeof value.executable !== \"string\" || !/^install-[a-f0-9-]+[\\\\/]copilot\\.exe$/.test(value.executable)) return;", "/* mutation: descriptor shape not checked */"],
-  ["p34-sweep-size", "server/settings/opencode/sweep.ts", "if ((await lstat(descriptor)).size > 4096) return;", "/* mutation: descriptor size not checked */"],
-  ["p34-sweep-enoent", "server/settings/opencode/sweep.ts", "if ((error as NodeJS.ErrnoException).code !== \"ENOENT\") return;", "/* mutation: unreadable descriptor proceeds */"],
+  ["p34-sweep-shape", "server/settings/opencode/sweep.ts", "if (typeof value.executable !== \"string\" || !layout.test(value.executable)) return true;", "/* mutation: descriptor shape not checked */"],
+  ["p34-sweep-size", "server/settings/opencode/sweep.ts", "if ((await lstat(descriptor)).size > 4096) return true;", "/* mutation: descriptor size not checked */"],
+  ["p34-sweep-enoent", "server/settings/opencode/sweep.ts", "if ((error as NodeJS.ErrnoException).code !== \"ENOENT\") return true;", "/* mutation: unreadable descriptor proceeds */"],
   ["p34-sweep-name", "server/settings/opencode/sweep.ts", "if (!/^install-[a-f0-9-]+$/.test(name)) continue;", "if (!/^install-/.test(name)) continue;"],
-  ["p34-guide-gate", "public/app/11-settings-render.js", "const guide = cli !== \"copilot\" && tool?.installed === false", "const guide = tool?.installed === false"],
+  ["p34-guide-gate", "public/app/11-settings-render.js", "Choose Install here. If it fails, choose Try again.", "Open a terminal to install this tool."],
   ["p34-failure-text", "public/first-run/catalog.js", "if (id === \"copilot\" && (reason === \"installFailed\"", "if (false && (reason === \"installFailed\""],
   ["p34-failure-id", "public/first-run/catalog.js", "if (id === \"copilot\" && (reason === \"installFailed\"", "if (name === \"GitHub Copilot CLI\" && (reason === \"installFailed\""],
 ];
 const fixTests = new Set(["p34-detect-offline", "p34-deadline", "p34-sweep-active", "p34-sweep-start", "p34-sweep-inprogress", "p34-sweep-commit", "p34-sweep-shape", "p34-sweep-size", "p34-sweep-enoent", "p34-sweep-name"]);
 const launchTests = new Set(["p34-auto-update", "p34-scope-update", "p34-installer-update", "p34-detect-update", "p34-login-update", "p34-leader-update"]);
 export const pack34CopilotCatchMap = Object.fromEntries(pack34CopilotMutations.map(([id]) => [id,
-  id.startsWith("p34-config-") ? "test/config-guard.test.ts" : fixTests.has(id) ? "test/pack34-copilot-fixes.test.ts" : launchTests.has(id) ? "test/pack34-copilot-launch.test.ts" :
-    id === "p34-no-manual" || id === "p34-guide-gate" || id.startsWith("p34-failure-") ? "test/pack34-copilot-page.test.ts" : "test/pack34-copilot.test.ts"]));
+  id === "p34-guide-gate" ? "test/audit-p6-settings.test.ts" : id.startsWith("p34-config-") ? "test/config-guard.test.ts" : fixTests.has(id) ? "test/pack34-copilot-fixes.test.ts" : launchTests.has(id) ? "test/pack34-copilot-launch.test.ts" :
+    id === "p34-no-manual" || id.startsWith("p34-failure-") ? "test/pack34-copilot-page.test.ts" : "test/pack34-copilot.test.ts"]));

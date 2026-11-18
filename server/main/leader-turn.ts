@@ -27,6 +27,25 @@ import { leaderSeatOf, tabLocation } from "./tabs.ts";
 import { validateFiles, validateImages } from "./uploads.ts";
 import { refreshTabDetails } from "./workspace.ts";
 
+const LEADER_DELIVERY_FAILURE = "The leader could not answer your message. Send it again.";
+
+export function knownLeaderStartFailure(message: string): string | null {
+  if (/^The CLI ".*" was removed in Settings\. Pick another leader CLI for /.test(message)) return "The CLI was removed in Settings. Pick another leader CLI for this tab.";
+  if (/^The Claude CLI \(.*\) lies inside the tab folder \(/.test(message)) return "The CLI is inside the tab folder. Choose a different project folder or install it outside project folders.";
+  const hidden = /(?:^|: )(claude|codex|opencode|gemini) was found only inside a project folder /.exec(message);
+  if (hidden) return hidden[1] + " was found only inside a project folder. Choose a different project folder or install it outside project folders.";
+  if (/ was found only inside a project folder \(/.test(message)) return "The CLI was found only inside a project folder. Choose a different project folder or install it outside project folders.";
+  if (/ was not found on PATH$/.test(message)) return "The CLI was not found. Install it from Settings.";
+  if (/^The previous leader on this tab (could not be confirmed stopped|did not exit within [\d.]+ seconds) and may still be running,/.test(message)) return "The previous leader on this tab could not be confirmed stopped and may still be running. Close it in Task Manager before starting another leader.";
+  if (/^[A-Za-z][A-Za-z0-9 &-]{0,40} has no model\. Choose one in Settings before continuing\.$/.test(message)) return message;
+  if (["OpenCode 1 is needed.", "Install the tool first.", "This tool is being removed. Try again when it finishes.", "This tool is unavailable or its saved connection does not match. Check installation and add its connection again."].includes(message)) return message;
+  if (message === "leader could not start" || message === "opencode could not start") return message + ". Try again.";
+  return null;
+}
+function startFailure(error: unknown): string {
+  return (error instanceof Error ? knownLeaderStartFailure(error.message) : null) ?? LEADER_DELIVERY_FAILURE;
+}
+
 export function finishLeaderTurn(tabId: string, failed: boolean, error?: string): void {
   const text = leaderTurnText.get(tabId) ?? "";
   leaderTurnText.delete(tabId);
@@ -67,7 +86,11 @@ export function noteUnansweredSteer(tabId: string): void {
   catch { /* an unreadable chat still ends the turn */ }
 }
 function sendMissedSteer(tabId: string, steer: { text: string; images: string[] }): void {
-  void sendLeaderTurn(tabId, steer.text, steer.images).catch((err) => broadcast({ type: "chatError", tabId, message: describeError(err) }));
+  steeredTurns.add(tabId);
+  void sendLeaderTurn(tabId, steer.text, steer.images).catch((err) => {
+    console.warn("[Leader] Reply delivery failed", { reason: "steer-delivery", kind: err instanceof Error ? err.name.slice(0, 64) : "unknown" });
+    finishLeaderTurn(tabId, true, LEADER_DELIVERY_FAILURE);
+  });
   broadcast(stateMessage());
 }
 // A steer is already in the chat when the CLI hands it back: it is not appended again, only sent once the running turn (if any) is over.
@@ -177,26 +200,25 @@ export function sendLeaderTurn(tabId: string, text: string, images: string[] = [
   if (activeLeaderTurns.has(tabId)) return Promise.resolve(false);
   // SDK directory grants cannot be removed live. Replace the session at the
   // next turn on connect/disconnect, using the existing read-first recovery.
-  if (leaderNeedsVaultReplacement(tabId)) stopLeaderSession(tabId);
+  if (leaderNeedsVaultReplacement(tabId)) stopLeaderSession(tabId, false, undefined, true);
   const fixedTab = tabLocation(tabId)?.tab;
-  if (fixedTab && isFixedTab(fixedTab) && leaders.has(tabId) && fixedLeaderSettings.get(tabId) !== fixedLeaderSignature(tabId)) stopLeaderSession(tabId);
-  let leader = leaders.get(tabId);
+  if (fixedTab && isFixedTab(fixedTab) && leaders.has(tabId) && fixedLeaderSettings.get(tabId) !== fixedLeaderSignature(tabId)) stopLeaderSession(tabId, false, undefined, true);
+  const leader = leaders.get(tabId);
   let afterRetired = false;
-  if (!leader || leader.isDead()) {
+  const needsNewLeader = !leader || leader.isDead();
+  if (needsNewLeader) {
     if (leader) {
       const usage = leaderUsage.get(tabId);
       if (usage) leaderUsage.set(tabId, bankUsage(usage));
     }
-    stopLeaderSession(tabId);
+    stopLeaderSession(tabId, false, undefined, true);
     // The old leader may still be exiting: the turn is already this tab's (Stop, Clear and a second message see it) and the new leader starts when the old one is gone.
     afterRetired = retiredLeaderState(tabId) !== "clear";
-    // A leader that cannot start rejects here (the chat handler reports it as a failed turn) instead of throwing past the caller's catch.
-    if (!afterRetired) try { leader = createTabLeader(tabId); } catch (err) { return Promise.reject(err); }
   }
   activeLeaderTurns.add(tabId);
   beginTurnWindow(tabId);
   leaderTurnText.set(tabId, "");
-  return new Promise((resolvePromise, rejectPromise) => {
+  return new Promise((resolvePromise) => {
     const entry = { resolve: resolvePromise, text, onReply };
     leaderTurnResolvers.set(tabId, entry);
     const deliver = (live: LeaderHandle): void => {
@@ -218,17 +240,17 @@ export function sendLeaderTurn(tabId: string, text: string, images: string[] = [
         `Use get_fixed_task before each task operation. Ask begin_planning for a saved plan and accept_planner_report for its ended report. Only the owner approves scope and rough. Use request_task_action and verify_task_evidence for execution. Legacy crew/step tools are unavailable. Saved task status: ${JSON.stringify(fixedTasks.summary(tabId))}\n\nCurrent message:\n${outgoingText}`);
       live.send(outgoingText, images);
     };
-    if (!afterRetired) { deliver(leader!); return; }
-    void waitForRetiredLeaders(tabId).then(() => {
+    const start = (): void => {
       if (leaderTurnResolvers.get(tabId) !== entry) return; // Stop or Clear ended this turn while it waited
-      try { deliver(createTabLeader(tabId)); }
+      try { deliver(needsNewLeader ? createTabLeader(tabId) : leader!); }
       catch (err) {
-        leaderTurnResolvers.delete(tabId); activeLeaderTurns.delete(tabId); endTurnWindow(tabId); leaderTurnText.delete(tabId);
-        settleLeaderTurnWaiters(tabId);
-        broadcast(stateMessage());
-        rejectPromise(err);
+        // Launch exceptions can carry SDK details and paths. End and save an honest plain failure, including any unanswered steer notice.
+        console.warn("[Leader] Reply could not start", { reason: "start", kind: err instanceof Error ? err.name.slice(0, 64) : "unknown" });
+        finishLeaderTurn(tabId, true, startFailure(err));
       }
-    });
+    };
+    if (!afterRetired) start();
+    else void waitForRetiredLeaders(tabId).then(start);
   });
 }
 // "Past sessions" for the leader: every successful Save leaves one entry in the same log/brief format a worker run uses, under the leader's
@@ -280,7 +302,10 @@ export function acceptChat(ws: WebSocket, message: any): void {
   if (refuseIfFolderBusy(ws, message, "chat", location.tab.folder)) return;
   const userMessage = chatStore.appendMessage(message.tabId, "user", message.text, images, Date.now(), requestId, files);
   broadcast(chatMessageEvent(userMessage));
-  void sendLeaderTurn(message.tabId, message.text, images, files, userMessage.revision).catch((err) => broadcast({ type: "chatError", tabId: message.tabId, message: describeError(err) }));
+  void sendLeaderTurn(message.tabId, message.text, images, files, userMessage.revision).catch((err) => {
+    console.warn("[Leader] Reply delivery failed", { kind: err instanceof Error ? "error" : "unknown" });
+    finishLeaderTurn(message.tabId, true, LEADER_DELIVERY_FAILURE);
+  });
   broadcast(stateMessage());
 }
 // A message pushed into the reply that is running now (the page's queued message, after its Steer click). It is its own function, never sendLeaderTurn: that starts a turn.

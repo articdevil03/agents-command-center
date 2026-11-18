@@ -59,7 +59,7 @@ test("P29 setup wizard: steps, Back keeps values, Next gated with a reason, foun
     await pickFolderAs(ev, FOLDER); await click(ev, "#frunBrowse");
     await waitFor(`document.querySelector('#frunPath').textContent===${J(FOLDER)}`, "the chosen folder is shown");
     assert.equal(await ev(`document.querySelector('#frunName').value`), "My App", "the name is prefilled from the folder");
-    for (const [name, why] of [["   ", "Give the project a name."], ["!!!", "Use at least one letter (a to z) or number in the name."], ["My App", ""]]) {
+    for (const [name, why] of [["   ", "Give the project a name."], ["!!!", "Use at least one letter or number in the name."], ["東京", ""], ["x".repeat(101), "Use at most 100 characters without control or invisible formatting characters in the name."], ["My App", ""]]) {
       await setValue(ev, "#frunName", name);
       const foot = await footer(ev);
       assert.deepEqual([foot.why, foot.nextDisabled], [why, Boolean(why)], `name ${J(name)}: Next ${why ? "off" : "on"}`);
@@ -70,7 +70,7 @@ test("P29 setup wizard: steps, Back keeps values, Next gated with a reason, foun
     assert.equal(await stepOf(ev), "tools", "Enter moves to the AI tool step");
 
     // The tool step: found / not found / not signed in wording; Next never opens for unknown, signed-out or missing tools.
-    expectRows(await rows(ev), { claude: ["Unknown", ["Check again", "Install by hand"]], codex: ["Sign in needed", ["Sign in"]], opencode: ["Not found", ["Install", "How to set up"]] });
+    expectRows(await rows(ev), { claude: ["Unknown", ["Check again", "How to set up"]], codex: ["Sign in needed", ["Sign in"]], opencode: ["Not found", ["Install", "How to set up"]] });
     assert.deepEqual(await ev(`['claude','codex','opencode'].map((c)=>document.querySelector('#frunTools [data-cli="'+c+'"] .frun-detail').textContent)`), ["Not checked yet. Press Check again.", "Found, but not signed in.", "Not found on this computer."]);
     const notReady: Array<[boolean | null, boolean | null]> = [[null, null], [true, null], [true, false], [false, null], [false, false]];
     for (const pair of notReady) {
@@ -102,10 +102,10 @@ test("P29 setup wizard: steps, Back keeps values, Next gated with a reason, foun
     await ev(`(()=>{window.dispatchEvent(new Event('focus'));return true})()`);
     const focused = await sentSince(ev, "refreshSettings", mark);
     assert.equal(focused.length, 1, "a regained window focus checks once"); await answer(ev, focused[0]);
-    // Install by hand opens the vendor's own page as copyable text; nothing navigates.
+    // How to set up shows in-app steps; nothing navigates.
     await click(ev, '[data-frun-help="opencode"]');
-    const help = await ev(`(()=>{const b=document.querySelector('[data-frun-help="opencode"]'),p=document.getElementById(b.getAttribute('aria-controls'));return {expanded:b.getAttribute('aria-expanded'),shown:!p.hidden,url:p.querySelector('.frun-url code').textContent,links:document.querySelectorAll('#first a[href]').length,focus:document.activeElement===b}})()`);
-    assert.deepEqual(help, { expanded: "true", shown: true, url: "https://opencode.ai/v1/docs/", links: 0, focus: true });
+    const help = await ev(`(()=>{const b=document.querySelector('[data-frun-help="opencode"]'),p=document.getElementById(b.getAttribute('aria-controls'));return {expanded:b.getAttribute('aria-expanded'),shown:!p.hidden,steps:[...p.querySelectorAll('.frun-howto li')].map(li=>li.textContent),urls:p.querySelectorAll('.frun-url,[data-frun-copy]').length,links:document.querySelectorAll('#first a[href]').length,focus:document.activeElement===b}})()`);
+    assert.deepEqual(help, { expanded: "true", shown: true, steps: ["Press Install to install OpenCode 1.", "Press Sign in, then Get my key. Paste your OpenCode Go API key and press Save key.", "Key saved. OpenCode will check it when you first chat."], urls: 0, links: 0, focus: true });
 
     // Leader: the first Ready CLI by default; the chosen one is what the Ready step shows and Start sends.
     await showFirstRun(ev, seed, { claude: [true, false], codex: [true, true], opencode: [true, true] });
@@ -225,15 +225,15 @@ test("P29 setup wizard: keyboard order, labels, one live step announcement, aria
     // AI tool, with the install help open
     await click(ev, "#frunNext");
     // The AI tool step carries the tools-versus-models note and the "Use a different AI tool" form: at 900x600 its own body scrolls.
-    await checkStep("AI tool 900x600", "tools", 2, { texts: 10, controls: 6 }, false);
+    await checkStep("AI tool 900x600", "tools", 2, { texts: 10, controls: 5 }, false);
     await click(ev, '[data-frun-help="opencode"]');
-    await checkStep("AI tool 900x600, help open", "tools", 2, { texts: 10, controls: 6 }, false);
+    await checkStep("AI tool 900x600, help open", "tools", 2, { texts: 10, controls: 5 }, false);
     // With the help open the step may be taller than the window: only its own body scrolls, and the bottom is clean too.
     await ev(`(()=>{const s=document.querySelector('#first .frun-stage');s.scrollTop=s.scrollHeight;return true})()`);
-    await checkStep("AI tool 900x600, help open, scrolled to the bottom", "tools", 2, { texts: 8, controls: 6 }, false);
+    await checkStep("AI tool 900x600, help open, scrolled to the bottom", "tools", 2, { texts: 8, controls: 5 }, false);
     await ev(`(()=>{document.querySelector('#first .frun-stage').scrollTop=0;return true})()`);
     await ev(`(()=>{document.querySelector('#frunH-tools').focus();return true})()`);
-    await tabOrder("AI tool", ["frunCheck", "frunGuideCopy", "frunSearch", "frun-install-opencode", "frun-help-opencode", "frun-copy-opencode", "frun-to-opencode", "frun-leader-claude", "frunOtherToggle", "frunSkip", "frunBack", "frunNext"]);
+    await tabOrder("AI tool", ["frunCheck", "frunGuideCopy", "frunSearch", "frun-install-opencode", "frun-help-opencode", "frun-to-opencode", "frun-leader-claude", "frunOtherToggle", "frunSkip", "frunBack", "frunNext"]);
     // Ready, then with a long refusal showing
     await click(ev, "#frunNext");
     await checkStep("Ready 900x600", "ready", 3, { texts: 10, controls: 5 });

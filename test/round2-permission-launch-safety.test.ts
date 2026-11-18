@@ -5,7 +5,7 @@ import { writeFile } from "node:fs/promises";
 import * as path from "node:path";
 import { tempRoot } from "./temp-root.ts";
 import { config } from "./round2-setup.ts";
-import { source, loadServer, loadFixed, fixedGateServer, startHelper, endRun, connect, lastState, tick, waitFor, flushMicrotasks } from "./round2-helpers.ts";
+import { plainRefusal, source, loadServer, loadFixed, fixedGateServer, startHelper, endRun, connect, lastState, tick, waitFor, flushMicrotasks } from "./round2-helpers.ts";
 import { pendingFor } from "./round2-gate-helpers.ts";
 
 test("permission mode persists per tab, applies live, requires bypass confirmation, and reaches a new session", async () => {
@@ -212,13 +212,15 @@ test("legacy bare-id launch safety stays visible while new records use tab-scope
   assert.deepEqual(state.uncertain, [{ seatId: "sonny", pid: 9876 }]);
   assert.equal(state.notices[0].seatId, "sonny");
 
-  assert.match(await refusal(startHelper(server, "alpha-dev", "helper", "new work")), /unconfirmed process/);
+  plainRefusal(await refusal(startHelper(server, "alpha-dev", "helper", "new work")), "Helper", server.tabLocation("alpha-dev").tab.name, true);
+  assert.deepEqual(server.launchSafety.uncertain, [{ seatId: "sonny", pid: 9876 }]);
   assert.equal(server.launched.length, 0);
   assert.equal(server.executionJournal(server.testRoot, "alpha-dev").activeExecutionId, null, "the refused launch left no reservation");
   const unblocked = await loadFixed({ skipHealth: true, safetyPath });
   const unblockWs = connect(unblocked);
   unblockWs.message({ type: "clearLaunchBlock", seatKey: "sonny", confirm: "allow this seat to launch again" });
-  assert.match(await refusal(startHelper(unblocked, "alpha-dev", "helper", "still uncertain")), /unconfirmed process/);
+  plainRefusal(await refusal(startHelper(unblocked, "alpha-dev", "helper", "still uncertain")), "Helper", unblocked.tabLocation("alpha-dev").tab.name, true);
+  assert.deepEqual(unblocked.launchSafety.uncertain, [{ seatId: "sonny", pid: 9876 }]);
   assert.equal(unblocked.launched.length, 0);
   unblockWs.message({ type: "releaseUnconfirmedSeat", seatId: "sonny", confirm: confirmRelease });
   unblockWs.message({ type: "clearLaunchBlock", seatKey: "sonny", confirm: "allow this seat to launch again" });

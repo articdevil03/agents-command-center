@@ -13,13 +13,11 @@
   const sentence = (text) => { const value = String(text ?? "").trim() || "the server refused it"; return /[.!?]$/.test(value) ? value : `${value}.`; };
   const CHEVRON = '<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M4.5 3 7.5 6 4.5 9" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-  // Install by hand (the fallback): three plain steps, the maker's command in a box under step 2 with its own Copy button, what to do if
-  // it still says Not found, and the maker's page as text to copy. It only shows text; nothing here runs it.
+  // Help keeps setup inside the app: Install, Cancel, Try again and Check again.
   function guideHtml(page, help, slug, label, info) {
     const esc = page.esc;
     const steps = (info.steps ?? help.steps).map((step) => `<li>${esc(step)}</li>`).join("");
-    const address = info.page ? `<div class="frun-url"><span class="frun-url-l">More details</span><code>${esc(info.page)}</code><button type="button" class="btn sm" data-frun-copy="${slug}" data-focus-key="frun-copy-${slug}">Copy address</button></div>` : "";
-    return `<p>${esc(info.about)}</p><ol class="frun-howto">${steps}</ol><p class="frun-hint">${esc(help.stillMissing)}</p>${address}`;
+    return `<p>${esc(info.about)}</p><ol class="frun-howto">${steps}</ol><p class="frun-hint">${esc(help.stillMissing)}</p>`;
   }
 
   // page: the helpers the page hands over; ctx: the wizard's shared pieces (help texts, action tracking, open guides, the draft, other
@@ -65,7 +63,7 @@
       const tool = toolOf(id), name = nameOf(id), sign = login.viewOf(id), link = action(`connect-${id}`);
       if (current?.state === "running") return { text: CAT.phaseText(current.phase, name, current.message) };
       if (current?.state === "stuck") return { text: CAT.reasonText("cleanupUnconfirmed", name, id), bad: true };
-      if (tool?.installed !== true && current?.state === "failed") return { text: CAT.reasonText(current.reason, name, id), bad: current.reason !== "cancelled" };
+      if ((tool?.installed !== true || status === "unsupported") && current?.state === "failed") return { text: CAT.reasonText(current.reason, name, id), bad: current.reason !== "cancelled" };
       if (tool?.installed !== true && current?.state === "refused") return { text: `Not installed: ${sentence(current.message)}`, bad: true };
       if (sign.state === "running" || sign.state === "orphan") return { text: "Signing in…" };
       if (sign.state === "refused") return { text: sentence(sign.text || "Could not start sign-in"), bad: true };
@@ -89,7 +87,7 @@
         return { button: `<button type="button" class="btn sm" data-frun-cancel="${id}" data-focus-key="frun-cancel-${id}" aria-disabled="${current.stopping}" aria-label="${label === "Cancel" ? `Cancel installing ${name}` : label}">${label}</button>` };
       }
       const recheck = `<button type="button" class="btn sm" data-frun-recheck="${id}" data-focus-key="frun-recheck-${id}" aria-disabled="${running(refreshKey)}">${running(refreshKey) ? "Checking…" : "Check again"}</button>`;
-      if (status === "unsupported") return { button: `<button type="button" class="btn primary sm" data-frun-install="opencode" data-focus-key="frun-install-opencode"${locked ? " disabled" : ""}>Install OpenCode 1</button>`, line: CAT.consentText(entry) };
+      if (status === "unsupported") return { button: `<button type="button" class="btn primary sm" data-frun-install="opencode" data-focus-key="frun-install-opencode"${locked ? " disabled" : ""}>${current?.state === "failed" ? "Try again" : "Install OpenCode 1"}</button>`, line: CAT.consentText(entry) };
       if (status === "ready") return { button: "" };
       if (tool?.installed === true) {
         // Sign in only for a tool with a managed sign-in (login.js); the panel under the row holds its steps and Cancel.
@@ -104,7 +102,7 @@
       }
       if (current?.state === "failed" && CAT.recheckAfter(current.reason)) return { button: recheck };
       if (tool?.installed === false && entry?.installable === true) {
-        return { button: `<button type="button" class="btn primary sm" data-frun-install="${id}" data-focus-key="frun-install-${id}" aria-describedby="frunWhy-${id}"${locked ? " disabled" : ""}>${id === "copilot" && current?.state === "failed" ? "Try again" : "Install"}</button>`, line: CAT.consentText(entry) };
+        return { button: `<button type="button" class="btn primary sm" data-frun-install="${id}" data-focus-key="frun-install-${id}" aria-describedby="frunWhy-${id}"${locked ? " disabled" : ""}>${current?.state === "failed" ? "Try again" : "Install"}</button>`, line: CAT.consentText(entry) };
       }
       return { button: tool?.installed === false ? "" : recheck };
     }
@@ -123,7 +121,7 @@
       const slot = tool?.installed === true ? `<div class="cli-login-slot" data-cli-login-slot="${id}"></div><div data-cli-key-slot="${id}"></div>` : "";
       // The fallback guide: only for a tool not found yet, and not while an installation runs.
       const info = builtIn(id) ? help.tools[id] : catalog.guideInfo(id), byHand = Boolean(info) && tool?.installed !== true && !busy, open = byHand && openHelp.has(id);
-      const more = byHand ? `<button type="button" class="frun-more frun-byhand" data-frun-help="${id}" data-focus-key="frun-help-${id}" aria-expanded="${open}" aria-controls="frunHelp-${id}">${CHEVRON}<span>${id === "opencode" ? "How to set up" : "Install by hand"}</span></button>` : "";
+      const more = byHand ? `<button type="button" class="frun-more frun-byhand" data-frun-help="${id}" data-focus-key="frun-help-${id}" aria-expanded="${open}" aria-controls="frunHelp-${id}">${CHEVRON}<span>How to set up</span></button>` : "";
       const panel = byHand ? `<div class="frun-help" id="frunHelp-${id}"${open ? "" : " hidden"}>${guideHtml(page, help, id, name, info)}</div>` : "";
       return `<div class="crow frun-tool" data-cli="${id}" data-status="${shown}"><span class="logo">${page.logo(id, 18, 0)}</span><div class="d"><b>${esc(name)}</b><small class="wrap frun-detail${detail.bad ? " bad" : ""}">${esc(detail.text)}</small>${note}${line}${bar}</div><div class="tool-row-action">${chip}${act.button}</div>${more}${panel}${slot}</div>`;
     }

@@ -222,6 +222,7 @@
   function settingsActionId(key) { return pendingSettingsActions.get(key) ?? settingsActionResults.get(key)?.requestId; }
   let clientPrefOverrides = new Map();
   let streamingByTab = new Map();
+  const interruptedReplies = new Map(); // Unsaved text from an errored turn, retained until a snapshot confirms it.
   const outputByRun = new Map(); // runId -> the tail of a live run's output, capped like the server's; the server's state output is its base
   const seenNotices = new Map(); // launch notice id -> the Activity text it was last shown with
   let killOrder = []; // runIds of the killRun messages the server has not answered yet, in send order
@@ -237,6 +238,7 @@
   let historyRunToken = 0;
   let historyFullRequested = new Map(); // detailKey -> token of that fuller-log request
   let transcriptRequests = new Set();
+  const completeTranscripts = new Set(); // Only a full snapshot establishes completeness, never a live message.
   let pendingChatByTab = new Map(); // tabId -> requestId; this is the client's send lock
   let chatRequestsById = new Map(); // requestId -> the sent draft, retained for echo or reconnect history
   // Messages typed while the leader replies, per tab, in order: { id, text, items (their own attachments), held (never goes out on its own), state: waiting | sending | unknown, requestId }.
@@ -348,6 +350,7 @@
   function send(message) {
     if (!socket || socket.readyState !== WebSocket.OPEN) { showToast("Not connected to the Command Center server"); return false; }
     const raw = JSON.stringify(message);
+    if (message.type === "hello") completeTranscripts.clear(); // A new connection must fetch fresh history.
     // The server closes the connection on a message over 2 MiB (maxPayload), and the same draft would fail again: refuse it here and say why.
     if (raw.length > MAX_MESSAGE_BYTES / 3 && new Blob([raw]).size > MAX_MESSAGE_BYTES) { showToast("That is too large to send (2 MiB at most). Shorten it and try again"); return false; }
     const transcriptTab = message.type === "selectTab" ? message.tabId : null;

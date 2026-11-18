@@ -43,6 +43,9 @@ test("Save status shows the vault warning only beside the plain Saved label", { 
     const tab = flagged.projects[0].tabs[0];
     tab.vaultCopyNeedsAttention = true;
     for (const [revision, saved, expected] of [[0, 0, "Nothing to save yet"], [2, 1, /^Not saved/]] as const) {
+      tab.chatRevision = revision; tab.savedRevision = saved;
+      // Clear/restore invalidates history. Its subsequent read must answer these same facts.
+      await ev(`window.__socket.history=(tabId)=>__ccDeliver({type:'chatHistory',tabId,messages:[],revision:${revision},savedRevision:${saved}})`);
       const type = revision === 0 ? "chatCleared" : "chatRestored";
       await ev(`__ccDeliver({ type: ${JSON.stringify(type)}, tabId: ${JSON.stringify(tab.id)}, revision: ${revision}, savedRevision: ${saved} })`);
       await deliverState(ev, flagged);

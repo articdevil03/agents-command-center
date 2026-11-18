@@ -144,7 +144,7 @@ test("the error page escapes what the server printed: markup in its output is sh
   assert.match(page, /exited with code 3 before it was ready/);
   assert.equal(page.includes("<img"), false, "no raw tag from the server's output");
   assert.equal(page.includes("<script>alert(1)"), false);
-  assert.ok(page.includes("&lt;img src=x onerror=\"cc.pickFolder()\">"), "the tag is shown as text");
+  assert.ok(page.includes("&lt;img src=x onerror=&quot;cc.pickFolder()&quot;&gt;"), "the tag is shown as text");
   assert.ok(page.includes("&amp;amp; ok"), "an ampersand in the output is itself escaped, so it cannot form an entity");
   // The same page is used for a server that stopped after it was running.
   const running = shellHarness();
@@ -154,7 +154,7 @@ test("the error page escapes what the server printed: markup in its output is sh
   await within(runningReady, "ready");
   running.proc.emit("error", new Error("<b>boom</b> & more"));
   const crashPage = decodeURIComponent(running.loaded.at(-1));
-  assert.ok(crashPage.includes("&lt;b>boom&lt;/b> &amp; more"));
+  assert.ok(crashPage.includes("&lt;b&gt;boom&lt;/b&gt; &amp; more"));
   assert.equal(crashPage.includes("<b>boom"), false);
 });
 
@@ -257,7 +257,11 @@ test("startup split-port guard buffers digits until the newline arrives", async 
     await Promise.resolve();
     failed.proc.stderr.emit("data", Buffer.from("diagnostic failure"));
     if (failure === "exit") failed.proc.emit("exit", 1);
-    else [...failed.timers.values()][0].fn();
+    else {
+      [...failed.timers.values()][0].fn();
+      assert.deepEqual(failed.sent, ["shutdown"], "timeout starts owned cleanup");
+      failed.proc.exitCode = 0; failed.proc.emit("exit", 0);
+    }
     assert.match((await within(pending, "pending")).reason, /diagnostic failure/);
     assert.equal(failed.proc.stderr.listenerCount("data"), 0);
   }
@@ -319,6 +323,8 @@ test("closing during port selection cannot spawn a server after cleanup", async 
   assert.deepEqual(failing.sent, ["shutdown"], "startup rejection must stop its child");
   [...failing.timers.values()][0].fn();
   failing.killer.emit("close", 0);
+  const confirmation = [...failing.timers.values()].find(({ ms }) => ms === 2000);
+  assert.ok(confirmation, "unconfirmed kill waits for child exit"); confirmation.fn();
   await within(ready, "ready");
   assert.equal(failing.quits(), 1);
 });

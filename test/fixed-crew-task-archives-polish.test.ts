@@ -88,7 +88,7 @@ test("FCARCH disconnect and retry", { timeout: editorTestMs(90_000) }, async (t)
     await waitFor(`window.__socket.readyState===1`, "fake socket reconnected", 10_000);
     await delay(150);
     const automatic = await ev(`window.__sent.slice(${from})`);
-    assert.ok(automatic.every((m: any) => ["hello", "getFixedTask"].includes(m.type)), JSON.stringify(automatic));
+    assert.ok(automatic.every((m: any) => ["hello", "getFixedTask", "selectTab"].includes(m.type)), JSON.stringify(automatic));
     assert.deepEqual(await reads(ev, from), [], "reconnect resends no archive action");
     from = await count(ev); await click(ev, '#fixedView [data-fct-arch="retry"]');
     const retry = await read(ev, waitFor, from, "listFixedTaskArchives"); assert.notEqual(retry.requestId, old.requestId);

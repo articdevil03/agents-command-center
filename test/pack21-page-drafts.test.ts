@@ -15,7 +15,7 @@ function inbox(launchSafety: any) {
   const fake = () => ({ innerHTML: "", textContent: "", dataset: {}, value: "", options: [], hidden: true, disabled: false, title: "", querySelectorAll: () => [], querySelector: () => null, setAttribute() {}, focus() {} });
   const box: any = { phraseDrafts: new Map(), serverState: { launchSafety, requests: [] }, UNBLOCK_CONFIRM: "ALLOW IT", STOP_CONFIRM: "RELEASE IT", CSS: { escape: (s: string) => s },
     document: { activeElement: null }, esc: (s: any) => String(s ?? "").replace(/"/g, "&quot;"), $: (id: string) => { if (!elements.has(id)) elements.set(id, fake()); return elements.get(id); },
-    send: (message: any) => { sent.push(structuredClone(message)); return true; }, showToast() {}, allTabs: () => [], findTab: () => null, tabIdOfKey: () => null, seatOfKey: () => ({}),
+    send: (message: any) => { sent.push(structuredClone(message)); return true; }, showToast() {}, allTabs: () => [], findTab: () => null, tabIdOfKey: () => null, seatOfKey: () => ({}), seatNameOfKey: () => "Earlier position",
     uncertainRows: () => box.serverState.launchSafety.uncertain ?? [], hiddenProject: () => false, hiddenTab: () => false, currentTab: () => null, tabLabel: String,
     pendingRequestActions: new Map(), requestActionResults: new Map(), requestFormCleared: new Map(), actionStateFor: () => null, placePopover() {}, plainMd: String };
   const context = createContext(box);

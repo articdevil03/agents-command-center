@@ -50,7 +50,8 @@ export async function handleLoginOpen(message, reply, open = (url) => shell.open
 
 export let serverProcess = null;
 // This run's secret: made fresh for every server start, handed to the server in its env and to the app page through the
-// "cc:app-key" IPC (the page then sends it on its WebSocket and every POST). Never in a URL, a log or a file.
+// "cc:app-key" IPC, keeping it out of the page address. WebSocket uses a query key; POST uses a header.
+// Bare source startup prints a fragment URL. Electron never logs or saves the key.
 export let appKey = null;
 export let serverStopping = false;
 let serverStopPromise = null;
@@ -114,6 +115,7 @@ export async function startServer(onFailure = () => {}) {
 
   return new Promise((resolveReady) => {
     let settled = false;
+    let failing = false;
     let buffered = "";
     let stderr = "";
     const finish = (result) => {
@@ -128,17 +130,27 @@ export async function startServer(onFailure = () => {}) {
       resolveReady(result);
     };
     const onData = (chunk) => {
+      if (settled || failing) return;
+      if (serverStopping) { finish({ ok: false, reason: "Application is closing." }); return; }
       buffered += chunk.toString("utf8");
       const readyPort = parseServerPort(buffered);
       if (readyPort !== null) finish({ ok: true, origin: `http://127.0.0.1:${readyPort}`, port: readyPort });
     };
     const onStderr = (chunk) => { stderr += chunk.toString("utf8"); };
     const onExit = (code) => finish({ ok: false, reason: `server exited with code ${code} before it was ready.\n\n${buffered}\n${stderr}` });
-    // A missing bundled runtime never starts, so it emits "error" and no "exit": without this the clear reason waits out the 15 s timer and is
+    // A missing bundled runtime never starts, so it emits "error" and no "exit": without this the clear reason waits out the 60 s timer and is
     // then replaced by a vaguer one.
     const onError = (error) => finish({ ok: false, reason: `the server could not be started: ${error.message}\n\nCommand Center's bundled runtime could not start.\n\n${buffered}\n${stderr}` });
     const timer = setTimeout(
-      () => finish({ ok: false, reason: `server did not report ready within ${READY_TIMEOUT_MS}ms.\n\n${buffered}\n${stderr}` }),
+      async () => {
+        if (settled || failing) return;
+        failing = true;
+        // Ignore late readiness and exit while the owned child's cleanup is in progress.
+        ownedServer.off("exit", onExit);
+        ownedServer.off("error", onError);
+        const confirmed = await stopServer();
+        finish({ ok: false, reason: `server did not report ready within ${READY_TIMEOUT_MS}ms. ${confirmed ? "The server stopped." : "Server cleanup could not be confirmed. Close Command Center and try again."}\n\n${buffered}\n${stderr}` });
+      },
       READY_TIMEOUT_MS
     );
     serverProcess.stdout.on("data", onData);
@@ -151,22 +163,37 @@ export async function startServer(onFailure = () => {}) {
 export function stopServer() {
   if (serverStopPromise) return serverStopPromise;
   serverStopping = true;
-  if (!serverProcess) return Promise.resolve();
+  if (!serverProcess) return Promise.resolve(true);
   const proc = serverProcess;
   serverStopPromise = new Promise((resolveStopped) => {
-    // The server stops its own workers on "shutdown", so a server that is gone is done at once: taskkill on a dead pid finds nothing (or
-    // hits a new process that reused it), and always waiting the grace would hold the quit, and a relaunch, for the kill grace every time.
-    if (proc.exitCode != null || proc.signalCode != null) { resolveStopped(); return; }
-    let backstop = 0;
-    const gone = () => { clearTimeout(backstop); resolveStopped(); };
+    if (proc.exitCode != null || proc.signalCode != null) { resolveStopped(true); return; }
+    let backstop = 0, confirmation = 0, settled = false;
+    const finish = (confirmed) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(backstop); clearTimeout(confirmation);
+      proc.off("exit", gone);
+      resolveStopped(confirmed);
+    };
+    const gone = () => finish(true);
     proc.once("exit", gone);
     backstop = setTimeout(() => {
-      proc.off("exit", gone);
-      const killer = spawn(join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true });
-      killer.once("close", resolveStopped);
-      killer.once("error", resolveStopped);
+      const killed = () => {
+        if (settled || confirmation) return;
+        if (proc.exitCode != null || proc.signalCode != null) { finish(true); return; }
+        // taskkill close can precede the owned child's exit delivery.
+        confirmation = setTimeout(() => finish(proc.exitCode != null || proc.signalCode != null), 2_000);
+      };
+      try {
+        const killer = spawn(join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(proc.pid), "/T", "/F"], { windowsHide: true });
+        killer.once("close", killed);
+        killer.once("error", killed);
+      } catch { killed(); }
     }, KILL_GRACE_MS);
-    if (proc.connected) proc.send("shutdown", () => {});
+    try { if (proc.connected) proc.send("shutdown", () => {}); } catch { /* The owned-child backstop still applies. */ }
+  }).then((confirmed) => {
+    if (!confirmed) serverStopPromise = null;
+    return confirmed;
   });
   return serverStopPromise;
 }

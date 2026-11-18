@@ -35,7 +35,7 @@ Command Center is local mission control for the AI coding tools you already use.
 
 Download the installer from the [Releases page](../../releases) (version 1.0.0 is published). It is built with `npm run dist:installer`. The installer is unsigned, so Windows SmartScreen may show "Windows protected your PC". Choose **More info**, then **Run anyway** if you trust the download. SmartScreen appearance on another PC: **NOT VERIFIED**.
 
-No Node, npm, git or terminal is needed to install Command Center. It installs for your Windows user, without admin rights, under `%LOCALAPPDATA%\Programs\command-center`. Uninstalling never deletes your data in `%APPDATA%\command-center`; it does remove the AI tools Command Center installed itself, in `%LOCALAPPDATA%\Command Center\tools`.
+No Node, npm, git or terminal is needed to install Command Center. It installs for your Windows user, without admin rights, under `%LOCALAPPDATA%\Programs\command-center`. Uninstalling keeps your saved data and removes only tools it can confirm Command Center installed, leaving other files and linked targets alone and reporting leftovers.
 
 On first open, setup shows **Welcome**, **Folder**, **AI tool**, then **Ready**. To work with agents you need at least one AI tool. The wizard checks the ones already on your PC. For the tools it knows, it can install them for you with an **Install** button and then sign you in, with a sign-in page in your browser or a key box in the app, so you never need a terminal. You can also add tools later in **Settings**.
 
@@ -59,7 +59,7 @@ Every tab has the same fixed crew, and its work moves through a saved task in th
 2. **Rough.** For anything you can see or try, a rough version comes first and you approve it before any polish or review.
 3. **Build and checks.** The leader launches the Coder (or the Design coder or another maker) and the checks the plan lists are run.
 4. **Review and fixes.** A Reviewer checks the work, each finding is sorted into fix or pass, and a Fixer fixes what must be fixed. A second Reviewer and Fixer pair and the Final reviewer follow when the plan needs them.
-5. **Ship.** Commit, push and publish are part of the plan and only happen when it names them.
+5. **Ship.** Commit and push are part of the plan and only happen when it names them.
 
 A position with no model cannot run: the launch is refused with a message telling you to choose one in Settings. Anything that needs you lands in **Needs you**.
 
@@ -69,7 +69,17 @@ A position with no model cannot run: the launch is refused with a message tellin
 - No telemetry. Command Center sends nothing anywhere; the agent CLIs talk to their own providers as they normally do.
 - Each tab picks a permission mode, from **Ask before edits** (the leader asks before edits, commands and launching seats that can write; a Codex leader asks only about commands Codex judges unsafe) to **Bypass permissions** (runs everything without asking). The mode picker says what each mode does for that tab's CLI. ACP leaders always run in full access, and an ACP CLI on a crew seat needs your confirmation once. With an OpenCode leader, a mode change waits until the running turn ends, because OpenCode reads its permission rules once at the start of a turn.
 - No CLI's read-only mode is treated as a real boundary.
-- An API key you type into Command Center is stored encrypted by Windows and handed to the tool only when it starts. It is kept out of logs and chat.
+- Keys in Command Center's own credential store are encrypted by Windows and handed to the tool when it starts. OpenCode Go sign-in instead sends the key privately to OpenCode, which manages its own credential persistence. The Windows-encryption guarantee does not cover OpenCode's store. Command Center keeps keys out of logs and chat; vendor storage encryption has not been verified.
+
+Settings keeps installation recovery in the app: choose Install; after a failure the same button reads Try again, then choose Check again. Every managed installation offers Cancel in Settings while running, or Stop again if cleanup is unconfirmed. Retry stays unavailable until cleanup is confirmed. The setup wizard offers Install, Cancel, Try again after a failure, and Check again for all managed installs. A GitHub rate limit shows its own wait-a-few-minutes message in both. Browser sign-in and Get my key links remain available. OpenCode MCP Add and Remove are disabled with an explanation until their vendor contract is verified; tools already listed remain usable.
+
+Each tool's help stays open or closed across updates. Key forms show Choose... for choices after opening or reset and clear secret fields, so required regions need an explicit selection.
+
+Managed installation preserves release verification and checks the full release history to select the highest supported version. GitHub throttling stops the attempt without a retry loop or unverified fallback. The server and wizard report "GitHub is limiting requests right now. Wait a few minutes, then choose Try again." OpenCode cleanup preserves the active installation, pending candidates, unrelated entries and links. Locked old files produce a cleanup warning.
+
+Starting or cancelling GitHub sign-in preserves its last known connection status until a status probe supplies a new result. A failed probe means unknown. OpenCode keys have outer whitespace removed on the server; empty, oversized or control-containing keys are refused. If sign-in cleanup is uncertain, Stop again remains available after reload and other installations/sign-ins stay blocked. A key may have been saved even when cleanup is pending; stopping does not promise to remove it.
+
+Startup and refresh never write test files to the notes vault. Startup uses the saved connection; refresh checks it asynchronously with a bounded wait. Only Connect or Change tests whether notes can be saved, removing precisely its own unique test file.
 
 See [SECURITY.md](./SECURITY.md) to report a problem.
 
@@ -96,7 +106,7 @@ npm install
 npm start
 ```
 
-The server opens on `http://127.0.0.1:4317` and binds to localhost only. `npm start` prints one line, `Open http://127.0.0.1:4317/#key=<key>`: open that exact address, because the page needs the key to connect (every connection and every upload needs it; see `PROTOCOL.md` "App key"). To open the Electron desktop shell, run `npm run app`; Electron makes the key itself.
+The server opens on `http://127.0.0.1:4317` and binds to localhost only. `npm start` prints one line, `Open http://127.0.0.1:4317/#key=<key>`: open that exact address, because the page needs the key to connect (every connection and every upload needs it; see `PROTOCOL.md` "App key"). To open the Electron desktop shell, run `npm run app`; Electron makes the key itself and passes it through its preload bridge without adding it to the page address. Both modes send the key in the WebSocket query; bare source startup prints the fragment URL shown above, which the page reads and removes.
 
 ## Packaged .exe
 
@@ -118,11 +128,21 @@ The portable app unpacks to a fresh temp folder each launch, so packaged data li
 
 ### Installer
 
+Setup requests normal closure only from processes inside its own install folder, waits for the app's own processes (the shell and the server) to finish, and leaves other programs the app started alone. It stops safely if closure is refused or uncertain; it never force-kills them. On a PC where Windows blocks the helper script, setup and uninstall stop without changing anything. Setup runs this check during install, upgrade, reinstall and uninstall whenever the main program file exists in the install folder; otherwise it skips the check. Paths are passed as data, with forward-slash and network path forms normalized before tool cleanup.
+
 `npm run dist:installer` builds in its own stage, runs the packaged proof with system Node removed from PATH, checks `resources/app`, and scans every packaged file for leaks when `.leak-patterns.local` exists. Without that private word list, contributor builds print a skip line. A scan failure stops publication. A successful build publishes `dist/installers/Command Center Setup <version>.exe` and its `.sha256` sidecar, then removes its stage. The portable `npm run dist` command is unchanged.
+
+The package permits only `config/.gitkeep` from config, and rejects any other config content even without a private word list. Gate entry points work across supported Node versions, and publication requires a fresh successful runtime-proof record tied to the exact installer and build attempt, beyond an exit code of zero.
 
 `node scripts/pack29-installer-proof.mjs` checks real install, upgrade and uninstall using a scratch-named variant. It also scans the installed payload when the private word list exists. Allow about two minutes; timing on this machine for this block is **NOT VERIFIED**.
 
+Setup accepts names containing a letter or number in any script while keeping a separate safe, unique internal identifier. Empty names, names over 100 characters and names containing control or invisible formatting characters are refused.
+
 `config/first-run.json` under the data root records whether setup is `pending` or `complete`. A pending marker shows the wizard unless workspace recovery is blocked. Completing or skipping setup marks it complete. Deleting the marker is not a reset procedure.
+
+The desktop waits up to 60 seconds for server readiness. If that deadline expires, startup waits for its owned server to stop or reports that cleanup could not be confirmed; a late readiness message cannot reopen startup. Closing during initialization latches shutdown until services can drain safely, once, and prevents the server from becoming ready.
+
+If startup fails, the window first says to close Command Center and open it again. Expand **Details** for HTML-escaped diagnostics with user-folder names and recognized credentials redacted.
 
 ## Workspaces and old data
 
@@ -171,27 +191,35 @@ Project IDs and tab IDs are lowercase slugs. Tab IDs must be unique across all p
 
 ## Crew and permissions
 
+After reconnect, a crew change the server cannot confirm unlocks its control with **Not confirmed**; a listed running request stays held. Nothing is resent automatically and an absent request is never reported as successful.
+
 In **Settings > Crew and models**, each capable assigned position has an **Advisor** dropdown beside its model button. The model popup has no advisor control. **Advisor: Off** saves the assignment without an `advisor` field as your choice, which Auto assign keeps. A Leader change applies from your next message, which starts a new session; a worker change applies from its next run. An approved task needs a new plan if its worker assignment changes.
 
 A tab carries its own choices for the 18 fixed positions (the table is in `PROTOCOL.md`). Each position has a fixed job and a fixed write permission: the Leader, Planner, Researcher, Helper, Second opinion, both Reviewers, the Final reviewer, the Design final reviewer and the Minimal reviewer cannot write; the Coder, Design coder, Image, Social and Video makers, both Fixers and the Minimal fixer can. You choose only the CLI, model and effort of a position, and a Claude position can also carry an advisor model. The server never forces a model: a position with no model is unassigned and cannot run. Empty positions are filled from the CLIs that are installed when the app starts and after it re-checks them, and **Auto assign** does the same on request, also redoing positions it filled before (it uses the CLI an approved default prefers when that is installed, and a different company for a reviewer when one is available). A model you picked, and a position you cleared by hand, are never changed by it. A change is refused while that position is working or while the tab is saving, and the leader's CLI, advisor and extra instructions cannot change while it is answering or waiting for your approval. Any CLI may sit on any position; a CLI added in Settings (ACP) always runs its own default model and effort. On load a model or effort only has to be safe in shape (a saved choice stays valid even if discovery does not list it); a pick in the app must also be in the live lists. The old per-tab crew editor, templates, saved setups, roles and step list are not part of this screen or flow.
 
-For each worker run, the server reads `canWrite` from that seat and stores it with the run's CLI, model, effort, optional advisor, and folder. Claude receives `acceptEdits` for writable seats (and `--advisor <model>` when the seat has one) and plan mode plus named tool denials otherwise. Codex receives `workspace-write` or `read-only`, but a `codex exec --sandbox read-only` probe wrote a file on this PC, so no CLI's read-only mode is treated as a boundary. Read-only OpenCode runs receive edit and bash denials. Only the leader starts a worker, through its nine fixed tools, and only after the saved task allows that action. The server checks the tab's saved permission mode and the leader's live mode when the leader asks and again after any approval: in Plan only it refuses, in Ask before edits it first asks you (whatever the position's CLI or write permission), and in Auto-accept edits and Bypass it starts. A worker has no crew tools.
+For each worker run, the server reads `canWrite` from that seat and stores it with the run's CLI, model, effort, optional advisor, and folder. An approved test or visual check also carries a gate-set command capability in its saved task execution. Inspectors and ordinary reviewers receive no such capability. A command-running worker can write files; the read-only position label does not prove otherwise. Claude receives `acceptEdits` for writable seats (and `--advisor <model>` when the seat has one) and plan mode plus named tool denials for ordinary read-only runs. Approved checks use their recorded command capability. Codex receives `workspace-write` or `read-only`, but a `codex exec --sandbox read-only` probe wrote a file on this PC, so no CLI's read-only mode is treated as a boundary. Ordinary read-only OpenCode runs receive edit and bash denials; approved command checks permit the commands they need. Only the leader starts a worker, through its nine fixed tools, and only after the saved task allows that action. The server checks the tab's saved permission mode and the leader's live mode when the leader asks and again after any approval: in Plan only it refuses, in Ask before edits it first asks you (whatever the position's CLI or write permission), and in Auto-accept edits and Bypass it starts. A worker has no crew tools.
 
 ## Run logs and safety
 
 Logs use `logs/<seatKey>-<timestamp>.log` and `.brief.txt`. The filename parser splits at the final `-<digits>`, so prior logs using bare seat IDs remain available from history.
 
-The runner validates command inputs before using a shell, writes briefs to files instead of command arguments, strips the app's private data-root variables from child environments, and keeps an unconfirmed process visible until its real close or explicit release. Logs are flushed once when the process closes. When a worker run ends, any process it left running is stopped and the log says so (`[cleanup] stopped N processes`); after a server crash, the next start ends the processes the dead server was still watching (`logs/.children-<pid>.json`) before anything can launch. Kill, launch-budget, and uncertain-PID state is stored in `launch-safety.json`; old bare-ID entries remain in place. The launch budget is 8 launches per 5 minutes, counted per tab, and counts every worker start; a refusal says how long until the next one is allowed. The file also lists runs that were started and not yet seen to end: after a hard crash their seats start blocked (nothing tracks those processes any more) until you allow launching again.
+The runner validates command inputs before using a shell, writes briefs to files instead of command arguments, strips the app's private data-root variables from child environments, and keeps an unconfirmed process visible until its real close or explicit release. Released output is redacted and written to the log incrementally while the worker runs. Finalization flushes the buffered tail and appends the exit marker. When a worker run ends, any process it left running is stopped and the log says so (`[cleanup] stopped N processes`); after a server crash, the next start ends the processes the dead server was still watching (`logs/.children-<pid>.json`) before anything can launch. Kill, launch-budget, and uncertain-PID state is stored in `launch-safety.json`; old bare-ID entries remain in place. The launch budget is 8 launches per 5 minutes, counted per tab, and counts every worker start; a refusal says how long until the next one is allowed. The file also lists runs that were started and not yet seen to end: after a hard crash their seats start blocked (nothing tracks those processes any more) until you allow launching again.
 
 Stall tracking is keyed by run ID. No run is relaunched automatically any more: because no CLI's read-only mode proves a filesystem boundary, a stalled run of any CLI is marked stalled and escalated to the user instead of being repeated.
 
 ## Leaders and chat
+
+History refresh and tab switching keep the streamed reply visible; completed or interrupted replies settle without duplicating saved text, and unsaved interrupted text stays on the page. Each page fetches full history independently, even after background messages, and refreshes that knowledge after Clear, tab removal or reconnect.
+
+Unrelated updates keep unchanged chat and log text nodes and selections intact, including when timers or usage change; real output changes still appear. Confirmations wait in order with their own actions and cancellation handlers, and settling plus pointer/key protection prevents one gesture answering a different question.
 
 Each tab gets its own leader when its first chat message arrives. The leader runs on whichever installed CLI its seat is set to: Claude (the Claude Agent SDK), Codex (`codex app-server`) or OpenCode (`opencode serve`), with the same crew tools, approvals, live chat and Stop on all three. Any position can move to any installed CLI with `setCrewAssignment`. Opening the app or sending `hello` does not start tab leaders. The leader runs in the tab folder. A Claude leader loads the user's `user`, `project`, and `local` setting sources, including `CLAUDE.md`, skills, plugins, and MCP configuration; Codex and OpenCode leaders load their own user configuration. The server makes no model call at startup. Changing a tab's folder starts no leader either: the next chat message does, so a project's hooks never run unasked. `PROTOCOL.md` has the contract and the known limits (for example, Codex only asks about commands it does not consider safe, and the advisor is Claude-only).
 
 Chat messages are appended as JSONL under `<data root>/chats/<tabId>.jsonl`. Revisions, saved revisions, messages, and clear events survive a server restart. Save requests are serialized per tab (one tab's Save never holds up another tab's), wait a bounded time for an active leader turn, then ask the leader to write `<tab folder>/.command-center/<tabId>/RESUME.md`. The server marks the current transcript revision saved only after that handover succeeds, and records that Save as a past session of the leader (the transcript at that moment and the handover path; the newest 50 are kept). Clear stops only that tab's leader immediately, clears its current transcript view, and makes the next fresh leader read that handover before replying.
 
 The leader has nine fixed tools: read the saved task, ask the Planner for a plan or a triage, accept the Planner's report, request one task action, verify a run's evidence, reconcile an interrupted execution, explicitly finish a task, list archives and read an archive. Unknown tree end stays held. Reconciliation abandons the result without retrying work. It can still fail closed on corrupt or full task files. The tools reach only the leader's own tab and use the same launch-safety budget as every worker start. The Run button does not start a process itself: it sends your request to the leader.
+
+Publishing is not supported here; ship with commit and push only. New plans and replacement plans accept only commit and push as shipping steps. Existing saved tasks and archives that include publishing remain readable. To continue an affected task, ask the Leader in chat to re-plan with commit and push only, then approve the replacement plan in the app.
 
 ### Finished tasks
 
@@ -214,6 +242,8 @@ Codex has no supported-model enum to query. Its baseline list is `gpt-6-luna`, `
 Claude Agent SDK results provide a Claude leader's latest input-side context estimate, context window, and cost. A Codex leader reports its last turn's input tokens and the model window (no cost); an OpenCode leader reports input and cache tokens, cost, and the model's context limit. The context estimate includes input and cache tokens, excludes output tokens, and is not true context occupancy. Each worker run has its own usage snapshot. Claude workers report usage and rate-limit events from stream JSON; Codex exposes only its final `tokens used` count; OpenCode does not report measured usage. Missing measurements remain absent rather than becoming zeroes. Usage is in-memory and session-scoped.
 
 ## Server protocol
+
+Retry stays above dialogs and their backdrop, preserving the open dialog, typed brief and keyboard focus. Failed attachments tell you to remove and attach them again; Needs you uses position names and neutral labels for earlier positions or removed tabs, including tooltips, while keeping process numbers and the same action targets.
 
 The WebSocket state, events, and accepted client messages are documented in [PROTOCOL.md](./PROTOCOL.md). HTTP and WebSocket origin and host checks remain enabled. Pasted images are stored under the data root's `scratch/` directory and accepted into chat only from that directory.
 

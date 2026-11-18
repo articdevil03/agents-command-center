@@ -11,13 +11,14 @@ import { addRunUsage, appendRunOutput, broadcast, broadcastUsageState, stateMess
 import { LAUNCH_WINDOW_MS, LEADER_LAUNCH_LIMIT, MAX_LAUNCH_NOTICES, NOTICE_BRIEF_MAX } from "./launch-gates.ts";
 import { addUnconfirmed, clearConfirmedKill, endLiveRun, persistLaunchSafety } from "./launch-safety.ts";
 import {
-  RUN_RECORDS_KEPT, settingsService, acpClis, blockedSeatKeys, describeError, folderActivity, launchSafety, runBridgeRevokers,
-  runContexts, runOutput, runRecords, runUsage, runWindows, stallTrackers, tabs, unconfirmedRunIds, type Launcher,
+  RUN_RECORDS_KEPT, settingsService, acpClis, blockedSeatKeys, dataRoot, describeError, folderActivity, launchSafety, runBridgeRevokers,
+  runContexts, runOutput, runRecords, runUsage, runWindows, stallTrackers, tabs, unconfirmedRunIds, fixedTasks, type Launcher,
   type RunRecord,
 } from "./state.ts";
 import { crewDefinition, tabLocation } from "./tabs.ts";
 import { refreshTabDetails } from "./workspace.ts";
 import { isFixedTab } from "../fixed-crew/runtime.ts";
+import { executionJournal, saveJournal } from "../fixed-crew/task-execution.ts";
 import { assertFixedTaskLaunch, fixedExecution, fixedRunLog, fixedRunStatus, fixedTreeEnd, fixedWorkerPrompt, type FixedLaunchContext } from "./fixed-task-launch.ts";
 
 // Who started a run, as the page shows it: the leader, a seat (a planner that runs the process), or null for the user's own Run.
@@ -46,16 +47,26 @@ export function trimRunRecords(): void {
 }
 export function launchWorker(tabId: string, slot: string, prompt: string, source: "client" | "leader" | "seat" = "client", headsUp?: string, launcher?: Launcher, launchContext?: FixedLaunchContext): LaunchResult {
   const location = tabLocation(tabId);
-  if (!location) return { ok: false, error: `unknown tab: ${tabId}` };
+  if (!location) return { ok: false, error: "This tab no longer exists. Choose an existing tab and position." };
   try { assertFixedTaskLaunch(tabId, slot, launchContext); }
   catch (error) { return { ok: false, error: describeError(error) }; }
   const fixed = isFixedTab(location.tab);
   // Only a fixed crew starts workers, and only through its current leader (assertFixedTaskLaunch above).
   if (!fixed) return { ok: false, error: "Only a fixed crew can start workers." };
   const selected = fixed && launchContext ? fixedExecution(tabId, launchContext.executionId) : null;
+  const task = fixedTasks.get(tabId);
+  const reservation = launchContext ? task?.executions.find((entry) => entry.id === launchContext.executionId) : undefined;
+  const executionCapability = selected && !isAcpKind(selected.assignment.cli) && task && reservation && selected.taskId === task.id
+    && reservation.taskId === selected.taskId && reservation.planVersion === selected.planVersion
+    && selected.planVersion === task.planVersion && reservation.kind === selected.kind
+    && reservation.role === selected.role && selected.role === "leader" && slot === "leader"
+    && ["check", "visualCheck"].includes(selected.kind) && reservation.executionCapability === "run-commands"
+    ? "run-commands" as const : undefined;
   const member = selected ? { ...crewDefinition(location.tab, slot)!, ...selected.assignment } : crewDefinition(location.tab, slot);
   const definition = crewDefinition(location.tab, slot);
-  if (!member || !definition) return { ok: false, error: `unknown slot: ${slot}` };
+  if (!member || !definition) return { ok: false, error: `This position is no longer available in ${location.tab.name}. Choose an existing position.` };
+  if (selected && ["check", "visualCheck"].includes(selected.kind) && isAcpKind(member.cli)) return { ok: false,
+    error: `The ${definition.role} position in ${location.tab.name} cannot run checks with this CLI. Choose a Claude, OpenCode or Codex position for checks.` };
   // A CLI added in Settings that was since removed: say so before anything is counted or saved.
   let acp: import("../config-acp.ts").AcpCli | undefined;
   if (isAcpKind(member.cli)) {
@@ -65,16 +76,17 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
   }
   if (typeof prompt !== "string" || !prompt.trim()) return { ok: false, error: "run prompt is required" };
   const seatKey = `${tabId}.${slot}`;
+  const position = `The ${definition.role} position in ${location.tab.name}`;
   if (!isSafeSeatId(seatKey)) return { ok: false, error: "unsafe seat key" };
   if (unconfirmedRunIds.has(seatKey) || launchSafety.uncertain.some((row) => row.seatId === seatKey)) {
-    return { ok: false, error: `seat has an unconfirmed process: ${seatKey}` };
+    return { ok: false, error: `${position} cannot start: an earlier process may still be running. In Needs you, choose Try to stop again to stop it, or review the warning before choosing Release.` };
   }
   // An old row from before seat keys named their tab belongs to no tab, so it blocks every launch: say which one it is.
   const legacyUnconfirmed = launchSafety.uncertain.find((row) => !row.seatId.includes("."));
-  if (legacyUnconfirmed) return { ok: false, error: `an old unconfirmed process (${legacyUnconfirmed.seatId}) blocks every launch; release it first` };
-  if (blockedSeatKeys.has(seatKey)) return { ok: false, error: `launch blocked after a prior stop: ${seatKey}` };
+  if (legacyUnconfirmed) return { ok: false, error: `${position} cannot start: an earlier position may still be running and blocks all launches. In Needs you, choose Try to stop again to stop it, or review the warning before choosing Release.` };
+  if (blockedSeatKeys.has(seatKey)) return { ok: false, error: `${position} cannot start: launch blocked after a prior stop. In Needs you, choose Allow again for this position.` };
   const legacyBlock = [...blockedSeatKeys].find((key) => !key.includes("."));
-  if (legacyBlock) return { ok: false, error: `an old launch block (${legacyBlock}) blocks every launch; allow it again first` };
+  if (legacyBlock) return { ok: false, error: `${position} cannot start: an earlier position blocks all launches after a previous stop. In Needs you, choose Allow again for that position.` };
 
   const previousTimestamps = [...launchSafety.timestamps];
   const previousNotices = [...launchSafety.notices];
@@ -95,6 +107,7 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
   const run: RunnerRun = {
     runId: selected?.id ?? randomUUID(), seatKey, slotId: slot, name: member.name, cli: member.cli, model: member.model,
     effort: member.effort, folder: location.tab.folder, canWrite: definition.canWrite === true, startedAt: Date.now(),
+    ...(executionCapability ? { executionCapability } : {}),
     // Only a Claude run can have an advisor; a CLI added in Settings runs through its own start command.
     ...(member.cli === "claude" && member.advisor ? { advisor: member.advisor } : {}),
     ...(acp ? { acp } : {}),
@@ -139,7 +152,11 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
   trimRunRecords();
   let result: ReturnType<typeof runSeat>;
   // The fixed role prompt goes in front of every launch here, the one place they all pass.
-  try { result = runSeat(run, fixedWorkerPrompt(tabId, run.runId, prompt), {
+  try {
+    let workerPrompt = fixedWorkerPrompt(tabId, run.runId, prompt);
+    if (executionCapability) workerPrompt = workerPrompt.replace("You are read-only. Do not edit project files.",
+      "You can run commands and may write files while executing the approved checks. Report commands, results and any files changed. Stay within the assigned folder and approved scope. Do not run git commit or git push: shipping happens only through the app's own commit and push actions.");
+    result = runSeat(run, workerPrompt, {
     onTreeEnd: (startedRun, evidence) => { if (fixed) fixedTreeEnd(tabId, startedRun.runId, evidence === "confirmed"); },
     onOutput: (startedRun, chunk) => {
       appendRunOutput(startedRun.runId, chunk);
@@ -165,30 +182,59 @@ export function launchWorker(tabId: string, slot: string, prompt: string, source
       broadcast(stateMessage());
     },
     onStatus: (startedRun, status, exitCode) => {
-      if (fixed && status !== "working") fixedRunStatus(tabId, startedRun.runId, status);
-      if (status !== "working") { endLiveRun(startedRun.runId); endRunWindow(startedRun.runId); revokeRunBridge(startedRun.runId); denyRunApprovals(startedRun.runId); endRunRecord(startedRun.runId, status, exitCode); }
-      else if (!runWindows.has(startedRun.runId)) runWindows.set(startedRun.runId, folderActivity.beginOwn(startedRun.folder));
       const runtime = tabs.get(tabId);
-      if (!runtime) return;
       if (status === "working") {
+        if (!runWindows.has(startedRun.runId)) runWindows.set(startedRun.runId, folderActivity.beginOwn(startedRun.folder));
+        if (!runtime) return;
         runtime.state = runEvent(runtime.state, { type: "start", run: { id: startedRun.runId, seatSlotId: slot, label: prompt.slice(0, 120), startedAt: startedRun.startedAt } });
         stallTrackers.startRun(startedRun.runId, startedRun.startedAt);
         broadcast({ type: "runStart", tabId, runId: startedRun.runId, seatKey, cli: startedRun.cli, model: startedRun.model, effort: startedRun.effort, folder: startedRun.folder, startedAt: startedRun.startedAt, canWrite: startedRun.canWrite, launchedBy: startedBy });
         broadcast(stateMessage());
         return;
       }
-      runtime.stalledRuns.delete(startedRun.runId);
-      if (status === "stopped") runtime.state = runEvent(runtime.state, { type: "stop", runId: startedRun.runId, endedAt: Date.now() });
-      else if (status === "done") runtime.state = runEvent(runtime.state, { type: "finish", runId: startedRun.runId, endedAt: Date.now(), outcome: "done" });
-      else runtime.state = runEvent(runtime.state, { type: "fail", runId: startedRun.runId, endedAt: Date.now(), outcome: exitCode === undefined ? "spawn error" : `exit ${exitCode}` });
-      broadcast({ type: status === "stopped" ? "runStop" : status === "done" ? "runFinish" : "runFail", tabId, runId: startedRun.runId, seatKey, outcome: status, exitCode });
-      runContexts.delete(startedRun.runId);
-      clearConfirmedKill(startedRun.runId);
-      runOutput.delete(startedRun.runId);
-      runUsage.delete(startedRun.runId);
-      stallTrackers.finishRun(startedRun.runId);
-      broadcast(stateMessage());
-      void refreshTabDetails(tabId);
+      const finalizationErrors: unknown[] = [];
+      try {
+        if (fixed) fixedRunStatus(tabId, startedRun.runId, status);
+      } catch (error) {
+        finalizationErrors.push(error);
+        // Tree confirmation may already have released admission. Keep a durable
+        // brake until reconcile_task_execution abandons this unpublished result.
+        try {
+          const journal = executionJournal(dataRoot, tabId);
+          const execution = journal.executions.find((entry) => entry.id === startedRun.runId);
+          if (execution && !execution.consumed) {
+            execution.status = "interrupted";
+            journal.activeExecutionId = execution.id;
+            saveJournal(dataRoot, tabId, journal);
+          }
+        } catch (brakeError) {
+          finalizationErrors.push(brakeError);
+        } finally {
+          broadcast({ type: "error", message: "The run ended, but its task result could not be saved. Ask the leader to reconcile the execution before continuing." });
+        }
+      } finally {
+        for (const cleanup of [
+          () => endLiveRun(startedRun.runId), () => endRunWindow(startedRun.runId),
+          () => revokeRunBridge(startedRun.runId), () => denyRunApprovals(startedRun.runId),
+          () => endRunRecord(startedRun.runId, status, exitCode),
+          () => runContexts.delete(startedRun.runId), () => clearConfirmedKill(startedRun.runId),
+          () => runOutput.delete(startedRun.runId), () => runUsage.delete(startedRun.runId),
+          () => stallTrackers.finishRun(startedRun.runId),
+        ]) {
+          try { cleanup(); } catch (error) { finalizationErrors.push(error); }
+        }
+        try { if (runtime) {
+          runtime.stalledRuns.delete(startedRun.runId);
+          if (status === "stopped") runtime.state = runEvent(runtime.state, { type: "stop", runId: startedRun.runId, endedAt: Date.now() });
+          else if (status === "done") runtime.state = runEvent(runtime.state, { type: "finish", runId: startedRun.runId, endedAt: Date.now(), outcome: "done" });
+          else runtime.state = runEvent(runtime.state, { type: "fail", runId: startedRun.runId, endedAt: Date.now(), outcome: exitCode === undefined ? "spawn error" : `exit ${exitCode}` });
+          broadcast({ type: status === "stopped" ? "runStop" : status === "done" ? "runFinish" : "runFail", tabId, runId: startedRun.runId, seatKey, outcome: status, exitCode });
+          broadcast(stateMessage());
+          void refreshTabDetails(tabId);
+        } } catch (error) { finalizationErrors.push(error); }
+      }
+      if (finalizationErrors.length) throw new AggregateError(finalizationErrors,
+        finalizationErrors.map(describeError).join("; "));
     },
   }, undefined, { keyLaunch: acp ? settingsService.cliKeys.launch(acp) : undefined }); } catch (err) {
     runContexts.delete(run.runId); runRecords.delete(run.runId); revokeRunBridge(run.runId);

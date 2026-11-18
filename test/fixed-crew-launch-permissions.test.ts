@@ -52,11 +52,36 @@ for (const mode of ["saved Ask", "live default"]) test(`FCP ${mode} waits for Al
   } finally { await f.close(); }
 });
 
+test("FCP replacing a captured leader handle while approval waits refuses launch", async () => {
+  const f = await fixture();
+  try {
+    await f.observe("default");
+    const waiting = f.launch(); waiting.catch(() => {});
+    await tick(); assert.equal(f.pending().length, 1);
+    const old = f.server.leaders.get("alpha-dev");
+    f.server.leaders.set("alpha-dev", Object.create(old));
+    f.answer(true);
+    const result = await waiting.then(() => "launched", (error: Error) => error.message);
+    assert.equal(result, "The leader instance is no longer current.");
+    f.idle();
+  } finally { await f.close(); }
+});
+
+test("FCP observed live Plan is pushed to the page immediately", async () => {
+  const f = await fixture();
+  try {
+    await f.observe("plan");
+    const state = f.ws.messages.filter((row: any) => row.type === "state").at(-1);
+    assert.equal(state.projects[0].tabs[0].permissionMode, "plan");
+  } finally { await f.close(); }
+});
+
 for (const mode of ["saved Plan", "live Plan"]) test(`FCP ${mode} refuses immediately`, async () => {
   const f = await fixture();
   try {
     if (mode === "saved Plan") f.server.settingsService.state.permissionModes["alpha-dev"] = "plan";
     else await f.observe("plan");
+    assert.equal(f.server.stateMessage().projects[0].tabs[0].permissionMode, "plan", "page shows Plan when SDK is in Plan");
     const result = await f.launch().then(() => "launched", (error: Error) => error.message);
     assert.equal(result, "Switch out of Plan mode before starting fixed work.");
     assert.equal(f.pending().length, 0);

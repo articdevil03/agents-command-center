@@ -1,7 +1,7 @@
 import { GITHUB_STATUS_ARGS } from "./github-login.ts";
 import { parseGitHubAuthStatus } from "./parse.ts";
 import { hasCredentialOverride } from "./opencode/credentials.ts";
-import { checkKeyCredentials, validApiKey } from "./opencode/key.ts";
+import { checkKeyCredentials, normalizeApiKey } from "./opencode/key.ts";
 import { randomBytes } from "node:crypto";
 import { isSafeRequestId } from "../chat-store.ts";
 import { refreshProcessPath } from "../leader-common/path-refresh.ts";
@@ -29,7 +29,7 @@ export type LoginReason = keyof typeof LOGIN_MESSAGES;
 export type LoginPhase = "starting" | "waitingKey" | "waitingBrowser" | "waitingCode" | "verifying" | null;
 export type LoginEvent = { type: "cliLoginState"; cli: string; loginRequestId: string; loginId: string | null; revision: number;
   status: "running" | "done" | "failed"; phase: LoginPhase; reason: LoginReason | null;
-  verificationUrl: string | null; deviceCode: string | null; pasteRequired: boolean; expiresAt: number | null };
+  verificationUrl: string | null; deviceCode: string | null; pasteRequired: boolean; expiresAt: number | null; cleanupPending: boolean };
 export type LoginSend = (event: LoginEvent) => void;
 export function validateLoginRequest(message: unknown): asserts message is Record<string, any> {
   if (!message || typeof message !== "object" || Array.isArray(message)) throw new Error("Invalid sign-in request.");
@@ -79,9 +79,10 @@ export class CliLogin {
   }
   private publish(op: Operation, phase: LoginPhase, reason: LoginReason | null = null, status: LoginEvent["status"] = "running"): void {
     Object.assign(op.event, { revision: op.event.revision + 1, phase, reason, status });
-    const action = { requestId: op.requestId, kind: "login" as const, phase, reason, status,
+    const action = { requestId: op.requestId, kind: "login" as const, phase, reason, status, cleanupPending: op.event.cleanupPending,
       message: reason ? LOGIN_MESSAGES[reason] : status === "done" ? op.id === "opencode" ? "Key saved. OpenCode will check it when you first chat." : "Signed in" : phase === "waitingKey" ? "Sign in with your OpenCode Go key" : op.id === "opencode" ? "Saving your key…" : phase === "waitingCode" ? "Paste the code from the website" : phase === "waitingBrowser" ? "Finish signing in in your browser" : "Signing in" };
     const cli = op.id;
+    if (reason === "possiblySaved" && status === "failed" && !op.event.cleanupPending) action.message = "Sign-in stopped. The key may have been saved. Check again.";
     const target = cli === "github" ? this.state.github : this.state.catalogTools[cli];
     target.action = action;
     if (Object.hasOwn(this.state.tools, op.id)) this.state.tools[op.id as CliId].action = action;
@@ -96,7 +97,7 @@ export class CliLogin {
     const op: Operation = { id: message.cli, requestId: message.requestId, capability, send, parser: new LoginOutput(message.cli), abort: new AbortController(),
       done: Promise.resolve(), replace: message.type === "replaceCliLogin", attempts: 0, lastAttempt: -Infinity, positive: false,
       event: { type: "cliLoginState", cli: message.cli, loginRequestId: message.requestId, loginId: capability, revision: 0, status: "running", phase: "starting", reason: null,
-        verificationUrl: null, deviceCode: null, pasteRequired: false, expiresAt: Date.now() + (this.deps.timeoutMs ?? 600_000) } };
+        verificationUrl: null, deviceCode: null, pasteRequired: false, cleanupPending: false, expiresAt: Date.now() + (this.deps.timeoutMs ?? 600_000) } };
     this.active = op; // Synchronous lock before the first await, shared with installer admission.
     this.publish(op, "starting");
     op.done = this.execute(op);
@@ -110,8 +111,6 @@ export class CliLogin {
         await (this.deps.refreshPath ?? (() => refreshProcessPath({ env: this.deps.env })))();
         const version = await this.deps.run("gh", ["--version"], { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true });
         if (version.code !== 0) throw new Error("githubMissing");
-        this.state.github.connected = false;
-        this.state.github.account = null;
       } else {
         const entry = catalogTool(op.id);
         if (op.id !== "opencode" && !entry.signIn.managed) throw new Error("unsupported");
@@ -196,6 +195,7 @@ export class CliLogin {
     } catch (error) {
       const key = (error as Error)?.message;
       const reason: LoginReason = op.keyWriteAttempt ? "possiblySaved" : Object.hasOwn(LOGIN_MESSAGES, key) ? key as LoginReason : "loginFailed";
+      op.event.cleanupPending = !cleanupConfirmed;
       this.clearPrivate(op); this.publish(op, null, reason, "failed");
       throw new Error(LOGIN_MESSAGES[reason]);
     } finally {
@@ -208,9 +208,10 @@ export class CliLogin {
     const args = op.id === "github" ? GITHUB_STATUS_ARGS : AUTH_ARGS[op.id as CliId];
     if (!args || op.abort.signal.aborted) return;
     if (op.id === "github" && (!op.result || op.result.code !== 0 || op.result.cleanupConfirmed !== true)) return;
-    const result = await this.deps.run(op.id === "github" ? "gh" : catalogTool(op.id).detection!.program, args, { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true });
+    const result = await this.deps.run(op.id === "github" ? "gh" : catalogTool(op.id).detection!.program, args, { timeoutMs: CLI_TIMEOUT_MS, directExecutable: true })
+      .catch((error) => { if (op.id !== "github") throw error; return { code: -1, stdout: "", stderr: "" }; });
     if (op.id === "github") {
-      const parsed = parseGitHubAuthStatus(result);
+      const parsed = parseGitHubAuthStatus(result, "settings");
       if (op.abort.signal.aborted) return;
       // Account names stay out of shared login state and persistence.
       this.state.github.connected = parsed.connected;
@@ -260,7 +261,7 @@ export class CliLogin {
         if (op.attempts >= 5 || now - op.lastAttempt < 2000) throw new Error("Wait before submitting another key.");
         op.attempts++; op.lastAttempt = now;
         if (op.event.phase !== "waitingKey" || !op.acceptKey) throw new Error("Sign-in is not waiting for a key.");
-        if (!validApiKey(apiKey)) throw new Error(LOGIN_MESSAGES.invalidKey);
+        apiKey = normalizeApiKey(apiKey);
         const accept = op.acceptKey; op.acceptKey = undefined;
         this.publish(op, "verifying"); // Consume synchronously before the first await.
         accept(apiKey);
@@ -285,7 +286,13 @@ export class CliLogin {
     op.failure ??= "cancelled"; this.clearPrivate(op); this.publish(op, null, (op.keyWriteAttempt || op.keyResult?.persisted) ? "possiblySaved" : op.failure); op.abort.abort();
     await op.done.catch(() => {});
     if (this.active !== op) return;
-    if (await (op.keyResult?.retryCleanup ?? op.result?.retryCleanup)?.() !== true) throw new Error(LOGIN_MESSAGES.cleanupUnconfirmed);
+    let cleaned = false;
+    try { cleaned = await (op.keyResult?.retryCleanup ?? op.result?.retryCleanup)?.() === true; } catch { /* Retain ownership on cleanup failure. */ }
+    op.event.cleanupPending = !cleaned;
+    if (!cleaned) {
+      this.publish(op, null, (op.keyWriteAttempt || op.keyResult?.persisted) ? "possiblySaved" : "cleanupUnconfirmed", "failed");
+      throw new Error(LOGIN_MESSAGES.cleanupUnconfirmed);
+    }
     this.active = null; this.publish(op, null, (op.keyWriteAttempt || op.keyResult?.persisted) ? "possiblySaved" : "cancelled", "failed");
   }
   async drain(): Promise<boolean> {

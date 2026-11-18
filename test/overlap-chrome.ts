@@ -203,6 +203,7 @@ export async function chromeAudit(port: number, profile: string, width: number, 
       },
       // 5. Needs you: launch safety records, approvals and long requests, and the send form.
       requests: async () => {
+        await evaluate(`(()=>{const s=structuredClone(window.__ccSeed);s.projects[0].name=${JSON.stringify(spaced("Long project", 300))};window.__ccDeliver({...s,type:"state"});return true})()`);
         await openAndWait("#inboxBtn", "#inboxPop");
         await evaluate(`document.querySelector("#inboxPop").scrollTop=0;true`);
         // A request body keeps its line breaks, so the long cards are taller and fewer controls fit above the fold.

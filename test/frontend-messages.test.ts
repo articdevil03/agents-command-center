@@ -42,9 +42,11 @@ test("closing the app also warns about work that belongs to no tab (a Settings a
   h.api.answerCloseRequest();
   assert.deepEqual(h.closeAnswers, ["close", "hold"], "work with no tab holds the close");
   assert.equal(h.api.confirmCalls.at(-1).body, "Still working: a Settings action is running. Closing stops it.");
+  h.api.confirmCalls.at(-1).onCancel();
   h.api.onMessage(h.state({ activeWork: true }, { globalWork: ["an upload is running", "a Settings action is running"] }));
   h.api.answerCloseRequest();
   assert.equal(h.api.confirmCalls.at(-1).body, `1 tab is still working: P${nbsp}Dev. Also: an upload is running, a Settings action is running. Closing stops them.`);
+  h.api.confirmCalls.at(-1).onCancel();
   h.api.onMessage(h.state({ activeWork: true }, { globalWork: [] }));
   h.api.answerCloseRequest();
   assert.equal(h.api.confirmCalls.at(-1).body, `1 tab is still working: P${nbsp}Dev. Closing stops it.`, "a working tab alone reads as it always did");

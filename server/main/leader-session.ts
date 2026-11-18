@@ -14,7 +14,7 @@ import { endTurnWindow, openUnpromptedReply, setLeaderActivity } from "./activit
 import { askLeaderApproval, denyLeaderApprovals } from "./approvals.ts";
 import { broadcast, broadcastUsageState, stateMessage } from "./broadcast.ts";
 import { openBridge } from "./crew-tools.ts";
-import { finishLeaderTurn, handleMissedSteer, noteUnansweredSteer, settleLeaderTurnWaiters } from "./leader-turn.ts";
+import { knownLeaderStartFailure, finishLeaderTurn, handleMissedSteer, noteUnansweredSteer, settleLeaderTurnWaiters } from "./leader-turn.ts";
 import {
   HOST, acpClis, acpSpawn, activeLeaderTurns, boundPort, chatStore, claudeCliPath, describeError, folderActivity, handoverReadTurns, lateSteers,
   leaderInstances, leaderJobs, leaderModels, leaderQuery, leaderSeats, leaderSpawn, leaderStartTimeoutMs, leaderTurnResolvers, leaderTurnTimeoutMs, leaderTurnText, leaderUsage,
@@ -109,6 +109,7 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
   // Only the Claude CLI starts a turn by itself (probed 2026-10-17: a finished background job makes it answer with no message of ours).
   const opensOwnReplies = lead.cli === "claude";
   const callbacks: LeaderCallbacks = {
+    onPermissionMode: () => { if (current()) broadcast(stateMessage()); },
     onStop: () => {
       fixedGitOperations.cancelTab(tabId, instance);
       denyLeaderApprovals(tabId, instance); revokeBridge();
@@ -153,6 +154,7 @@ function startTabLeader(tabId: string, revokeOnFailure: { run: () => void }): Le
     },
     onError: (message) => {
       if (!current()) return;
+      message = knownLeaderStartFailure(message) ?? message;
       const pending = leaderTurnResolvers.get(tabId);
       if (pending) finishLeaderTurn(tabId, true, message);
       else broadcast({ type: "chatError", tabId, message });
@@ -194,7 +196,7 @@ export function fixedLeaderSignature(tabId: string): string {
 }
 // A turn waiting for a retired leader to exit has a resolver but no leader yet: Stop all and shutdown must end it too.
 export function leadersAndWaitingTurns(): string[] { return [...new Set([...leaders.keys(), ...leaderTurnResolvers.keys()])]; }
-export function stopLeaderSession(tabId: string, clearUsage = false, interruptedTurnError?: string): void {
+export function stopLeaderSession(tabId: string, clearUsage = false, interruptedTurnError?: string, preserveSteers = false): void {
   leaderVaultPaths.delete(tabId);
   fixedGitOperations.cancelTab(tabId);
   // Handed-back steers still waiting behind the reply being stopped are dropped with it (the notice below says so); a failed finish below reads them first.
@@ -226,8 +228,8 @@ export function stopLeaderSession(tabId: string, clearUsage = false, interrupted
       broadcast({ type: "chatError", tabId, message: "leader turn stopped" });
     }
   }
-  lateSteers.delete(tabId);
-  steeredTurns.delete(tabId);
+  // Only automatic between-turn replacement retains the accepted messages. User Stop/Clear keeps the default cancellation.
+  if (!preserveSteers) { lateSteers.delete(tabId); steeredTurns.delete(tabId); }
   // What this leader was doing ends with it (Stop, Clear, a new folder or CLI, a replaced dead leader); its background jobs end in its onStop.
   setLeaderActivity(tabId, null);
   const leader = leaders.get(tabId);

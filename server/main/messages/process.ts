@@ -17,7 +17,10 @@ import {
 function onUpdateClientPref(ws: WebSocket, message: any): void {
   const result = applyClientPrefUpdate(clientPrefs, message.key, message.value);
   if (!result.ok) throw new Error(result.error);
-  setClientPrefs(result.prefs); writeClientPrefs(clientPrefs); broadcast(stateMessage()); return;
+  try {
+    if (!writeClientPrefs(result.prefs)) throw new Error("Preferences were not saved.");
+  } catch { throw new Error("Your preferences could not be saved. Your previous choices have been kept."); }
+  setClientPrefs(result.prefs); broadcast(stateMessage()); return;
 }
 function onClearLaunchBlock(ws: WebSocket, message: any): void {
   const seatKey = message.seatKey ?? message.seatId;

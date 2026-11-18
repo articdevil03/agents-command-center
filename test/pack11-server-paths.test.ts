@@ -4,16 +4,17 @@ import assert from "node:assert/strict";
 import { writeFileSync, readFileSync, realpathSync, mkdtempSync, rmdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { sourceText } from "./source-text.ts";
-import { TABS, type CliName, HEAD, READ_FIRST, sleep, count, type Server, boot, client, chatBlock, type Harness, turnAfter, expectChatGiven, seed } from "./pack11-server-helpers.ts";
+import { TABS, type CliName, HEAD, READ_FIRST, sleep, count, type Server, boot, client, chatBlock, type Harness, type Client, turnAfter, expectChatGiven, seed } from "./pack11-server-helpers.ts";
 
 // ---- the inventory: every line of server/index.ts that makes the next leader forget the tab ----
 const INVENTORY: Record<string, { count: number; paths: string[] }> = {
   "for (const project of workspaces.projects) for (const tab of project.tabs) pendingHandoverReads.add(tab.id);": { count: 1, paths: ["restart"] },
   "pendingHandoverReads.add(tabId); handoverReadTurns.delete(tabId);": { count: 1, paths: ["every stopLeaderSession caller"] },
   "stopLeaderSession(tab.id, true);": { count: 1, paths: ["removeTab"] },
-  "stopLeaderSession(tabId);": { count: 1, paths: ["deadLeader"] },
-  "if (fixedTab && isFixedTab(fixedTab) && leaders.has(tabId) && fixedLeaderSettings.get(tabId) !== fixedLeaderSignature(tabId)) stopLeaderSession(tabId);": { count: 1, paths: ["fixedLeaderChange"] },
+  "stopLeaderSession(tabId, false, undefined, true);": { count: 1, paths: ["deadLeader"] },
+  "if (fixedTab && isFixedTab(fixedTab) && leaders.has(tabId) && fixedLeaderSettings.get(tabId) !== fixedLeaderSignature(tabId)) stopLeaderSession(tabId, false, undefined, true);": { count: 1, paths: ["fixedLeaderChange"] },
   "if (isLeader) stopLeaderSession(tabId);": { count: 1, paths: ["stopSeat"] },
   "stopLeaderSession(tabId, false, reason);": { count: 1, paths: ["permissionModeFails"] },
   "pendingHandoverReads.add(tabId);": { count: 3, paths: ["permissionModeFails", "clear", "undoClear"] },
@@ -21,22 +22,22 @@ const INVENTORY: Record<string, { count: number; paths: string[] }> = {
   "for (const tabId of leadersAndWaitingTurns()) stopLeaderSession(tabId);": { count: 2, paths: ["stopAll", "restart (shutdown)"] },
   "stopLeaderSession(tabId, true);": { count: 2, paths: ["clear", "undoClear"] },
   "if (leaderNeedsVaultReplacement(tabId)) pendingHandoverReads.add(tabId);": { count: 1, paths: ["vaultChange"] },
-  "if (leaderNeedsVaultReplacement(tabId)) stopLeaderSession(tabId);": { count: 1, paths: ["vaultChange"] },
+  "if (leaderNeedsVaultReplacement(tabId)) stopLeaderSession(tabId, false, undefined, true);": { count: 1, paths: ["vaultChange"] },
 };
 // removeTab ends the tab itself: ids are never handed out again, so nothing is left to give a leader.
 // The legacy-crew sites (useSetup, setSetup, roleChange, cliSwitch) were deleted with their handlers in run 13: the server answers those messages with a refusal (the in-session test below sends each one and checks the refusal and that the leader was left alone).
 const NOT_APPLICABLE = new Set(["removeTab"]);
-const COVERED = new Set(["restart", "restart (shutdown)", "every stopLeaderSession caller", "stopSeat", "stopAll", "changeFolder", "fixedLeaderChange", "deadLeader", "permissionModeFails", "clear", "undoClear", "vaultChange"]);
+const COVERED = new Set(["restart", "restart (shutdown)", "every stopLeaderSession caller", "stopSeat", "stopAll", "changeFolder", "fixedLeaderChange", "deadLeader", "permissionModeFails", "clear", "undoClear", "vaultChange", "recoverLaunchSafety"]);
 
 // ---- the creation inventory: every place a leader is created or registered. A leader made anywhere else would skip `deliver`'s chat hand-back. ----
 const CREATION_PATTERN = /\b(startTabLeader|createTabLeader|createCodexLeader|createOpencodeLeader|createLeader)\(|\bleaders\.set\(/g;
 const CREATION: Record<string, { count: number; paths: string[] }> = {
-  "createTabLeader(": { count: 2, paths: ["createNow", "createAfterRetired"] }, // sendLeaderTurn's two creations, both handed to `deliver`
+  "createTabLeader(": { count: 1, paths: ["createNow", "createAfterRetired"] }, // sendLeaderTurn's shared creation, used by both start paths
   "startTabLeader(": { count: 1, paths: ["createNow", "createAfterRetired"] }, // inside createTabLeader
   "createCodexLeader(": { count: 1, paths: ["createNow", "createAfterRetired"] }, "createOpencodeLeader(": { count: 1, paths: ["createNow", "createAfterRetired"] },
   "createLeader(": { count: 1, paths: ["createNow", "createAfterRetired"] }, "leaders.set(": { count: 1, paths: ["createNow", "createAfterRetired"] },
 };
-const DELIVERED = ["try { leader = createTabLeader(tabId); }", "try { deliver(createTabLeader(tabId)); }", "if (!afterRetired) { deliver(leader!); return; }"];
+const DELIVERED = ["try { deliver(needsNewLeader ? createTabLeader(tabId) : leader!); }", "if (!afterRetired) start();", "else void waitForRetiredLeaders(tabId).then(start);"];
 const CREATION_COVERED = new Set(["createNow", "createAfterRetired"]);
 function inventory(source: string): { stop: [string, number][]; creation: [string, number][]; delivered: number[] } {
   const lines = source.split(/\r?\n/).map((line) => line.trim().replace(/^export /, "")).filter((line) => !line.startsWith("//") && !/^(async )?function (stopLeaderSession|createTabLeader|startTabLeader)\b/.test(line));
@@ -55,7 +56,7 @@ test("pack 11: the call sites that make a leader forget the tab are exactly the 
   assert.ok(found.stop.reduce((sum, [, n]) => sum + n, 0) >= 15, "the scan found the call sites");
   assert.deepEqual(found.stop, Object.entries(INVENTORY).map(([line, entry]) => [line, entry.count] as [string, number]).sort(), "a new or removed call site needs a path here");
   for (const entry of Object.values(INVENTORY)) for (const path of entry.paths) assert.ok(COVERED.has(path) || NOT_APPLICABLE.has(path), `path ${path} has a test`);
-  // every place a leader is created or registered, each mapped to a path; the two creations in sendLeaderTurn reach the leader through `deliver`
+  // every place a leader is created or registered, each mapped to a path; both start paths in sendLeaderTurn reach the leader through `deliver`
   assert.deepEqual(found.creation, Object.entries(CREATION).map(([token, entry]) => [token, entry.count] as [string, number]).sort(), "a new leader creation site needs a path here");
   for (const entry of Object.values(CREATION)) for (const path of entry.paths) assert.ok(CREATION_COVERED.has(path), `creation path ${path} has a test`);
   assert.deepEqual(found.delivered, [1, 1, 1], "each creation in sendLeaderTurn hands the new leader to deliver");
@@ -63,7 +64,7 @@ test("pack 11: the call sites that make a leader forget the tab are exactly the 
   assert.notDeepEqual(inventory(`${source}\nconst rogue = createTabLeader(tabId);`).creation, found.creation, "control: a new createTabLeader( is seen");
   assert.notDeepEqual(inventory(`${source}\nleaders.set(tabId, rogue);`).creation, found.creation, "control: a new leaders.set( is seen");
   assert.notDeepEqual(inventory(`${source}\nstopLeaderSession(tabId);`).stop, found.stop, "control: a new stopLeaderSession( is seen");
-  assert.notDeepEqual(inventory(source.replace("try { deliver(createTabLeader(tabId)); }", "try { createTabLeader(tabId).send(text, images); }")).delivered, found.delivered, "control: a creation that skips deliver is seen");
+  assert.notDeepEqual(inventory(source.replace("try { deliver(needsNewLeader ? createTabLeader(tabId) : leader!); }", "try { createTabLeader(tabId).send(text, images); }")).delivered, found.delivered, "control: a creation that skips deliver is seen");
   // The tests below announce themselves by path; each covered path really has one.
   // createAfterRetired (a leader started once the old one has exited) cannot be forced here: it is held by the `deliver` check above.
   const self = readFileSync(new URL(import.meta.url), "utf8");
@@ -214,4 +215,24 @@ test("path:vaultChange: a vault connected after a leader exists gives the next m
     const refusal = await c.wait(() => c.messages.slice(from).find((m) => m.type === "error" && m.action === "save"), "Save is refused after the vault changed");
     assert.equal(refusal.message, "send a message first so the leader reads the saved handover; saving now would overwrite it");
   } finally { c.close(); await server.stop(); for (const dir of vaults) { try { rmdirSync(dir); } catch { /* a leftover empty temp folder is harmless */ } } }
+});
+
+test("path:recoverLaunchSafety: after the saved workspace is recovered from an unreadable launch safety file, the first leader turn reads the handover and is handed the chat", { timeout: 120_000 }, async () => {
+  // The first start is normal and leaves a chat behind. The second start cannot read launch-safety.json (a lock, injected at the file boundary only), so it serves a blocked placeholder workspace until Recover is pressed.
+  const first = await boot();
+  let second: Server | undefined, c: Client | undefined;
+  try {
+    const c1 = await client(first); const earlier = await seed({ server: first, c: c1 }, TABS.claude, "recover"); c1.close(); await first.stop(true);
+    writeFileSync(join(first.data, "config", "launch-safety.json"), JSON.stringify({ blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: [], uncertain: [], live: [] }));
+    const faults = join(first.temp, "faults.mjs");
+    writeFileSync(faults, `import fs from 'node:fs'; import {syncBuiltinESMExports} from 'node:module';
+const real = fs.readFileSync; fs.readFileSync = function(path, ...args) { if (/launch-safety[.]json$/.test(String(path))) throw Object.assign(new Error('injected file failure'), { code: 'EBUSY' }); return real.call(fs, path, ...args); }; syncBuiltinESMExports();`);
+    second = await boot({ temp: first.temp, env: { NODE_OPTIONS: `--import ${pathToFileURL(faults).href}` } });
+    c = await client(second); const h: Harness = { server: second, c };
+    assert.equal((await c.wait(() => c.messages.find((m) => m.type === "launchSafetyRecovery"), "the start-up status")).required, true, "the injected lock made the start-up read fail, so recovery is needed");
+    const from = c.messages.length; c.send({ type: "recoverLaunchSafety" });
+    await c.wait(() => c.messages.slice(from).find((m) => m.type === "launchSafetyRecovery" && m.required === false && m.held === false), "recovered with no hold (the saved copy was readable)");
+    const got = await turnAfter(h, TABS.claude, async () => {}, "after-recover");
+    assert.equal(got.cli, "claude"); expectChatGiven(got.text, "after-recover", earlier, false);
+  } finally { c?.close(); await (second ?? first).stop(); }
 });

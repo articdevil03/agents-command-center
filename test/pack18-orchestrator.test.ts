@@ -133,7 +133,7 @@ test("O4/O11 Ask uses one current-leader fixed-action approval and refuses Save/
   const f = await fixedServer({ secondTab: true, assignments: { leader: leaderAssignment } });
   try {
     const { item, result } = await pending(f, "Exact approval brief");
-    assert.deepEqual(item.askedBy, leaderIdentity); assert.equal(item.tool, "fixed-action"); assert.match(item.summary, /^Action: planning\nPosition: Planner \(planner\)\nExecution: codex \/ gpt-6.1-sol \/ medium\nFolder:/); assert.ok(item.summary.endsWith("Leader brief:\nExact approval brief"));
+    assert.deepEqual(item.askedBy, leaderIdentity); assert.equal(item.tool, "fixed-action"); assert.match(item.summary, /^Action: planning\nPosition: Planner\nExecution: codex \/ gpt-6.1-sol \/ medium\nFolder:/); assert.ok(item.summary.endsWith("Leader brief:\nExact approval brief"));
     assert.equal(f.c.tab("fixed").pendingApprovals.length, 1);
     const before = snapshot(f); assert.equal(before.journal, null); assert.equal(before.task, null); assert.equal(before.spawns, 0); assert.equal(before.starts, 0);
     assert.equal(before.safety?.timestamps.length ?? 0, 0); assert.equal(before.safety?.notices.length ?? 0, 0);

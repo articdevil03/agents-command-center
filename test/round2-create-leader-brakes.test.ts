@@ -7,7 +7,7 @@ import * as processEngine from "../server/process.ts";
 import { fixedProcess } from "./process-helpers.ts";
 import { tempRoot } from "./temp-root.ts";
 import { config, leaderApi } from "./round2-setup.ts";
-import { loadServer, loadFixed, connect, lastState, tick, waitFor, startHelper, endRun } from "./round2-helpers.ts";
+import { plainRefusal, loadServer, loadFixed, connect, lastState, tick, waitFor, startHelper, endRun } from "./round2-helpers.ts";
 import { loadLeaderHarness } from "./round2-leader-harness.ts";
 
 test("createLeader: a null native CLI path reaches the SDK builder without a fallback", () => {
@@ -154,7 +154,8 @@ test("launch recovery: a restarted server preserves unconfirmed ownership until 
   const safetyPath = path.join(tempRoot(), "launch-safety.json"), first = await loadFixed({ skipHealth: true, safetyPath });
   await startHelper(first, "alpha-dev", "helper", "uncertain"); const entry = first.launched[0]; entry.callback.onUnconfirmedKill(entry.run, 7654);
   const restarted = await loadFixed({ skipHealth: true, safetyPath });
-  assert.match(await refusal(startHelper(restarted, "alpha-dev", "helper", "blocked")), /unconfirmed process/);
+  plainRefusal(await refusal(startHelper(restarted, "alpha-dev", "helper", "blocked")), "Helper", restarted.tabLocation("alpha-dev").tab.name);
+  assert.ok(restarted.launchSafety.uncertain.some((row: any) => row.seatId === "alpha-dev.helper"));
   const ws = connect(restarted); ws.message({ type: "releaseUnconfirmedSeat", seatId: "alpha-dev.helper", confirm: confirmRelease });
   assert.equal(restarted.launchSafety.uncertain.length, 0);
   assert.equal(restarted.launchSafety.released[0].pid, 7654);

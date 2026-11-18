@@ -13,7 +13,7 @@ import type { UsageDelta } from "./usage.ts";
 import { resolveDataRoot } from "./data-root.ts";
 import { describeSpawnError, leaderChildEnv, spawnAcpChild, watchProcessTree, withResolvedCli, type AcpSpawn, type LeaderCallbacks, type LeaderHandle, type TreeWatch } from "./leader-common.ts";
 import { createAcpLeader } from "./leader-acp.ts";
-import { opencodeConfig } from "./runner-crew.ts";
+import { commandTimestamp, opencodeConfig } from "./runner-crew.ts";
 import { EXIT_DRAIN_MS, KILL_GRACE_MS, SWEEP_WAIT_MS, trackWorker, workerAdmissionClosed } from "./runner/lifecycle.ts";
 import {
   createAgentUsageState, feedClaudeOutput, flushClaudeOutput, scanCodexTokens, flushCodexTokens,
@@ -34,6 +34,7 @@ export type RunnerRun = {
   effort: string;
   folder: string;
   canWrite: boolean;
+  executionCapability?: "run-commands";
   startedAt: number;
   // Claude only: the advisor model id (--advisor), checked against the Claude model list.
   advisor?: string;
@@ -62,16 +63,11 @@ type RunningEntry = { run: RunnerRun; proc: ChildProcess; cb: RunnerCallbacks; l
 const running = new Map<string, RunningEntry>();
 const bySeat = new Map<string, Set<string>>();
 const released = new Set<RunningEntry>();
-const lastLogTs = new Map<string, number>();
 
 const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";
 const CLAUDE_WRITE_FLAGS = "--permission-mode acceptEdits";
+const CLAUDE_CHECK_FLAGS = "--permission-mode default --allowedTools Bash,PowerShell --disallowedTools Edit,MultiEdit,Write,NotebookEdit";
 
-function commandTimestamp(seatKey: string): number {
-  const ts = Math.max(Date.now(), (lastLogTs.get(seatKey) ?? 0) + 1);
-  lastLogTs.set(seatKey, ts);
-  return ts;
-}
 
 // The folder and the brief path travel in the environment, never on the command line: cmd expands %NAME% once and treats the result as plain
 // text, so ( ) & ^ % in a path need no escaping at all. ponytail: a path holding !x! is wrong, not unsafe, if cmd's DelayedExpansion registry flag is on.
@@ -84,8 +80,8 @@ export function commandEnv(run: RunnerRun, briefPath: string): NodeJS.ProcessEnv
 export function buildCommand(run: RunnerRun, briefPath: string): string {
   if (!run.runId || !/^[A-Za-z0-9._-]+$/.test(run.runId)) throw new Error("buildCommand: unsafe run id");
   if (!/^[A-Za-z0-9._-]+$/.test(run.seatKey)) throw new Error("buildCommand: unsafe seat key");
-  if (!isValidModel(run.cli, run.model)) throw new Error(`buildCommand: refusing invalid model for "${run.seatKey}": ${run.model}`);
-  if (!isValidEffort(run.cli, run.effort, run.model)) throw new Error(`buildCommand: refusing invalid effort for "${run.seatKey}": ${run.effort}`);
+  if (!isValidModel(run.cli, run.model)) throw new Error(`buildCommand: refusing invalid model for the ${run.name} position: ${run.model}`);
+  if (!isValidEffort(run.cli, run.effort, run.model)) throw new Error(`buildCommand: refusing invalid effort for the ${run.name} position: ${run.effort}`);
   if (typeof run.canWrite !== "boolean") throw new Error("buildCommand: slot permission is required");
   if (/[\u0000-\u001f\u007f"]/.test(run.folder)) throw new Error("buildCommand: refusing unsafe folder path");
   if (/[\u0000-\u001f\u007f"]/.test(briefPath)) throw new Error("buildCommand: refusing unsafe brief path");
@@ -93,21 +89,21 @@ export function buildCommand(run: RunnerRun, briefPath: string): string {
   switch (run.cli) {
     case "claude": {
       // Only a Claude run takes an advisor; a value that is not a Claude model throws, it is never put on the command line.
-      if (run.advisor !== undefined && !isValidModel("claude", run.advisor)) throw new Error(`buildCommand: refusing invalid advisor for "${run.seatKey}": ${run.advisor}`);
+      if (run.advisor !== undefined && !isValidModel("claude", run.advisor)) throw new Error(`buildCommand: refusing invalid advisor for the ${run.name} position: ${run.advisor}`);
       const advisor = run.advisor !== undefined ? ` --advisor ${run.advisor}` : "";
-      const mode = run.canWrite ? CLAUDE_WRITE_FLAGS : CLAUDE_READ_ONLY_FLAGS;
+      const mode = run.canWrite ? CLAUDE_WRITE_FLAGS : run.executionCapability === "run-commands" ? CLAUDE_CHECK_FLAGS : CLAUDE_READ_ONLY_FLAGS;
       const search = run.webSearch ? " --allowedTools WebSearch,WebFetch" : "";
       return `claude -p ${instruction} --model ${run.model} --effort ${run.effort}${advisor} ${mode}${search} --output-format stream-json --verbose`;
     }
     case "codex": {
       // --skip-git-repo-check: a tab folder that is not a git repo would otherwise make every Codex run stop at once ("Not inside a trusted directory").
-      return `codex ${run.webSearch ? "--search " : ""}exec --skip-git-repo-check --model ${run.model} -c model_reasoning_effort=${run.effort} --sandbox ${run.canWrite ? "workspace-write" : "read-only"} ${instruction}`;
+      return `codex ${run.webSearch ? "--search " : ""}exec --skip-git-repo-check --model ${run.model} -c model_reasoning_effort=${run.effort} --sandbox ${run.canWrite || run.executionCapability === "run-commands" ? "workspace-write" : "read-only"} ${instruction}`;
     }
     case "opencode":
       return `opencode run --dir "%${DIR_VAR}%" -m ${run.model}${run.effort ? ` --variant ${run.effort}` : ""} --auto --print-logs ${instruction}`;
     // An ACP CLI never gets a shell command (runSeat starts it as a process with an argument list); any other kind never gets a command made up for it.
     default:
-      throw new Error(`buildCommand: no command for CLI "${String(run.cli)}" on "${run.seatKey}"`);
+      throw new Error(`No start command is available for the ${run.name} position. Choose its CLI in Settings.`);
   }
 }
 
@@ -144,13 +140,18 @@ export function releaseUnconfirmedRun(runId: string): boolean {
 
 export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spawnFn: Spawn = spawn, boundary: { priority?: (pid: number) => void; watch?: TreeWatch; keyLaunch?: KeyLaunch } = {}): { ok: true; timestamp: number } | { ok: false; error: string } {
   run = Object.freeze({ ...run });
+  const accessNotice = !isAcpKind(run.cli) && run.executionCapability === "run-commands"
+    ? "This worker can run commands and may write files. Run only the approved checks within the assigned folder. Report the commands, results and any files changed. Command access is not a no-write boundary. Do not run git commit or git push: shipping happens only through the app's own commit and push actions."
+    : "";
+  if (accessNotice) prompt = `${accessNotice}\n\n${prompt}`;
   // Shutdown has begun: nothing may start, even a launch that was waiting for an approval.
   if (workerAdmissionClosed()) return { ok: false, error: "Worker admission is closed for shutdown." };
   if (running.has(run.runId)) return { ok: false, error: `run "${run.runId}" already exists` };
   if (!run.runId || !/^[A-Za-z0-9._-]+$/.test(run.runId) || !isSafeSeatKey(run.seatKey)) return { ok: false, error: "unsafe run or seat id" };
   // An ACP seat is started as a process with an argument list (no shell, no command line); buildCommand never sees it.
   const acp = isAcpKind(run.cli);
-  if (acp && !run.acp) return { ok: false, error: `no start command for CLI "${run.cli}" on "${run.seatKey}"` };
+  if (acp && run.executionCapability) return { ok: false, error: `The ${run.name} position cannot run checks with this CLI. Choose a Claude, OpenCode or Codex position for checks.` };
+  if (acp && !run.acp) return { ok: false, error: `No start command is available for the ${run.name} position. Choose its CLI in Settings.` };
   const timestamp = commandTimestamp(run.seatKey);
   const briefPath = join(logsDir, `${run.seatKey}-${timestamp}.brief.txt`);
   const command = acp ? "" : buildCommand(run, briefPath);
@@ -211,6 +212,7 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
   }
   // Only a real child has descendants to find; a fake process (tests) has a made-up pid that could name something else.
   const watch = boundary.watch ?? (spawnFn === spawn && proc.pid ? watchProcessTree(proc.pid, Date.now()) : null);
+  if (accessNotice) appendLog(`[execution permissions] ${accessNotice}\n`);
   if (run.lowPriority && proc.pid) {
     try { (boundary.priority ?? fixedPriorityBoundary ?? ((pid) => setPriority(pid, osConstants.priority.PRIORITY_BELOW_NORMAL)))(proc.pid); }
     catch (error) { emit(`\n[priority] could not lower owned child priority: ${(error as Error).message}\n`); }
@@ -285,8 +287,11 @@ export function runSeat(run: RunnerRun, prompt: string, cb: RunnerCallbacks, spa
         cb.onTreeEnd?.(run, confirmed ? "confirmed" : "unknown");
         cb.onStatus(run, status, code);
         completed = true;
-        letGoOfPipes();
-      } finally { tracked.settle(completed && confirmed); }
+      } finally {
+        let pipesReleased = false;
+        try { letGoOfPipes(); pipesReleased = true; }
+        finally { tracked.settle(completed && confirmed && pipesReleased); }
+      }
     };
     if (!watch) { report(!proc.pid); return; }
     // Whatever the CLI left running (a dev server, a background shell) is stopped before the run is reported over; bounded, so a slow process list never holds the report.

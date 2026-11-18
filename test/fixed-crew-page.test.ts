@@ -234,6 +234,7 @@ test("FCUI extra instructions: built-in text, literal hostile text, broadcasts w
     await expand(ev, "videoMaker"); await typeInto(ev, page, "videoMaker", "lost reply");
     from = await count(ev); await click(ev, `${ROW("videoMaker")} [data-fc-save]`);
     const lost = (await sentSince(ev, from))[0];
+    await deliverState(ev, discovered, `${both};state.requestActions={[${J(lost.requestId)}]:{status:"running"}}`);
     await ev("window.__socket.close()");
     await waitFor(`document.querySelector(${J(`${ROW("videoMaker")} .fc-extra-status`)}).textContent.startsWith("Not confirmed")`, "a dropped connection makes the save unknown");
     await waitFor(`window.__socket.readyState===1&&document.querySelector("#conn").hidden`, "the page reconnected");

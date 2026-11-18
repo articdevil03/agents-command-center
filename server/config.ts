@@ -1,13 +1,13 @@
 import { openCodeEfforts, type OpenCodeModelInfo } from "./settings/opencode/models.ts";
-import { readFileSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { keepBadCopy } from "./safe-file.ts";
+import { keepBadCopy, preserveBadFile, readFileWithRetry } from "./safe-file.ts";
 import { discoverClaudeEffort, discoverOpencodeModels, discoverClaudeModels, type Discovered, type ClaudeModelInfo, type DiscoveredClaudeModels } from "./cli-discovery.ts";
 import { CLI_CAPS, KINDS, isSafeSeatId, isAcpCli, cliCaps, type ProcessKind, type Seat } from "./process.ts";
 import { dataRoot, configDir, workspacesPath, projectsPath, publishConfigFile, sweepSeedTemps, readJson, isSafeShape, isObject, validSlug, validText, liveFilesProtected, liveWritePath } from "./config-files.ts";
 import { acpKindOf, type AcpCli } from "./config-acp.ts";
 import { assignments, freshFixedCrew, preserveFutureCrews, validateFixedCrew, type FixedCrew } from "./fixed-crew/preferences.ts";
-import { assertWorkspaceRecoveryReady, initializeWorkspaceRecovery, unavailableWorkspace, workspaceRecovery } from "./fixed-crew/recovery.ts";
+import { assertWorkspaceRecoveryReady, blockWorkspaceRecovery, initializeWorkspaceRecovery, unavailableWorkspace, workspaceRecovery } from "./fixed-crew/recovery.ts";
 import { initializeFirstRun } from "./first-run/state.ts";
 
 export { workspacesPath, projectsPath, clientPrefsPath, launchSafetyPath, acpClisPath } from "./config-files.ts";
@@ -167,9 +167,14 @@ function seedConfig(): void {
   if (existsSync(workspacesPath)) {
     if (!statSync(workspacesPath).isFile()) throw new Error(`config destination is not a file: ${workspacesPath}`);
     // An empty or unparsable file starts the app on the example workspace; the bad file is kept first.
-    let unreadable = false;
-    try { JSON.parse(readFileSync(workspacesPath, "utf8")); } catch { unreadable = true; }
-    if (unreadable && !liveFilesProtected()) { keepBadCopy(workspacesPath); publishDefaultWorkspaces(true); }
+    let bytes: Buffer;
+    try { bytes = readFileWithRetry(workspacesPath); }
+    catch {
+      blockWorkspaceRecovery("Workspace unavailable. Your saved workspace could not be read. The original has been kept. Restart the app to try again.");
+      return;
+    }
+    try { JSON.parse(bytes.toString("utf8")); }
+    catch { if (!liveFilesProtected()) { keepBadCopy(workspacesPath); publishDefaultWorkspaces(true); } }
     return;
   }
   if (liveFilesProtected()) return;
@@ -189,7 +194,10 @@ export function writeWorkspaces(workspaces: Workspaces, path?: string): void {
   assertWorkspaceRecoveryReady("workspace");
   const target = liveWritePath(path, workspacesPath);
   let saved: unknown;
-  try { saved = readJson(target); } catch { /* Existing unreadable legacy files keep their earlier write behavior. */ }
+  try { saved = JSON.parse(readFileWithRetry(target).toString("utf8")); validateWorkspaces(clone(saved), target); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" && !preserveBadFile(target).ok) throw new Error("Your workspace could not be safely preserved. The original has been kept and saving was refused.");
+  }
   preserveFutureCrews(saved, workspaces);
   const validated = validateWorkspaces(clone(workspaces), target, true);
   const recovered = [...fixedCrewRecoveries.keys()].filter((key) => key.startsWith(`${target}|`));

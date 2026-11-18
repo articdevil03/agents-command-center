@@ -75,7 +75,7 @@ test("GitHub hidden attached runner, fixed argv, no speculative Enter, post-clea
       if (prompt) { fx.proc().stderr.write(`Press Enter to open ${URL} in your browser...\n`); assert.deepEqual(fx.writes, ["\n"]); }
       assert.equal(fx.events.at(-1).deviceCode, "AB12-CD34");
       assert.equal(fx.events.at(-1).verificationUrl, URL);
-      assert.equal(fx.service.state.github.connected, false); assert.equal(fx.probes(), 0);
+      assert.equal(fx.service.state.github.connected, null); assert.equal(fx.probes(), 0);
       await fx.service.cliLogin(fx.privateRequest("openCliLogin"), fx.send); assert.deepEqual(opened, [URL]);
       await assert.rejects(fx.service.cliLogin(start("github", "second"), fx.send), /Another/);
       fx.proc().finish(); await pending;
@@ -104,7 +104,7 @@ test("GitHub hostile URLs are ignored and conflicting codes fail without opening
         await assert.rejects(fx.service.cliLogin(fx.privateRequest("openCliLogin"), fx.send));
         fx.proc().finish(); await pending;
       }
-      assert.equal(opens, 0); assert.equal(fx.service.state.github.connected, !conflict);
+      assert.equal(opens, 0); assert.equal(fx.service.state.github.connected, conflict ? null : true);
     } finally { await fx.cleanup(); }
   }
 });
@@ -122,7 +122,7 @@ test("GitHub failure, timeout, flood, Cancel, retained cleanup and Stop again", 
         if (mode === "cleanup") await assert.rejects(stopping, /confirm sign-in stopped/); else await stopping;
       }
       await failed;
-      assert.equal(fx.service.state.github.connected, false);
+      assert.equal(fx.service.state.github.connected, null);
       assert.ok(fx.sweeps() > 0);
       if (mode === "cleanup") {
         assert.equal(fx.service.login.busy, true); assert.equal(fx.events.at(-1).reason, "cleanupUnconfirmed");
@@ -141,7 +141,7 @@ test("GitHub final status failure never connects; shutdown drains and closes adm
     try {
       const pending = fx.service.cliLogin(start("github"), fx.send), failed = assert.rejects(pending, /did not finish/);
       await until(() => fx.spawns.length === 1); fx.proc().finish(); await failed;
-      assert.equal(fx.service.state.github.connected, false);
+      assert.equal(fx.service.state.github.connected, null);
     } finally { await fx.cleanup(); }
   }
   const fx = githubFixture();

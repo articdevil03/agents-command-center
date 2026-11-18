@@ -49,11 +49,17 @@ writeFileSync(join(out,'win-unpacked/resources/app/payload.txt'),${JSON.stringif
 writeFileSync(join(out,'win-unpacked/Command Center.exe'),'bundled');
 writeFileSync(join(out,process.env.CC_INSTALLER_ARTIFACT),'candidate');
 process.exit(${buildExit});`);
-  writeFileSync(proof, `import assert from 'node:assert/strict'; import { readFileSync, writeFileSync } from 'node:fs'; import { join } from 'node:path';
+  writeFileSync(proof, `import assert from 'node:assert/strict'; import { readFileSync, writeFileSync } from 'node:fs'; import { join } from 'node:path'; import { createHash } from 'node:crypto';
 assert.equal(process.argv[2],'--electron');
 assert.equal(readFileSync(process.argv[3],'utf8'),'bundled');
 assert.equal(readFileSync(join(process.env.CC_INSTALLER_DIST,'installers',process.env.CC_INSTALLER_ARTIFACT),'utf8'),'previous','proof must precede publishing');
-writeFileSync(join(process.env.CC_INSTALLER_DIST,'proof-ran'),'yes'); process.exit(${proofExit});`);
+writeFileSync(join(process.env.CC_INSTALLER_DIST,'proof-ran'),'yes');
+const now=Date.now();
+if (${proofExit} === 0) writeFileSync(process.env.CC_RUNTIME_PROOF_RECORD, JSON.stringify({
+proof:'pack29-runtime',runId:process.env.CC_RUNTIME_PROOF_RUN_ID,
+artifactSha256:createHash('sha256').update(readFileSync(process.env.CC_RUNTIME_PROOF_ARTIFACT)).digest('hex'),
+startedAt:now,endedAt:now,checksRun:7}));
+process.exit(${proofExit});`);
   const preload = join(temp, "fault.mjs");
   writeFileSync(preload, `import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';
 const rename = fs.renameSync, rmdir = fs.rmdirSync;

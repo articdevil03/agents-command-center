@@ -23,6 +23,7 @@ export type LeaderHandle = {
   process?: () => { running: boolean; killFailed: boolean; recheck?: () => Promise<void> };
 };
 export type LeaderCallbacks = {
+  onPermissionMode?: () => void;
   onDelta: (text: string) => void;
   onDone: () => void;
   onUsage: (delta: UsageDelta) => void;

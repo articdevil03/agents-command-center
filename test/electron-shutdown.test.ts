@@ -104,6 +104,8 @@ test("shutdown uses IPC and holds quit until the server is gone: a hung server i
   assert.deepEqual(plain(h.spawns[1][1]), ["/pid", "1234", "/T", "/F"]);
   assert.equal(h.quits(), 0);
   h.killer.emit("close", 0);
+  assert.equal(h.quits(), 0, "killer close waits for owned child exit confirmation");
+  h.proc.exitCode = 0; h.proc.emit("exit", 0);
   await within(pending, "pending");
   assert.equal(h.quits(), 1);
   h.app.emit("before-quit", { preventDefault: () => prevented++ });
@@ -287,7 +289,7 @@ test("round 1 fix 15: an app page that cannot load shows the error page with the
   assert.equal(refused.loaded.filter((url) => url === "http://127.0.0.1:51234").length, 1, "the app page was tried once");
   assert.equal(pages.length, 2, "the loading page, then exactly one error page");
   assert.match(decodeURIComponent(refused.loaded.at(-1)), /The app page could not be loaded: net::ERR_CONNECTION_REFUSED/);
-  assert.match(decodeURIComponent(refused.loaded.at(-1)), /Command Center server unavailable/, "the same error page a server failure shows");
+  assert.match(decodeURIComponent(refused.loaded.at(-1)), /<h2>Command Center could not start\.<\/h2>/, "the same error page a server failure shows");
   const superseded = await run("ERR_ABORTED");
   assert.equal(superseded.loaded.filter((url) => url.startsWith("data:")).length, 1, "a superseded load is expected: only the loading page");
 });

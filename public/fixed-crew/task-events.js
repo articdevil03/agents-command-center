@@ -206,7 +206,15 @@
       const button = event.target.closest?.("button"), tab = page.findTab(last?.tabId);
       if (!button || button.disabled || !tab?.fixedCrew || !page.$("fixedView").contains(button)) return;
       const data = button.dataset;
-      if (data.fctArch) onArchiveClick(tab, data);
+      if (data.fctRecoverSafety !== undefined) {
+        if (page.connected() && FC.launchSafetyRecovery?.required) page.send({ type: "recoverLaunchSafety" });
+      }
+      else if (data.fctReleaseSafety !== undefined) {
+        if (page.connected() && FC.launchSafetyRecovery?.held && window.confirm("Earlier process history could not be read. Allow new launches again? Earlier processes may still be running. Existing seat blocks and unresolved records will stay, and no process will be marked ended.")) {
+          page.send({ type: "releaseLaunchSafetyHold", confirm: "allow launches with unreadable process history" });
+        }
+      }
+      else if (data.fctArch) onArchiveClick(tab, data);
       else if (data.fctApprove) approve(tab, data.fctApprove);
       else if (data.fctToggle) toggle(data.fctToggle, data.fctOpen !== undefined);
       else if (data.fctAsk !== undefined) page.askForChanges();
@@ -215,6 +223,7 @@
 
     // true: a task reply, already applied (the panel is drawn again). false: the page's own handling goes on.
     function onMessage(message) {
+      if (message.type === "launchSafetyRecovery") { FC.launchSafetyRecovery = message; rerender(); return true; }
       if (onArchiveMessage(message)) return true;
       if (message.type === "fixedTask") {
         const task = message.task && typeof message.task === "object" ? message.task : null;

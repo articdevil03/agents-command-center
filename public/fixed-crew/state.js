@@ -84,6 +84,12 @@
         const known = state?.requestActions?.[requestId];
         const request = requests.get(requestId), bulk = request.key.endsWith("|bulk");
         if (bulk && !request.lost) continue; // live replies contain the changed/skipped result; state only records completion
+        if (request.lost && connected() && !known) {
+          requests.delete(requestId);
+          if (outcomes.get(request.key)?.requestId === requestId) outcomes.set(request.key, { status: "unknown", message: "Not confirmed: the server has no record of this request. Check the current values before trying again.", requestId });
+          changed = true;
+          continue;
+        }
         if (known?.status === "done" || known?.status === "failed") changed = settle(requestId, known.status === "done", known.message,
           bulk ? { action: "setCrewModelForAll", tabId: request.key.split("|")[0] } : undefined) || changed;
       }

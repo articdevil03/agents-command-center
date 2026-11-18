@@ -141,7 +141,7 @@
     requireElement("#setBody [data-settings-refresh]").click();
     const refreshRunning = requireElement("#setBody [data-settings-refresh]").disabled;
     await dropAndReconnect("reconnect after a Check again with no answer"); await sleep(30);
-    const refreshAfter = { disabled: requireElement("#setBody [data-settings-refresh]").disabled, label: requireElement("#setBody [data-settings-refresh]").textContent, help: text("#setBody #s-tools .settings-help") };
+    const refreshAfter = { disabled: requireElement("#setBody [data-settings-refresh]").disabled, label: requireElement("#setBody [data-settings-refresh]").textContent, help: text("#setBody #s-tools > .settings-help") };
     check("Check again is usable again after the connection dropped before its answer", refreshRunning && !refreshAfter.disabled && refreshAfter.label === "Check again" && refreshAfter.help.includes("Could not check just now"), { refreshRunning, refreshAfter });
     closeAll(); await sleep(30);
   };

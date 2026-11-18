@@ -129,14 +129,14 @@ test("Codex leader: requests with no screen are refused and the turn goes on", {
 test("Codex leader: every failure path ends the turn exactly once", { timeout: 90000 }, async () => {
   await withServer({ leader: CODEX_LEADER }, async (h) => {
     for (const [label, steps, expected] of [
-      ["error notification", [{ error: "boom from codex" }], /boom from codex/],
-      ["turn failed status", [{ status: "failed" }], /leader turn failed/],
-      ["turn interrupted status", [{ status: "interrupted" }], /leader turn interrupted/],
+      ["error notification", [{ error: "boom from codex" }], "The Codex leader turn failed. Try again."],
+      ["turn failed status", [{ status: "failed" }], "The Codex leader turn failed. Try again."],
+      ["turn interrupted status", [{ status: "interrupted" }], "The Codex leader turn interrupted. Try again."],
     ] as const) {
       const start = h.chat(script(...steps));
       await h.wait(() => h.turnEnded(start).length >= 1, label); await h.idle(); await sleep(100);
       const ended = h.turnEnded(start);
-      assert.equal(ended.length, 1, `${label}: exactly one end`); assert.equal(ended[0].type, "chatError"); assert.match(ended[0].message, expected);
+      assert.equal(ended.length, 1, `${label}: exactly one end`); assert.equal(ended[0].type, "chatError"); assert.equal(ended[0].message, expected); assert.doesNotMatch(ended[0].message, /boom from codex|turn failed in fake/, `${label}: the vendor text stays private`);
     }
     // A retrying error is not the end.
     let start = h.chat(script({ retryError: "transient" }, { say: "recovered" }));
@@ -180,5 +180,15 @@ test("Codex leader: Stop answers every open request, denies the approval and kil
     assert.ok(h.cliEntries().some((e) => e.method === "turn/interrupt"), "the turn was interrupted");
     await h.wait(() => !h.pidAlive(pid), "child killed");
     assert.equal(h.tab().derived.leaderTurnActive, false);
+  });
+});
+
+test("Codex leader: a vendor error with a route and ids reaches neither the page nor the saved chat", { timeout: 60000 }, async () => {
+  await withServer({ leader: CODEX_LEADER }, async (h) => {
+    const start = h.chat(script({ error: "POST /v1/responses failed, request id req_SECRET123, thread thr_SECRET456" }));
+    await h.wait(() => h.turnEnded(start).length >= 1, "error turn"); await h.idle(); await sleep(100);
+    const seen = JSON.stringify(h.messages.slice(start).filter((m) => !(m.type === "chatMessage" && m.role === "user"))); // the user's own message carries the script
+    assert.doesNotMatch(seen, /req_SECRET123|thr_SECRET456|\/v1\/responses/, "no route or id in anything the page or chat received");
+    assert.match(h.turnEnded(start)[0].message, /^The Codex leader turn failed\. Try again\.$/);
   });
 });

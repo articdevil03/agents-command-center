@@ -7,7 +7,7 @@ import * as usage from "../server/usage.ts";
 import * as history from "../server/history.ts";
 import { tempRoot } from "./temp-root.ts";
 import { config } from "./round2-setup.ts";
-import { fixtureWorkspaces, tempWorkspaceFolders, source, loadFixed, startHelper, endRun, fixedCreation, connect, lastState, settleLeaderTurns, tick, waitFor } from "./round2-helpers.ts";
+import { plainRefusal, fixtureWorkspaces, tempWorkspaceFolders, source, loadFixed, startHelper, endRun, fixedCreation, connect, lastState, settleLeaderTurns, tick, waitFor } from "./round2-helpers.ts";
 
 test("pack 2: a launch notice keeps a 4000-character reminder of a long brief while the run gets the whole brief; state carries no duplicate notices list", async () => {
   const server = await loadFixed({ skipHealth: true }), ws = connect(server);
@@ -38,11 +38,13 @@ test("pack 2: an old unconfirmed or blocked row from before seat keys blocks eve
   const safetyPath = path.join(tempRoot(), "launch-safety.json");
   config.writeLaunchSafety({ blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: [], uncertain: [{ seatId: "sonny", pid: 9 }], live: [] }, safetyPath);
   const first = await loadFixed({ skipHealth: true, safetyPath });
-  await assert.rejects(startHelper(first, "alpha-dev", "reviewer2", "go"), /old unconfirmed process \(sonny\) blocks every launch/);
+  await assert.rejects(startHelper(first, "alpha-dev", "reviewer2", "go"), (error: Error) => { plainRefusal(error.message, "Reviewer", first.tabLocation("alpha-dev").tab.name, true); return true; });
+  assert.deepEqual(first.launchSafety.uncertain, [{ seatId: "sonny", pid: 9 }]);
   const blockedPath = path.join(tempRoot(), "launch-safety.json");
   config.writeLaunchSafety({ blocked: ["vera"], timestamps: [], notices: [], nextNoticeId: 1, released: [], uncertain: [], live: [] }, blockedPath);
   const second = await loadFixed({ skipHealth: true, safetyPath: blockedPath });
-  await assert.rejects(startHelper(second, "alpha-dev", "reviewer2", "go"), /old launch block \(vera\) blocks every launch/);
+  await assert.rejects(startHelper(second, "alpha-dev", "reviewer2", "go"), (error: Error) => { plainRefusal(error.message, "Reviewer", second.tabLocation("alpha-dev").tab.name, true); return true; });
+  assert.ok(second.blockedSeatKeys.has("vera"));
   assert.equal(second.launched.length, 0);
   assert.equal(first.executionJournal(first.testRoot, "alpha-dev").activeExecutionId, null, "the refused launch released its reservation");
   first.stopLeaderSession("alpha-dev"); second.stopLeaderSession("alpha-dev");
@@ -61,7 +63,8 @@ test("pack 2: a run the last session never saw end blocks its seat on the next s
   const crashed = await loadFixed({ skipHealth: true, safetyPath: crashPath });
   await startHelper(crashed);
   const restarted = await loadFixed({ skipHealth: true, safetyPath: crashPath });
-  await assert.rejects(startHelper(restarted, "alpha-dev", "helper", "again"), /launch blocked after a prior stop: alpha-dev\.helper/);
+  await assert.rejects(startHelper(restarted, "alpha-dev", "helper", "again"), (error: Error) => { plainRefusal(error.message, "Helper", restarted.tabLocation("alpha-dev").tab.name); return true; });
+  assert.ok(restarted.blockedSeatKeys.has("alpha-dev.helper"));
   assert.equal(typeof (await startHelper(restarted, "alpha-dev", "reviewer1", "other seat")).runId, "string", "only that seat is blocked");
   assert.ok(config.readLaunchSafety(crashPath).blocked.includes("alpha-dev.helper"), "the block is saved");
   assert.deepEqual(config.readLaunchSafety(crashPath).live.map((row) => row.seatId), ["alpha-dev.reviewer1"], "the stale rows were replaced by what runs now");
@@ -134,10 +137,10 @@ test("pack 2: the retired crew-editing messages and an old-style tab creation ar
   assert.equal(server.leaderHandles[0].stopCalls, 0, "the leader was never stopped for a request that could not succeed");
   assert.equal(server.leaders.size, 1);
   assert.equal(JSON.stringify(server.getWorkspaces()), before, "nothing was saved");
-  ws.message({ ...fixedCreation(), type: "addProject", id: "extra", name: "Extra", folder: server.testRoot, template: "nope" });
+  ws.message({ ...fixedCreation(), type: "addProject", id: "extra", name: "Extra", folder: "C:/work/extra", template: "nope" });
   assert.match(ws.messages.at(-1).message, /Unknown or locked crew field/, "the fixed creation form carries no template field");
   assert.equal(server.getWorkspaces().projects.some((project: any) => project.id === "extra"), false);
-  ws.message({ ...fixedCreation(), type: "addProject", id: "extra", name: "Extra", folder: server.testRoot });
+  ws.message({ ...fixedCreation(), type: "addProject", id: "extra", name: "Extra", folder: "C:/work/extra" });
   assert.equal(server.getWorkspaces().projects.some((project: any) => project.id === "extra"), true, "the fixed form creates it");
 });
 
@@ -169,16 +172,16 @@ test("pack 2: removing a tab whose workspace write fails keeps the tab and its l
 
   ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", tabId: "alpha-design", name: "Again" });
   assert.match(ws.messages.at(-1).message, /tab id was used before and still has history: alpha-design/);
-  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", tabId: "alpha-fresh", name: "Fresh", folder: server.testRoot });
+  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", tabId: "alpha-fresh", name: "Fresh", folder: "C:/work/extra" });
   assert.equal(server.getWorkspaces().projects[0].tabs.some((tab: any) => tab.id === "alpha-fresh"), true, "an id with no history is fine");
-  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", name: "Random", folder: server.testRoot });
+  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", name: "Random", folder: "C:/work/extra" });
   assert.equal(server.getWorkspaces().projects[0].tabs.length, 4, "a generated id never collides");
 });
 
 test("pack 2: the leader's saved-session history ids are not shared with a tab id that had a history", async () => {
   const server = await loadFixed({ skipHealth: true, workspaces: tempWorkspaceFolders("fixed") }), ws = connect(server);
   writeFileSync(path.join(server.testRoot, "logs", "alpha-ghost.leader-1.log"), "old");
-  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", tabId: "alpha-ghost", name: "Ghost", folder: server.testRoot });
+  ws.message({ ...fixedCreation(), type: "addTab", projectId: "alpha", tabId: "alpha-ghost", name: "Ghost", folder: "C:/work/extra" });
   assert.match(ws.messages.at(-1).message, /tab id was used before/, "a log of that id's seats counts as history");
 });
 

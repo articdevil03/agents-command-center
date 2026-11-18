@@ -86,7 +86,8 @@ test("OpenCode leader: an error that echoes the base64 credential never reaches 
     const start = h.chat(script({ error: "boom", leakB64: true }));
     await h.wait(() => h.turnEnded(start).length >= 1, "leaky error");
     const message = h.turnEnded(start)[0].message;
-    assert.match(message, /boom credential \[hidden\]/);
+    assert.equal(message, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(message, /boom|credential|session/);
     assert.ok(!/[A-Za-z0-9+/=]{40,}/.test(JSON.stringify(h.messages.filter((m) => m.type !== "state"))), "no credential-sized string anywhere in the chat frames");
   });
 });
@@ -95,7 +96,8 @@ test("OpenCode leader: a prompt error is redacted before it is shortened", { tim
   await withServer({ leader: OPENCODE_LEADER, env: { FAKE_OPENCODE_PROMPT_FAILS: "1", FAKE_OPENCODE_PROMPT_LEAK: "1" } }, async (h) => {
     const start = h.chat("will be refused"); await h.wait(() => h.turnEnded(start).length >= 1, "failed prompt");
     const message = h.turnEnded(start)[0].message;
-    assert.match(message, /x{100,}\[hidden\]/, "the password became [hidden] before the cut");
+    assert.equal(message, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(message, /POST|prompt_async|x{10}/);
     assert.ok(!/[0-9a-f]{12,}/.test(message.replace(/x+/g, "")), `no part of the password survives: ${message}`);
   });
 });
@@ -143,7 +145,7 @@ test("Codex leader: a final error that names no turn, before and after the reply
 test("Codex leader: a turn/start that is never answered retires the leader with one plain error, and the next message starts fresh", { timeout: 60000 }, async () => {
   await withServer({ leader: CODEX_LEADER, env: { FAKE_CODEX_TURN_START_NEVER_ANSWERED: "1", CC_TEST_LEADER_TURN_TIMEOUT_MS: "600" } }, async (h) => {
     const start = h.chat("hello"); await h.wait(() => h.turnEnded(start).length >= 1, "the unanswered turn ended"); await sleep(400);
-    assert.equal(h.turnEnded(start).length, 1); assert.equal(h.turnEnded(start)[0].type, "chatError"); assert.match(h.turnEnded(start)[0].message, /Codex did not answer the turn request/);
+    assert.equal(h.turnEnded(start).length, 1); assert.equal(h.turnEnded(start)[0].type, "chatError"); assert.equal(h.turnEnded(start)[0].message, "Codex did not answer the turn request");
     await h.wait(() => !h.pidAlive(startedPids(h)[0]), "the leader's child is gone");
     await h.wait(() => !h.tab().derived.leaderTurnActive, "the tab is no longer busy");
     h.chat("again"); await h.wait(() => startedPids(h).length === 2, "the next message started a fresh leader");

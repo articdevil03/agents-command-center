@@ -1,6 +1,7 @@
 import { appSource } from "./source-text.ts";
 import { runInNewContext } from "node:vm";
 import assert from "node:assert/strict";
+import { recordingEvents } from "./recording-events.ts";
 
 // Execute the actual handler, state selectors and request renderer. Only DOM and unrelated rendering are stubbed.
 export function actionClient() {
@@ -21,8 +22,8 @@ export function actionClient() {
       seenListedActions, resultSize: () => settingsActionResults.size,
       setState: (state) => { serverState = state; },
     };
-  })()`, { document: { getElementById: node, querySelectorAll: () => [], activeElement: null },
-    window: { localStorage: { getItem: () => null } }, Map, Set, console, CSS: { escape: (s: string) => s },
+  })()`, { document: { ...recordingEvents(), getElementById: node, querySelectorAll: () => [], activeElement: null },
+    window: { ...recordingEvents(), localStorage: { getItem: () => null } }, Map, Set, console, CSS: { escape: (s: string) => s },
     location: { protocol: "http:", host: "127.0.0.1" }, setTimeout, clearTimeout, performance: { now: () => 0 } });
   return { ...api, node };
 }

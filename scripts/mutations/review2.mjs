@@ -40,7 +40,7 @@ export const review2Mutations = [
   [
     "p26r6-git-maintenance-foreground",
     "server/fixed-crew/git-process.ts",
-    "\"-c\", \"gc.auto=0\", \"-c\", \"maintenance.auto=false\", ",
+    "\"-c\", \"gc.auto=0\", \"-c\", \"maintenance.auto=false\",",
     ""
   ],
   [

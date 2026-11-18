@@ -74,7 +74,7 @@ test("A4: a saved fixed crew may use an ACP kind on any seat (default model and 
     assert.equal(saved({ leader: bad as any }).fixedCrew!.preferences.leader.assignment, null, `a saved ${JSON.stringify(bad)} is recovered to a fresh crew, never kept`);
   }
   const run = { runId: "p17-run", seatKey: "p17-tab.reviewer1", slotId: "reviewer1", name: "Vera", cli: "acp:gemini" as any, model: "default", effort: "default", folder: dir, canWrite: false, startedAt: 1 };
-  assert.throws(() => buildCommand(run, join(dir, "brief.txt")), /no command for CLI "acp:gemini"/, "a run command is never made up for an ACP kind");
+  assert.throws(() => buildCommand(run, join(dir, "brief.txt")), /No start command is available for the Vera position\. Choose its CLI in Settings\./, "a run command is never made up for an ACP kind");
 });
 
 // ---------------------------------------------------------------- B: every CLI start goes through the safe resolution
@@ -151,7 +151,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["public/app.js","const unsupportedVersion = cli === \"opencode\" && tool?.installed === true && tool.supportedVersion !== true;","n/a: only the built-in OpenCode adapter requires supported major 1; ACP eligibility is separate"],
   ["public/app.js","const subtitle = removing ?","works: managed removal shows progress while catalog ACP connection facts remain separate"],
   ["public/app.js","const connected = tool?.signedIn === true && !unsupportedVersion && !needsConnect ? `<span class=\"tool-connected\" data-tool-status=\"connected\"><i></i>${cli =","n/a: OpenCode says Ready for a stored key; ACP connection labels remain separate"],
-  ["public/app.js","const guide = cli !== \"copilot\" && tool?.installed === false ?","works: Copilot uses in-app retry only; other ACP tools retain official setup guides"],
   ["public/first-run/catalog.js","if (entry?.id === \"opencode\") return \"Downloads and checks OpenCode 1 from its official releases, then installs it for your Windows account.","n/a: consent describes the transactional OpenCode download; ACP recipes keep their own copy"],
   ["public/first-run/install.js","const installed = id === \"opencode\" ? tool?.installed : legacy ? legacy.installed ?? tool?.installed : tool?.installed;","n/a: OpenCode installed state is canonical rather than a legacy overlay; ACP facts are unchanged"],
   ["public/first-run/install.js","const unsupported = id === \"opencode\" && tool?.installed === true && tool.supportedVersion !== true;","n/a: unsupported OpenCode versions get replacement installation; ACP versions use their profiles"],
@@ -160,7 +159,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["public/first-run/login.js","const keySupported = (cli) => cli !== \"opencode\" || facts(cli).supportedVersion === true;","n/a: key saving requires supported OpenCode 1; ACP tools keep their managed login eligibility"],
   ["public/first-run/login.js","const replaceOffered = (cli) => cli === \"opencode\" && managed(cli) && facts(cli).installed === true && keySupported(cli) && facts(cli).crede","n/a: key replacement is offered only for a stored managed OpenCode key; ACP has no replacement-key action"],
   ["public/first-run/login.js","if (view.state !== \"running\" || !mine?.loginId || view.stopping || (cli === \"opencode\" && (view.phase !== \"waitingKey\" || mine.codeSent >= m","n/a: OpenCode key submission requires the current waitingKey revision; ACP code flow is separate"],
-  ["public/first-run/login.js","const input = parts.input, code = cli === \"opencode\" ? input.value : input.value.trim();","n/a: OpenCode key input preserves whitespace for validation; ACP browser codes are trimmed"],
   ["public/first-run/login.js","if (cli === \"opencode\") { parts.label.textContent = \"OpenCode Go API key\"; parts.input.maxLength = 4096; }","n/a: OpenCode key field has a specific label and limit; ACP fields retain their own profile"],
   ["public/first-run/login.js","if (cli === \"opencode\") {","n/a: OpenCode sends the private key submission message; ACP sends its own login-code message"],
   ["public/first-run/login.js","if (!running || (message.cli === \"opencode\" && message.phase !== \"waitingKey\")) clearInputs(message.cli);","n/a: OpenCode key inputs clear outside waitingKey; ACP ordinary completion cleanup still runs"],
@@ -172,7 +170,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["public/first-run/tools.js","if (id === \"opencode\" && tool.signedIn !== true) return \"nosignin\";","n/a: OpenCode requires stored sign-in facts; ACP registration and connection use their own rules"],
   ["public/first-run/tools.js","if (id === \"opencode\" && tool?.credentialSource === \"environment\") return { text: \"A key is set outside Command Center. Its connection is no","n/a: environment OpenCode keys are not presented as verified; ACP tool status is unchanged"],
   ["public/first-run/tools.js","if (status === \"unsupported\") return { button: `<button type=\"button\" class=\"btn primary sm\" data-frun-install=\"opencode\" data-focus-key=\"fr","n/a: unsupported OpenCode offers the managed major-1 installer; ACP recipes keep their own actions"],
-  ["public/first-run/tools.js","const more = byHand ? `<button type=\"button\" class=\"frun-more frun-byhand\" data-frun-help=\"${id}\" data-focus-key=\"frun-help-${id}\" aria-expa","n/a: OpenCode setup help names its key flow; ACP keeps ordinary manual install guidance"],
   ["server/settings.ts","const result = await run(profile.program, profile.args, { timeoutMs: CLI_TIMEOUT_MS, ...(id === \"opencode\" ? { env: { OPENCODE_DISABLE_AUTOU","n/a: OpenCode version probes disable vendor auto-update; ACP probes use their catalog profiles"],
   ["server/settings.ts","const result = await run(profile.program, auth, { timeoutMs: CLI_TIMEOUT_MS, ...(id === \"opencode\" ? { env: { OPENCODE_DISABLE_AUTOUPDATE: \"","n/a: OpenCode auth probes disable vendor auto-update; ACP auth probes keep their own arguments"],
   ["server/settings.ts","const facts = { installed, version, signedIn, supportedVersion,","works: managed install provenance is detected for the exact tool; ACP sign-in remains unknown"],
@@ -272,7 +269,6 @@ const VERDICTS: Array<[string, string, string]> = [
   ["server/settings.ts","if (id === \"opencode\") credentialSource = openCodeCredentialSource(result);","n/a: OpenCode credential source is derived from auth output; ACP registration is separate"],
   ["server/settings.ts", "this.state.skills.opencode.skills =", "n/a: Settings tools only"],
   ["server/settings.ts", "if (cli === \"codex\") args = [\"mcp\", \"add\"", "n/a: Settings tools only"],
-  ["server/settings.ts", "else if (cli === \"claude\") args = [\"mcp\", \"add\"", "n/a: Settings tools only"],
   ["server/settings.ts", "if (cli !== \"claude\" && cli !== \"codex\") throw new SettingsActionError", "n/a: Settings tools only"],
   ["server/settings.ts", "const result = await this.call(cli, [\"mcp\", \"remove\"", "n/a: Settings tools only"],
   ["public/app.js", "const MODEL_BRAND = {", "works: an ACP CLI has no brand logo; logo() falls back to the first letter of its name"],
@@ -303,6 +299,9 @@ const VERDICTS: Array<[string, string, string]> = [
   ["server/config.ts", "export function defaultEffort(kind: SeatKind | AcpKind", "works: an ACP kind answers first with the default effort"],
   ["server/config.ts", "for (const kind of Object.keys(SAVED_EFFORTS) as SeatKind[])", "works: the saved model and effort lists exist for the three known kinds only; an ACP kind is skipped on line 369"],
   ["server/config.ts", "for (const kind of Object.keys(SAVED_MODELS) as SeatKind[])", "works: same, the three known kinds"],
+  ["server/index.ts", "const executionCapability = selected && !isAcpKind(selected.assignment.cli)", "refused: ACP positions never receive shell capability"],
+  ["server/index.ts", "if (selected && [\"check\", \"visualCheck\"].includes(selected.kind) && isAcpKind(member.cli))", "refused: ACP checks stop before connection preparation or launch"],
+  ["server/runner.ts", "const accessNotice = !isAcpKind(run.cli)", "works: command disclosure applies only to executable shell check workers"],
   ["server/index.ts", "return lead && isAcpKind(lead.cli) ?", "works: acpLeaderOf finds the saved CLI of a tab's ACP leader"],
   ["server/index.ts", "return Boolean(lead && isAcpKind(lead.cli));", "works: hasAcpLeader is true only for the leader slot holding an ACP kind"],
   ["server/leader-acp.ts", "export const acpToolStep", "n/a: the adapter's own map from a tool's reported kind to a step label (names a tool kind, not a CLI)"],
@@ -311,6 +310,7 @@ const VERDICTS: Array<[string, string, string]> = [
   ["server/settings.ts", "const target = this.state.skills[cli];", "n/a: Settings tools only"],
   ["server/settings.ts", "export function loginProfile(cli)", "works: the sign-in table is keyed by catalog id; an ACP tool such as Grok has its own managed profile and every tool without one answers the unsupported message"],
   ["public/app.js", "const brand = MODEL_BRAND[cli];", "works: an ACP CLI has no brand; logo() falls back to the first letter of its name on the next line"],
+  ["public/app.js", "const help = window.CC_FIRST_RUN_HELP, info = help?.tools[cli];", "works: catalog help uses the tool id; an unlisted ACP tool receives the existing neutral fallback"],
   ["public/app.js", "if (!brand || !path) return `<span class=\"lg\"", "works: the letter fallback for a CLI with no brand logo (an ACP CLI)"],
   ["public/app.js", "if (isAcpCli(cli)) return acpShownModel(cli, tab)", "works: formatModel shows THIS tab's reported model, else the CLI's last used one, else CLI default"],
   ["public/app.js", "function cliLabel(cli) {", "works: an ACP CLI is labelled with its saved name"],
@@ -326,6 +326,10 @@ const VERDICTS: Array<[string, string, string]> = [
   ["public/fixed-crew/task-archive-view.js", "const runs = (task.executions ?? []).filter((run) => SHIPPING[run.kind]);", "n/a: shipping action labels, independent of worker CLI"],
   ["public/fixed-crew/task-archive-view.js", "const el = item(SHIPPING[run.kind]", "n/a: recorded shipping result labels, independent of worker CLI"],
   ["server/fixed-crew/bulk-assignment.ts", "if (!models.includes(selected.model)", "works: registered ACP assignments use their default model without a discovered-model list"],
+  ["server/settings.ts", "if (op.id === \"copilot\" || op.id === \"opencode\") {", "works: admission sweeps only managed tools, leaving unrelated ACP installations intact"],
+  ["server/settings.ts", "sweepIncomplete = await sweepManagedInstalls(this.deps.env, op.id as \"opencode\" | \"copilot\");", "works: finish sweeps only the managed tool after verified activation"],
+  ["server/settings.ts", "if (cli === \"opencode\") throw new SettingsActionError(\"OpenCode MCP changes", "refused: unverified OpenCode MCP mutations are blocked; supported ACP tools keep their own contracts"],
+  ["public/first-run/login.js", "if (!code) { if (cli === \"opencode\")", "works: empty OpenCode keys show editable in-app feedback; other ACP sign-ins keep their existing empty-code behavior"],
 ];
 test("E1: every place in the source that decides per CLI kind is listed with what an ACP leader does there", () => {
   const found: string[] = [], listed = new Set<number>();

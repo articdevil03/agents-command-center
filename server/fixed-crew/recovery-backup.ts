@@ -2,18 +2,21 @@ import { constants, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSyn
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { publishConfigFile } from "../config-files.ts";
+import { resolveOwnedRoot, assertOwnedPath } from "../owned-path.js";
 
 export type BackupEntry = { path: string; size: number | null; sha256: string | null };
 export const hashBytes = (bytes: string | Buffer): string => createHash("sha256").update(bytes).digest("hex");
-export function noLinks(path: string): void {
-  const parent = dirname(path);
-  if (parent !== path) noLinks(parent);
-  try { if (lstatSync(path).isSymbolicLink()) throw new Error("Recovery refuses linked paths."); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+const recoveryRoots = new Map<string, ReturnType<typeof resolveOwnedRoot>>();
+// Keep successful pins after refusal. Only a restart may adopt a replaced root.
+export function noLinks(path: string, root: string): void {
+  if (!root) throw new Error("A recovery root is required.");
+  let boundary = recoveryRoots.get(root);
+  if (!boundary) { boundary = resolveOwnedRoot(root, { allowRootLink: true }); recoveryRoots.set(root, boundary); }
+  assertOwnedPath(boundary, path, { allowMissingLeaf: true });
 }
 function entryFor(root: string, path: string): BackupEntry {
   const source = join(root, path);
-  noLinks(source);
+  noLinks(source, root);
   try {
     if (!lstatSync(source).isFile()) throw new Error("Recovery source is not a regular file.");
     const bytes = readFileSync(source);
@@ -26,7 +29,7 @@ function entryFor(root: string, path: string): BackupEntry {
 export function backupInventory(root: string): BackupEntry[] {
   const paths = ["config/workspaces.json", "config/projects.json", "config/setups.json", "config/launch-safety.json", "requests.json"];
   const avatars = join(root, "avatars");
-  noLinks(avatars);
+  noLinks(avatars, root);
   try {
     for (const name of readdirSync(avatars).sort()) {
       const info = lstatSync(join(avatars, name));
@@ -35,22 +38,24 @@ export function backupInventory(root: string): BackupEntry[] {
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   return paths.map((path) => entryFor(root, path));
 }
-export function verifyBackup(archive: string, entries: BackupEntry[]): void {
+export function verifyBackup(archive: string, entries: BackupEntry[], boundary: string): void {
+  noLinks(archive, boundary);
   for (const entry of entries) {
     if (entry.sha256 === null) continue;
     const destination = join(archive, entry.path);
-    noLinks(destination);
+    noLinks(destination, boundary);
     const bytes = readFileSync(destination);
     const actualHash = hashBytes(bytes);
     if (actualHash !== entry.sha256) throw new Error("Legacy backup verification failed.");
     if (bytes.length !== entry.size) throw new Error("Legacy backup size verification failed.");
   }
 }
-export function copyBackup(root: string, archive: string, entries: BackupEntry[]): void {
+export function copyBackup(root: string, archive: string, entries: BackupEntry[], boundary: string): void {
+  noLinks(archive, boundary);
   for (const entry of entries) {
     if (entry.sha256 === null) continue;
     const source = join(root, entry.path), destination = join(archive, entry.path);
-    noLinks(source); noLinks(destination);
+    noLinks(source, root); noLinks(destination, boundary);
     mkdirSync(dirname(destination), { recursive: true });
     try { copyFileSync(source, destination, constants.COPYFILE_EXCL); }
     catch (error) {
@@ -64,9 +69,9 @@ export function copyBackup(root: string, archive: string, entries: BackupEntry[]
       }
     }
   }
-  verifyBackup(archive, entries);
+  verifyBackup(archive, entries, boundary);
 }
-export function saveRecoveryRecord(path: string, record: unknown): void {
-  noLinks(path);
+export function saveRecoveryRecord(path: string, record: unknown, root: string): void {
+  noLinks(path, root);
   publishConfigFile(JSON.stringify(record, null, 2) + "\n", path, true);
 }

@@ -105,6 +105,8 @@ test("P29 O3 failed sends clear before boundary: false, throwing, socket throw a
       const mark = await sentCount(ev); await pressEnter(ev);
       assert.equal(await value(ev), "");
       assert.deepEqual(await sentSince(ev, "submitCliLoginKey", mark), [], "invalid inputs never reach send");
+      assert.equal(await ev(`document.querySelector(${J(SCOPE + " .cli-login-hint")}).textContent`), "Enter an OpenCode Go API key.");
+      assert.equal(await ev(`document.querySelector(${J(INPUT)}).disabled`), false, "invalid key input stays editable");
     }
   });
 });

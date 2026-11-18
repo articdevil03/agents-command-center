@@ -5,6 +5,9 @@ import { watchProcessTree, type TreeWatch } from "../leader-common/process-tree.
 import { GIT_SWEEP_MS, type GitOperation } from "./git-operations.ts";
 
 export const GIT_TIMEOUT_MS = 30_000;
+// Hooks can run a project's checks; a first push can transfer its entire history.
+export const GIT_COMMIT_TIMEOUT_MS = 5 * 60_000;
+export const GIT_PUSH_TIMEOUT_MS = 10 * 60_000;
 export const GIT_OUTPUT_BYTES = 1024 * 1024;
 export const GIT_EXIT_DRAIN_MS = 750;
 export type GitCommandResult = {
@@ -32,8 +35,11 @@ export function runGitCommand(op: GitOperation, folder: string, args: string[]):
     throw new Error("Git requires an absolute native executable and trusted cwd outside all project folders; batch wrappers are unsupported.");
   }
   // Global literal pathspecs preserve pack paths containing [, *, ? or :(magic).
-  const argv = ["-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "--literal-pathspecs", "-C", folder, ...args];
+  const argv = ["-c", "core.fsmonitor=false", "-c", "log.showSignature=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+    ...(args[0] === "commit" ? ["-c", "user.useConfigOnly=true"] : []),
+    ...(args[0] === "push" ? ["-c", "push.followTags=false", "-c", "push.recurseSubmodules=no"] : []), "--literal-pathspecs", "-C", folder, ...args];
   const boundary = testBoundary;
+  const timeoutMs = boundary?.timeoutMs ?? (args[0] === "commit" ? GIT_COMMIT_TIMEOUT_MS : args[0] === "push" ? GIT_PUSH_TIMEOUT_MS : GIT_TIMEOUT_MS);
   return new Promise((resolve) => {
     let child: ChildProcess | undefined, watch: TreeWatch | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined, drain: ReturnType<typeof setTimeout> | undefined;
@@ -112,7 +118,7 @@ export function runGitCommand(op: GitOperation, folder: string, args: string[]):
         finish();
       });
       op.cancelChild = () => finish("Git operation was cancelled.");
-      timer = setTimeout(() => finish("Git command timed out after 30,000 ms; external result is unknown."), boundary?.timeoutMs ?? GIT_TIMEOUT_MS);
+      timer = setTimeout(() => finish(`Git command timed out after ${timeoutMs.toLocaleString("en-US")} ms; the external result is unknown. Check the action's result in the app before trying again.`), timeoutMs);
       if (op.cancelled) op.cancelChild();
     } catch (error) { command = "failure"; finish(`Git spawn failed: ${(error as Error).message}`); }
   });

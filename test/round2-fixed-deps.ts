@@ -15,6 +15,7 @@ import { fixedTab, type FixedChoices } from "./fixed-server-fixture.ts";
 import { FIXED_CREW } from "../server/fixed-crew/roster.ts";
 import { createGitOperations } from "../server/fixed-crew/git-operations.ts";
 import { runGitCommand } from "../server/fixed-crew/git-process.ts";
+import { safeGitText } from "../server/fixed-crew/git-log.ts";
 import { assignmentsDigest } from "../server/fixed-crew/bulk-assignment.ts";
 import * as archives from "../server/fixed-crew/task-archive-files.ts";
 import { admitJournalExecution, completionExecutions } from "../server/fixed-crew/task-journal-archive.ts";
@@ -23,7 +24,7 @@ import { admitJournalExecution, completionExecutions } from "../server/fixed-cre
 // Only its external imports are injected here, using their production implementations.
 export const fixedDependencies = { z, execFileSync, ...assignment, ...preferences, ...prompts,
   ...gates, ...journal, ...taskRequestProof, ...reports, ...revisions, ACTIONS, enumeration, id, integer, text, createGitOperations, runGitCommand,
-  appendFileSync, mkdirSync, writeFileSync, assignmentsDigest, ...archives, admitJournalExecution, completionExecutions };
+  appendFileSync, mkdirSync, writeFileSync, safeGitText, assignmentsDigest, ...archives, admitJournalExecution, completionExecutions };
 
 export function round2FixedTab(id: string, folder: string, name: string) {
   const choices: FixedChoices = Object.fromEntries(FIXED_CREW.map(({ slot }) => [slot,

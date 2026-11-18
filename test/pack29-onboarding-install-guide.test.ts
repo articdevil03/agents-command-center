@@ -6,10 +6,10 @@ import { auditScrolled, catalogChange, guide, openOnly, sentCount, showFirstRun,
 import { toToolStep } from "./pack29-onboarding-page-acp.setup.ts";
 
 const NONE_FOUND = { claude: [false, null], codex: [false, null], opencode: [false, null] } as const;
-const STEPS = ["Visit the official setup guide at the address below.", "Follow the maker's setup guide, then return here and press Check again."];
+const STEPS = ["Press Install here to set up this tool. Use Cancel if you need to stop.", "If installation fails, choose Try again. Then press Check again to refresh."];
 const FORBIDDEN = /powershell|terminal|press the windows key|paste (?:the )?(?:install )?command|\bpaid\b|\bfree\b|\u2014/i;
 
-test("every catalogue fallback offers its official guide, address copy and Check again, with in-app Install primary", { timeout: editorTestMs(180_000) }, async (t) => {
+test("every catalogue fallback offers in-app setup and Check again, with Install primary", { timeout: editorTestMs(180_000) }, async (t) => {
   if (skipped(t)) return;
   await withPage(async ({ ev, waitFor, seed, page }) => {
     const entries = seed.cliCatalog.filter((entry: any) => entry.installable);
@@ -31,24 +31,25 @@ test("every catalogue fallback offers its official guide, address copy and Check
       assert.deepEqual([shown.expanded, shown.shown, shown.commands, shown.shells, shown.copyNames], ["true", true, [], [], []], id + " guide has no command controls");
       assert.doesNotMatch(shown.text, FORBIDDEN, id);
       assert.match(shown.text, /Check again/);
-      const address = id === "opencode" ? "https://opencode.ai/v1/docs/" : id === "codex" ? "https://developers.openai.com/codex/cli" : entry.sources[0];
-      assert.equal(shown.page, address, id + " official guide");
+      assert.equal(shown.page, "", id + " has no external install address");
+      assert.equal(shown.copyAddress, "", id + " has no obsolete address copy control");
       if (id !== "opencode") assert.deepEqual(shown.steps, STEPS);
       else assert.match(shown.steps.join(" "), /Press Install.*Press Sign in/);
       const mark = await sentCount(ev);
-      await ev("window.__copied=[]"); await click(ev, `[data-frun-copy="${id}"]`);
-      await waitFor("window.__copied.length===1", id + " address copied");
-      assert.deepEqual(await ev("window.__copied"), [address]);
-      assert.equal(await sentCount(ev), mark, "copying runs nothing");
+      assert.equal(await ev(`document.querySelectorAll('#frunHelp-${id} button,#frunHelp-${id} a[href]').length`), 0, "guidance runs nothing");
+      assert.equal(await sentCount(ev), mark, "opening guidance runs nothing");
       assert.equal(await ev(`Boolean(document.querySelector('[data-frun-install="${id}"]'))`), true, id + " in-app Install remains primary");
       await click(ev, `[data-frun-help="${id}"]`);
     }
     await openOnly(ev, "codex");
+    await click(ev, "#frunGuideCopy");
+    await waitFor("window.__copied.length===1", "provider guide address copied");
+    assert.deepEqual(await ev("window.__copied"), ["https://opencode.ai/docs/providers/"]);
     await ev("window.__refuse=true;document.querySelector('#toast').textContent=''");
-    await click(ev, '[data-frun-copy="codex"]');
+    await click(ev, '#frunGuideCopy');
     await waitFor("window.__execCalls===1&&document.querySelector('#toast').textContent==='Address copied'", "clipboard fallback copies address");
     await ev("window.__execOk=false;document.querySelector('#toast').textContent=''");
-    await click(ev, '[data-frun-copy="codex"]');
+    await click(ev, '#frunGuideCopy');
     await waitFor("window.__execCalls===2&&document.querySelector('#toast').textContent==='Could not copy. Select the address and copy it by hand'", "failed address copy is explained");
     assert.equal(await ev("document.querySelectorAll('body > textarea').length"), 0);
     await ev(`${AUDIT_JS};true`);
@@ -60,7 +61,7 @@ test("every catalogue fallback offers its official guide, address copy and Check
     await openOnly(ev, "opencode");
     await ev("document.querySelector('#frunH-tools').focus()");
     const order: string[] = [], expected = ["frunCheck", "frunGuideCopy", "frunSearch",
-      ...entries.flatMap((entry: any) => [`frun-install-${entry.id}`, ...(entry.id === "copilot" ? [] : [`frun-help-${entry.id}`]), ...(entry.id === "opencode" ? ["frun-copy-opencode"] : [])]),
+      ...entries.flatMap((entry: any) => [`frun-install-${entry.id}`, ...(entry.id === "copilot" ? [] : [`frun-help-${entry.id}`])]),
       "frun-to-opencode", "frunOtherToggle", "frunSkip"];
     for (let i = 0; i < expected.length; i++) { await press(page, "Tab"); order.push(await ev("(()=>{const a=document.activeElement;return a.id||a.dataset.focusKey||a.tagName})()")); }
     assert.deepEqual(order, expected);

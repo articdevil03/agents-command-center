@@ -26,7 +26,7 @@ test("preference writer stages complete data; partial write and failed publicati
         throw new Error("injected preference failure");
       },
     });
-    assert.throws(() => loaded.writeClientPrefs({ rightPanelWidth: 320 }, final), /injected preference failure/);
+    assert.throws(() => loaded.writeClientPrefs({ rightPanelWidth: 320 }, final), /Your preferences could not be saved/);
     assert.equal(calls, 1);
     assert.equal(fs.readFileSync(final, "utf8"), previous);
     launch(copy, copy).writeClientPrefs({ rightPanelWidth: 400 }, final);

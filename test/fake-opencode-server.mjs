@@ -67,7 +67,7 @@ const server = createServer(async (req, res) => {
     streams.add(res); res.write(`data: ${JSON.stringify({ type: "server.connected", properties: {} })}\n\n`);
     req.on("close", () => streams.delete(res)); return;
   }
-  if (/\/permission\/[^/]+\/reply$/.test(url.pathname) && process.env.FAKE_OPENCODE_REPLY_FAILS === "1") return json(res, 500, { message: "reply refused by fake" });
+  if (/\/permission\/[^/]+\/reply$/.test(url.pathname) && process.env.FAKE_OPENCODE_REPLY_FAILS === "1") return json(res, 500, { message: `reply refused by fake, password ${password}, token ${bridge?.authorization}` });
   if (/\/permission\/[^/]+\/reply$/.test(url.pathname)) {
     waiting.get(url.pathname.split("/")[2])?.(body.reply);
     // The acknowledgement can be slow: the id must stay open until it arrives.

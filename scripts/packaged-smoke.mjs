@@ -1,3 +1,4 @@
+import { isMain } from "./is-main.mjs";
 // Run against a separate electron-builder output directory:
 //   node scripts/packaged-smoke.mjs <win-unpacked/resources/app> <Command Center.exe>
 //
@@ -320,7 +321,8 @@ export async function runPackagedSmoke({
   if (failure) throw failure;
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (isMain(import.meta.url)) {
+  if (process.argv.includes("--help")) { console.log("Usage: node scripts/packaged-smoke.mjs"); process.exit(0); }
   const args = process.argv.slice(2);
   if (args.length !== 2) {
     console.error("Usage: node scripts/packaged-smoke.mjs <win-unpacked/resources/app> <matching Command Center.exe>");

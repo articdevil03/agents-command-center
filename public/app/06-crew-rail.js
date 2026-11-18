@@ -36,16 +36,19 @@
     button.setAttribute("aria-label", label); button.title = label;
   }
   // Every way of closing the app (our Close, Alt+F4, the taskbar, File > Quit) asks this page first (electron/main.js). With nothing working it
-  // closes at once; otherwise it waits on this dialog. A second ask while it shows redraws the same dialog, never a second one.
+  // closes at once; otherwise it waits on this dialog. A second ask is answered "hold" while the first dialog stays, without a second dialog.
+  let closeConfirmationPending = false;
   function answerCloseRequest() {
     // Work that belongs to no tab (a Settings action, an upload) is named too, and alone it also holds the close.
     const cc = window.cc, working = allTabs().filter(({ tab }) => tab.activeWork), other = serverState?.globalWork ?? [];
     if (!working.length && !other.length) { cc.answerClose("close"); return; }
     cc.answerClose("hold");
+    if (closeConfirmationPending) return;
+    closeConfirmationPending = true;
     const names = working.map(({ project, tab }) => `${project.name}\u00A0·\u00A0${tab.name}`), one = working.length === 1;
     const list = names.length > 3 ? `${names.slice(0, 3).join(", ")} +${names.length - 3} more` : names.join(", ");
     confirmAction({ title: "Close Command Center?", body: [working.length ? `${working.length} ${one ? "tab is" : "tabs are"} still working: ${list}.` : "", other.length ? `${working.length ? "Also" : "Still working"}: ${other.join(", ")}.` : "", `Closing stops ${working.length + other.length === 1 ? "it" : "them"}.`].filter(Boolean).join(" "), ok: "Close anyway", cancel: "Keep open", danger: true },
-      () => cc.answerClose("close"), document.activeElement, () => cc.answerClose("keep"));
+      () => { closeConfirmationPending = false; cc.answerClose("close"); }, document.activeElement, () => { closeConfirmationPending = false; cc.answerClose("keep"); });
   }
   function selectProject(projectId) {
     const project = findProject(projectId); if (!project) return;

@@ -10,6 +10,7 @@ import {
 } from "./leader-common.ts";
 import { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, opencodePermissionVerdict, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
 import { createSecretStream } from "./leader-opencode/secret-stream.ts";
+import { type OpencodeFailureReason, readApiResponse, plainOpencodeFailure, OPENCODE_START_TIMEOUT_MESSAGE } from "./leader-opencode/errors.ts";
 import { trimOldest } from "./leader-opencode/maps.ts";
 import type { OpencodeLeaderDeps } from "./leader-opencode/types.ts";
 export { OPENCODE_CREW_SERVER, OPENCODE_CONFIG_CONTENT, decideByRules, opencodePermissionVerdict, opencodeApprovalRequest, opencodeRules, splitOpencodeModel } from "./leader-opencode/rules.ts";
@@ -62,7 +63,6 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
 
   // The bridge token and the server password must never reach chat errors (they are stored in the chat log).
   const secrets = [password, auth, deps.bridge.token, Buffer.from(`opencode:${password}`).toString("base64"), ...goCredentialSecrets(process.env)];
-  const redact = (text: string): string => secrets.reduce((out, secret) => (secret ? out.split(secret).join("[hidden]") : out), text);
   const { emitDelta, flushTail, flushSafeTail } = createSecretStream(secrets, cb);
 
   const url = (path: string): string => `${base}${path}${path.includes("?") ? "&" : "?"}directory=${encodeURIComponent(tabFolder)}`;
@@ -71,17 +71,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
       method, headers: { authorization: auth, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.any([ac.signal, AbortSignal.timeout(ms)]),
     });
-    const text = await response.text();
-    const label = `OpenCode ${method} ${path.split("?")[0].replace(/ses_[A-Za-z0-9]+/g, ":id")}`;
-    if (!response.ok) {
-      let detail = "";
-      // Setup calls (/mcp, /session, /config/providers) can echo config and keys: only the prompt call's detail is shown.
-      if (path.includes("/prompt_async")) try { const parsed = JSON.parse(text); detail = parsed?.data?.message ?? parsed?.message ?? ""; } catch { /* not json */ }
-      throw new Error(`${label} returned ${response.status}${detail ? `: ${redact(String(detail)).slice(0, 200)}` : ""}`);
-    }
-    if (!text) return null;
-    // JSON.parse quotes the start of the text in its error: say only that the data was unreadable.
-    try { return JSON.parse(text); } catch { throw new Error(`${label} returned unreadable data`); }
+    return readApiResponse(response, method, path);
   }
 
   // A live leader's sessions must never age out of Command Center's own-session list: they are reported again at every turn start and end, and on every event for them.
@@ -91,7 +81,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     turnOpen = false;
     reportSessions();
     flushTail();
-    if (error === undefined) cb.onDone(); else cb.onError(redact(error));
+    if (error === undefined) cb.onDone(); else cb.onError(plainOpencodeFailure(error, "turn-end"));
   }
 
   // Tell OpenCode every waiting permission is refused (bounded, so a dead server never holds us up).
@@ -102,7 +92,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     for (const id of open) void fetch(url(`/permission/${id}/reply`), { method: "POST", headers: { authorization: auth, "content-type": "application/json" }, body: JSON.stringify({ reply: "reject" }), signal: AbortSignal.timeout(KILL_GRACE_MS * 4) }).catch(() => {});
   }
 
-  function die(message: string): void {
+  function die(message: string, reason: OpencodeFailureReason, error?: unknown): void {
     if (dead) return;
     dead = true;
     ac.abort();
@@ -110,7 +100,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     rejectOpen();
     // The refusals get a moment to leave before the tree is killed.
     if (child) { const target = child; if (hadOpen) setTimeout(() => killProcessTree(target, unconfirmedKill), KILL_GRACE_MS).unref(); else killProcessTree(target, unconfirmedKill); }
-    if (!stopped) { cb.onStop?.(); if (turnOpen) flushTail(); turnOpen = false; cb.onError(redact(message)); }
+    if (!stopped) { cb.onStop?.(); if (turnOpen) flushTail(); turnOpen = false; cb.onError(plainOpencodeFailure(message, reason, error)); }
   }
   let killFailed = false;
   // Said once per leader: Stop's kill, die()'s kill and the exit sweep can each fail for the same leader.
@@ -132,7 +122,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     if (!openPermissions.has(id)) return;
     // The id stays open until OpenCode acknowledged the reply: an unanswered permission would wait forever.
     try { await api("POST", `/permission/${id}/reply`, { reply: allow ? "once" : "reject" }); }
-    catch (error) { if (openPermissions.has(id)) die(`leader turn failed: could not answer an OpenCode permission request (${(error as Error).message})`); return; }
+    catch (error) { if (openPermissions.has(id)) die("OpenCode could not finish this turn. Try again.", "permission-reply", error); return; }
     openPermissions.delete(id);
   }
 
@@ -203,7 +193,7 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
       // A sub-agent of this leader: nothing of it is shown, but a request it makes must be answered or the turn would hang.
       if (ownedSessions.has(sid)) {
         if (event.type === "permission.asked") void onPermission(p, true).catch(() => {});
-        else if (event.type === "question.asked") void api("POST", `/question/${p.id}/reject`, {}).catch((error: Error) => die(`leader turn failed: could not answer an OpenCode question (${error.message})`));
+        else if (event.type === "question.asked") void api("POST", `/question/${p.id}/reject`, {}).catch((error: Error) => die("OpenCode could not finish this turn. Try again.", "question-reject", error));
       }
       return;
     }
@@ -248,12 +238,10 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
       case "question.asked":
         // No screen for questions: reject, so the CLI never waits on us.
         // A reject that fails leaves OpenCode waiting for an answer for ever: end this leader.
-        void api("POST", `/question/${p.id}/reject`, {}).catch((error: Error) => die(`leader turn failed: could not answer an OpenCode question (${error.message})`));
+        void api("POST", `/question/${p.id}/reject`, {}).catch((error: Error) => die("OpenCode could not finish this turn. Try again.", "question-reject", error));
         return;
       case "session.error": {
-        const name = p.error?.name;
-        const detail = p.error?.data?.message ?? p.error?.message;
-        if (turnOpen) die(`leader turn failed: ${detail ?? name ?? "OpenCode reported an error"}`);
+        if (turnOpen) die("OpenCode could not finish this turn. Try again.", "session-error");
         return;
       }
       case "session.idle":
@@ -277,8 +265,8 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
           try { onEvent(JSON.parse(data)); } catch { /* one bad event never ends the stream */ }
         }
       }
-    } catch { /* ended below */ }
-    die("leader session ended; a new one will start on the next message");
+    } catch (error) { die("leader session ended; a new one will start on the next message", "stream", error); return; }
+    die("leader session ended; a new one will start on the next message", "stream-end");
   }
 
   const ready = deadline((async () => {
@@ -288,8 +276,8 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     });
     trackLeaderChild(child, watchesLeaderChild(deps.spawnFn), () => unconfirmedKill());
     child.stderr?.resume();
-    child.on("error", (error) => die(`OpenCode could not start: ${error.message}`));
-    child.on("exit", () => die(sessionId ? "leader session ended; a new one will start on the next message" : "OpenCode exited before it started; is it installed?"));
+    child.on("error", (error) => die("OpenCode could not start. Try again.", "spawn", error));
+    child.on("exit", () => die(sessionId ? "leader session ended; a new one will start on the next message" : "OpenCode exited before it started; is it installed?", "exit"));
     // Port 0 lets OpenCode choose and print the port it actually bound. ponytail: depends on that "listening on http://127.0.0.1:N" line; a CLI that stops printing it fails the start check.
     const bound = new Promise<number>((found) => {
       let seen = "";
@@ -313,8 +301,8 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     const events = await fetch(url("/event"), { headers: { authorization: auth }, signal: ac.signal });
     if (!events.ok || !events.body) throw new Error(`OpenCode event stream returned ${events.status}`);
     void readEvents(events);
-  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, `OpenCode did not start within ${LEADER_START_TIMEOUT_MS / 1000} seconds`);
-  ready.catch((error: Error) => die(`OpenCode leader failed to start: ${error.message}`));
+  })(), deps.startTimeoutMs ?? LEADER_START_TIMEOUT_MS, OPENCODE_START_TIMEOUT_MESSAGE);
+  ready.catch((error: Error) => die(error.message === OPENCODE_START_TIMEOUT_MESSAGE ? OPENCODE_START_TIMEOUT_MESSAGE : "OpenCode could not start. Try again.", error.message === OPENCODE_START_TIMEOUT_MESSAGE ? "timeout" : "start", error));
 
   function prompt(text: string, images: string[]): Promise<any> {
     const parts: Json[] = [{ type: "text", text }];
@@ -334,13 +322,13 @@ export function createOpencodeLeader(seat: LeaderSeat, tabFolder: string, cb: Le
     turnModel = model;
     lastTokens = null;
     return afterModePatch(() => prompt(text, images)).then(() => {}, (error: Error) => {
-      if (!stopped && !dead && turnOpen) die(`leader turn failed: ${error.message}`);
+      if (!stopped && !dead && turnOpen) die("OpenCode could not finish this turn. Try again.", "prompt", error);
     });
   }
 
   function send(text: string, images: string[] = []): void {
     if (stopped) return;
-    if (dead) { cb.onError("leader is not available (the agent process ended); starting a new one on the next message"); return; }
+    if (dead) { cb.onError("The OpenCode session ended. Send your message again."); return; }
     turnOpen = true;
     reportSessions();
     turnGeneration++;

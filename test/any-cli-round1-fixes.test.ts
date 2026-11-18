@@ -39,7 +39,7 @@ test("Codex leader: a turn/start the CLI refuses retires the leader", { timeout:
   await withServer({ leader: CODEX_LEADER, env: { FAKE_CODEX_TURN_START_FAILS: "1" } }, async (h) => {
     const start = h.chat("hello");
     await h.wait(() => h.turnEnded(start).length >= 1, "refused turn"); await sleep(300);
-    assert.equal(h.turnEnded(start).length, 1); assert.match(h.turnEnded(start)[0].message, /turn start refused by fake/);
+    assert.equal(h.turnEnded(start).length, 1); assert.equal(h.turnEnded(start)[0].message, "The Codex leader turn failed. Try again."); assert.doesNotMatch(h.turnEnded(start)[0].message, /refused by fake/, "the vendor text stays private");
     await h.wait(() => !h.pidAlive(startedPids(h)[0]), "the child is gone");
   });
 });
@@ -111,7 +111,12 @@ test("OpenCode leader: a permission reply that fails fails the turn and retires 
     await h.wait(() => h.pending().length === 1, "bash approval");
     await h.action({ type: "answerApproval", tabId: TAB, approvalId: h.pending()[0].approvalId, allow: true });
     await h.wait(() => h.turnEnded(start).length >= 1, "the turn failed instead of hanging");
-    assert.match(h.turnEnded(start)[0].message, /could not answer an OpenCode permission request/);
+    assert.equal(h.turnEnded(start)[0].message, "OpenCode could not finish this turn. Try again.");
+    const failedReply = h.cliEntries().find((e) => e.path?.includes("/permission/"));
+    assert.ok(failedReply, "FOUND failed permission reply");
+    const token = h.cliEntries().find((e) => e.path === "/mcp").body.config.headers.Authorization.slice("Bearer ".length);
+    assert.ok(!JSON.stringify(h.messages).includes(token), "real bridge secret in the failed body never reaches state or chat");
+    assert.doesNotMatch(h.turnEnded(start)[0].message, /permission|POST|reply refused/);
     await h.wait(() => !h.pidAlive(startedPids(h)[0]), "the server is gone");
   });
 });
@@ -122,13 +127,14 @@ test("OpenCode leader: errors never carry the bridge token or the server passwor
     await h.wait(() => h.turnEnded(start).length >= 1, "leaky error");
     const token = h.cliEntries().find((e) => e.path === "/mcp").body.config.headers.Authorization.slice("Bearer ".length);
     const text = JSON.stringify(h.messages);
-    assert.match(h.turnEnded(start)[0].message, /boom/);
+    assert.equal(h.turnEnded(start)[0].message, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(h.turnEnded(start)[0].message, /boom|session|permission/);
     assert.ok(!text.includes(token), "no bridge token"); assert.ok(!/[0-9a-f]{40,}/.test(h.turnEnded(start)[0].message), "no password or token");
   });
   await withServer({ leader: OPENCODE_LEADER, env: { FAKE_OPENCODE_SESSION_FAILS: "1" } }, async (h) => {
     const start = h.chat("hello"); await h.wait(() => h.turnEnded(start).length >= 1, "setup failure");
     const message = h.turnEnded(start)[0].message;
-    assert.match(message, /POST \/session returned 500/); assert.ok(!/session refused|password|[0-9a-f]{40,}/.test(message), `setup detail dropped: ${message}`);
+    assert.equal(message, "OpenCode could not start. Try again."); assert.ok(!/session refused|password|[0-9a-f]{40,}/.test(message), `setup detail dropped: ${message}`);
   });
 });
 

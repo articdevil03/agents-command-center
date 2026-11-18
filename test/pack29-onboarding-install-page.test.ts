@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { editorTestMs, J, withPage, skipped, click, deliver, deliverState, press } from "./pack18-editor-harness.ts";
-import { answer, catalogChange, footer, sentCount, sentSince, showFirstRun as rawShowFirstRun, stepOf, toolsChange, CATALOG_QUIET, stubClipboard } from "./pack29-onboarding-page.setup.ts";
+import { answer, catalogChange, footer, sentCount, sentSince, showFirstRun as rawShowFirstRun, stepOf, toolsChange, CATALOG_QUIET } from "./pack29-onboarding-page.setup.ts";
 import { toToolStep } from "./pack29-onboarding-page-acp.setup.ts";
 
 // Pack 29 B3: Install in the setup wizard and in Settings, on the real page (real scripts and CSS, a state from a real server, then states
@@ -14,31 +14,23 @@ const FOLDER = "C:\\work\\My App";
 const CLAUDE_MISSING = { claude: [false, null], codex: [true, true], opencode: [false, null] } as const;
 const active = `(()=>{const a=document.activeElement;return a.id||a.dataset.focusKey||a.tagName})()`;
 
-test("every Settings fallback is a collapsed official guide, with address copy, Check again and no install commands", { timeout: editorTestMs(180_000) }, async (t) => {
+test("every Settings missing tool offers accurate in-app recovery, Check again and no install commands", { timeout: editorTestMs(180_000) }, async (t) => {
   if (skipped(t)) return;
   await withPage(async ({ ev, seed }) => {
     const entries = seed.cliCatalog.filter((entry: any) => entry.installable);
     assert.equal(entries.length, 11);
     await showFirstRun(ev, seed, { claude: [false, null], codex: [false, null], opencode: [false, null] },
       catalogChange(Object.fromEntries(entries.map((e: any) => [e.id, { installed: false }]))) + "state.firstRun={required:false};");
-    await ev("openSettings(undefined,'tools');true"); await stubClipboard(ev);
+    await ev("openSettings(undefined,'tools');true");
     for (const entry of entries) {
       const selector = `#s-tools [data-tool-row][data-cli="${entry.id}"]`;
-      if (entry.id === "copilot") {
-        assert.equal(await ev(`Boolean(document.querySelector(${J(selector + " details")}))`), false, "Copilot has no manual guide");
-        assert.equal(await ev(`document.querySelector(${J(selector + ' [data-setting-action="install-cli"]')}).checkVisibility()`), true);
-        continue;
-      }
-      assert.equal(await ev(`document.querySelector(${J(selector + " details")}).open`), false);
-      await click(ev, selector + " summary");
-      const text = await ev(`document.querySelector(${J(selector + " details")}).innerText`);
+      const text = await ev(`document.querySelector(${J(selector)}).innerText`);
       assert.doesNotMatch(text, /powershell|terminal|paste (?:the )?(?:install )?command|\bpaid\b|\bfree\b|\u2014/i);
-      assert.match(text, /Check again/);
-      const address = entry.id === "opencode" ? "https://opencode.ai/v1/docs/" : entry.id === "codex" ? "https://developers.openai.com/codex/cli" : entry.sources[0];
-      await ev("window.__copied=[]"); await click(ev, selector + " [data-copy-address]");
-      assert.deepEqual(await ev("window.__copied"), [address]);
-      assert.equal(await ev(`document.querySelectorAll(${J(selector + " [data-copy]")}).length`), 0);
+      assert.match(text, entry.id === "copilot" ? /Choose Install here.*Try again.*Cancel.*Check again/ : /Choose Install\. If it fails, choose Try again, then Check again\./);
+      if (entry.id !== "copilot") assert.doesNotMatch(text, /Cancel|Install again/);
+      assert.equal(await ev(`document.querySelectorAll(${J(selector + ' details,' + selector + ' [data-copy-address],' + selector + ' [data-copy]')}).length`), 0);
       assert.equal(await ev(`document.querySelector(${J(selector + ' [data-setting-action="install-cli"]')}).checkVisibility()`), true);
+
     }
     const mark = await sentCount(ev); await click(ev, "#s-tools [data-settings-refresh]");
     assert.equal((await sentSince(ev, "refreshSettings", mark)).length, 1);
@@ -57,13 +49,14 @@ const REASONS: Record<string, [string, string]> = {
   needsNode: ["Claude Code needs Node.js, which includes npm. Install it from nodejs.org, then press Check again.", "Check again"],
   needsGit: ["Claude Code needs Git for Windows. Install it from git-scm.com, then press Check again.", "Check again"],
   needsWinget: ["Claude Code needs App Installer. Get App Installer from the Microsoft Store, then press Check again.", "Check again"],
-  needsPowerShell: ["Claude Code needs a newer PowerShell. Get PowerShell from the Microsoft Store, then press Check again.", "Check again"],
-  downloadFailed: ["Could not download the installer. Check your internet connection, then try again.", "Install"],
-  blockedByWindows: ["Windows or an administrator blocked the installation.", "Install"],
+  needsPowerShell: ["This tool needs Windows PowerShell, which was not found on this PC. Restore it in Windows, then choose Check again.", "Check again"],
+  downloadFailed: ["Could not download the installer. Check your internet connection, then try again.", "Try again"],
+  blockedByWindows: ["Windows or an administrator blocked the installation.", "Try again"],
   notFoundAfterInstall: ["The installer finished, but Command Center could not find the tool. Press Check again.", "Check again"],
-  cancelled: ["Installation stopped. Changes already made may remain.", "Install"],
-  timeout: ["The installation took too long and was stopped. Check your internet connection, then try again.", "Install"],
-  installFailed: ["The installation did not finish. Try again, or use Install by hand.", "Install"],
+  cancelled: ["Installation stopped. Changes already made may remain.", "Try again"],
+  timeout: ["The installation took too long and was stopped. Check your internet connection, then try again.", "Try again"],
+  rateLimited: ["GitHub is limiting requests right now. Wait a few minutes, then choose Try again.", "Try again"],
+  installFailed: ["The installation did not finish. Choose Try again, then press Check again.", "Try again"],
 };
 const NEVER_SAY = /\bpaid\b|\bfree\b|free tier|subscription|pricing|open (a )?powershell|press the windows key/i;
 
@@ -158,7 +151,7 @@ test("P29 B3 Install: consent shown before the click, the click sends exactly {t
     await answer(ev, stop[0]);
     await showFirstRun(ev, seed, CLAUDE_MISSING, catalogChange({ ...missing, claude: installState(id, "failed", null, "cancelled") }));
     await answer(ev, sent[0], "Installation stopped");
-    assert.deepEqual(await row(ev, "claude"), { chip: "Not found", detail: REASONS.cancelled[0], bad: false, buttons: ["Install"], bar: false, barValue: null }, "stopped: its words, Install is back");
+    assert.deepEqual(await row(ev, "claude"), { chip: "Not found", detail: REASONS.cancelled[0], bad: false, buttons: ["Try again"], bar: false, barValue: null }, "stopped: its words, the install button is back as Try again");
     assert.deepEqual(await lockFacts(ev), { next: false, back: false, skip: false, why: "" }, "the step is free again");
 
     // Every reason the server may publish: the page's own words, the right next step, never raw output.
@@ -226,7 +219,7 @@ test("P29 B3 Install: a reloaded page shows a running installation from the serv
   }, { fixture: "fixed" });
 });
 
-test("P29 B3 Connect and Settings: Connect sends exactly {type, requestId, cli, confirm:true} and installs nothing; Settings keeps the official guide collapsed under Install by hand and asks consent", { timeout: editorTestMs(180_000) }, async (t) => {
+test("P29 B3 Connect and Settings: Connect sends exactly {type, requestId, cli, confirm:true} and installs nothing; Settings keeps recovery in-app and asks consent", { timeout: editorTestMs(180_000) }, async (t) => {
   if (skipped(t)) return;
   await withPage(async ({ ev, waitFor, seed }) => {
     await showFirstRun(ev, seed, CLAUDE_MISSING, catalogChange({ kimi: { installed: true, version: "1.0.0", signedIn: true, registered: false, leaderEligible: false } }));
@@ -245,14 +238,14 @@ test("P29 B3 Connect and Settings: Connect sends exactly {type, requestId, cli, 
     assert.equal(await ev(`document.querySelector('#frunLeader input[value^="acp:"]')`), null, "an unverified tool is never a leader choice");
 
     // Settings, outside setup: the row shows the maker's command from the catalog, and Install's confirmation says what it downloads.
-    const claude = seed.cliCatalog.find((entry: any) => entry.id === "claude");
     await deliverState(ev, seed, `state.firstRun={required:false};${toolsChange(CLAUDE_MISSING)}${CATALOG_QUIET}`);
     await click(ev, "#setBtn");
     await waitFor(`Boolean(document.querySelector('#s-tools [data-tool-row][data-cli="claude"]'))`, "Settings tool rows");
-    const rowText = await ev(`(()=>{const r=document.querySelector('#s-tools [data-tool-row][data-cli="claude"]');return {cmd:r.querySelector('.cmd code')?.textContent,copy:r.querySelector('[data-copy-address]')?.dataset.copyAddress,help:document.querySelector('#s-tools .settings-help').textContent}})()`);
-    assert.deepEqual([rowText.cmd, rowText.copy], [claude.sources[0], claude.sources[0]], "the maker's command from the catalog, never npm for Claude");
-    assert.doesNotMatch(rowText.help, /npm/, "the help line no longer says npm");
-    assert.deepEqual(await ev(`(()=>{const r=document.querySelector('#s-tools [data-cli="claude"]');return [r.querySelector('summary').textContent,r.querySelector('details').open,r.querySelector('.cmd code').checkVisibility(),r.querySelector('[data-setting-action="install-cli"]').checkVisibility()]})()`), ["Install by hand", false, false, true]);
+    const rowText = await ev(`(()=>{const r=document.querySelector('#s-tools [data-tool-row][data-cli="claude"]');return {text:r.innerText,obsolete:r.querySelectorAll('details,.cmd,[data-copy-address]').length,install:r.querySelector('[data-setting-action="install-cli"]').checkVisibility(),help:document.querySelector('#s-tools .settings-help').textContent}})()`);
+    assert.equal(rowText.obsolete, 0, "external installation instructions and copy controls are absent");
+    assert.equal(rowText.install, true);
+    assert.match(rowText.text, /Choose Install\. If it fails, choose Try again, then Check again\./);
+    assert.doesNotMatch(rowText.help, /npm/);
     mark = await sentCount(ev);
     await click(ev, '#s-tools [data-setting-action="install-cli"][data-cli="claude"]');
     await waitFor(`!document.querySelector('#confirmModal').hidden`, "Install confirmation");
@@ -261,5 +254,35 @@ test("P29 B3 Connect and Settings: Connect sends exactly {type, requestId, cli, 
     const fromSettings = await sentSince(ev, "installCli", mark);
     assert.deepEqual(fromSettings.map((m) => [Object.keys(m).sort(), m.cli, m.confirm]), [[["cli", "confirm", "requestId", "type"], "claude", true]], "Settings' Install: the same four fields");
     await deliver(ev, { type: "actionResult", action: "installCli", requestId: fromSettings[0].requestId });
+  }, { fixture: "fixed" });
+});
+
+test("R2-1 a failed install leaves a real, enabled Try again button for a non-Copilot tool, in the wizard and in Settings", { timeout: editorTestMs(180_000) }, async (t) => {
+  if (skipped(t)) return;
+  await withPage(async ({ ev, waitFor, seed }) => {
+    const failed = catalogChange({ claude: installState("failed-1", "failed", null, "installFailed") });
+    await showFirstRun(ev, seed, CLAUDE_MISSING, failed);
+    await waitFor(`Boolean(document.querySelector('#first .frun'))`, "setup wizard FOUND");
+    await toToolStep(ev, FOLDER);
+    const wizard = `(()=>{const b=document.querySelector('[data-frun-install="claude"]');return b?[b.textContent,b.disabled,b.checkVisibility()]:null})()`;
+    assert.deepEqual(await ev(wizard), ["Try again", false, true], "wizard: a real enabled Try again button");
+    let mark = await sentCount(ev);
+    await click(ev, '[data-frun-install="claude"]');
+    const retry = await sentSince(ev, "installCli", mark);
+    assert.deepEqual(retry.map((m) => [m.cli, m.confirm]), [["claude", true]], "Try again starts the installation again");
+    await answer(ev, retry[0], "fixture finished");
+
+    await deliverState(ev, seed, `state.firstRun={required:false};${toolsChange(CLAUDE_MISSING)}${failed}`);
+    await click(ev, "#setBtn");
+    const settings = `#s-tools [data-tool-row][data-cli="claude"] [data-setting-action="install-cli"]`;
+    await waitFor(`Boolean(document.querySelector(${J(settings)}))`, "Settings Install button");
+    assert.deepEqual(await ev(`(()=>{const b=document.querySelector(${J(settings)});return [b.textContent,b.disabled,b.checkVisibility()]})()`), ["Try again", false, true], "Settings: a real enabled Try again button");
+    mark = await sentCount(ev);
+    await click(ev, settings);
+    await waitFor(`!document.querySelector('#confirmModal').hidden`, "Install confirmation");
+    await click(ev, "#confirmOk");
+    const again = await sentSince(ev, "installCli", mark);
+    assert.deepEqual(again.map((m) => [m.cli, m.confirm]), [["claude", true]], "Settings Try again starts the installation again");
+    await deliver(ev, { type: "actionResult", action: "installCli", requestId: again[0].requestId });
   }, { fixture: "fixed" });
 });

@@ -234,13 +234,14 @@ test("changeProjectFolder persists only the project default and supplies it to n
 
 test("Settings default folder is saved with an id and supplies new projects", async () => {
   const server = await loadFixed({ skipHealth: true }), ws = connect(server);
-  ws.message({ type: "setDefaultProjectFolder", requestId: "global_folder_save", folder: server.testRoot });
+  const projectFolder = path.join(server.testRoot, "project"); mkdirSync(projectFolder);
+  ws.message({ type: "setDefaultProjectFolder", requestId: "global_folder_save", folder: projectFolder });
   await waitFor(() => ws.messages.some((message: any) => message.type === "actionResult" && message.requestId === "global_folder_save"), "default folder result");
-  assert.equal(server.stateMessage().settings.folders.defaultProjectFolder, server.testRoot);
+  assert.equal(server.stateMessage().settings.folders.defaultProjectFolder, projectFolder);
   ws.message({ ...fixedCreation(), type: "addProject", id: "globaldefault", name: "Uses Settings folder" });
   const project = server.stateMessage().projects.find((item: any) => item.id === "globaldefault");
-  assert.equal(project.folder, server.testRoot);
-  assert.equal(project.tabs[0].folder, server.testRoot);
+  assert.equal(project.folder, projectFolder);
+  assert.equal(project.tabs[0].folder, projectFolder);
 });
 
 test("Settings writes reject an unsafe request id before any action starts", async () => {

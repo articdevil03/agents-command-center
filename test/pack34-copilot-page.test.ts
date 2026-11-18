@@ -26,7 +26,7 @@ test("wizard and Settings render Copilot Install, progress, cancel, Installed, T
   assert.match(context.window.CC_FIRST_RUN_CATALOG.consentText(entry), /checks GitHub Copilot CLI from its official releases/);
   // The Copilot failure text follows the catalog id, never the display name.
   assert.equal(context.window.CC_FIRST_RUN_CATALOG.reasonText("installFailed", "Renamed label", "copilot"), "The installation did not finish. Try again.");
-  assert.match(context.window.CC_FIRST_RUN_CATALOG.reasonText("installFailed", entry.displayName, "claude"), /Install by hand/);
+  assert.match(context.window.CC_FIRST_RUN_CATALOG.reasonText("installFailed", entry.displayName, "claude"), /Choose Try again, then press Check again/);
   install.install("copilot"); assert.deepEqual(messages, [{ type: "installCli", cli: "copilot", confirm: true }]);
   facts.action = { requestId: "owned", kind: "install", status: "running", phase: "installing" };
   for (const markup of html()) { assert.match(markup, />Cancel<\/button>/); assert.match(markup, /Downloading and installing/); }

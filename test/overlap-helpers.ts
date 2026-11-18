@@ -79,6 +79,8 @@ export function buildSeed(base: any) {
   const start = Date.now();
   const worker = tab.crew.find((seat: any) => seat.slot === "coder");
   const lead = tab.crew.find((seat: any) => seat.slot === "leader" && seat.isLeader);
+  // The blocked seat is named on a Needs you card by its position name (never its key): give it a long unbroken name so those cards keep their long-text case.
+  worker.name = unbroken("Coder", 90);
   const runs = [1, 2].map((number) => ({
     id: `ov-run-${number}`, runId: `ov-run-${number}`, seatSlotId: "coder", seatKey: worker.seatKey, seatName: worker.name, seatIsLeader: false,
     label: spaced(`Parallel run ${number}`, 90), status: "working", outcome: null, cli: worker.cli, model: worker.model, effort: worker.effort,
@@ -129,7 +131,7 @@ export function buildSeed(base: any) {
     skills: { claude: inventory("claude"), codex: inventory("codex"), opencode: inventory("opencode"), gemini: { ...inventory("gemini"), plugins: [] } },
   };
   state.launchSafety = {
-    blocked: [unbroken("blocked.seat", 90)], uncertain: [{ seatId: spaced("seat", 80), runId: "ov-unc", pid: 4242 }],
+    blocked: [tab.crew.find((seat) => seat.slot === "coder").seatKey], uncertain: [{ seatId: spaced("seat", 80), runId: "ov-unc", pid: 4242 }],
     notices: [{ id: 1, source: unbroken("Source", 60), seatName: spaced("Seat", 60), brief: `${spaced("brief", 200)} ${UNBROKEN_300}`, pending: true }], released: [],
   };
   state.launchNotices = [];

@@ -59,7 +59,7 @@ export const serverOtherMutations = [
   ["guard-data-root-logs-call-site", "server/runner.ts",
     'export const logsDir = join(resolveDataRoot(process.env, repoRoot), "logs");',
     'export const logsDir = join(repoRoot, "logs");'],
-  ["guard-data-root-empty-string-fallback", "server/data-root.ts", 'return dir ? resolve(dir) : repoRoot;', 'return dir ?? repoRoot;'],
+  ["guard-data-root-empty-string-fallback","server/data-root.ts","if (!dir) return repoRoot;","if (dir === undefined) return repoRoot;"],
   ["guard-config-seed-complete-before-publish", "server/config-files.ts",
     'writeFileSynced(temporaryPath, contents);',
     'writeFileSynced(dest, contents);'],
@@ -84,9 +84,7 @@ export const serverOtherMutations = [
   // logsDir would silently reject every valid run.
   ["guard-datadir-trim-whitespace", "server/data-root.ts",
     'const dir = env.CC_DATA_DIR?.trim();', 'const dir = env.CC_DATA_DIR;'],
-  ["guard-client-pref-stage-call", "server/config-prefs.ts",
-    'return publishConfigFile(JSON.stringify(prefs, null, 2) + "\\n", liveWritePath(path, clientPrefsPath), !onlyIfMissing);',
-    'writeFileSync(liveWritePath(path, clientPrefsPath), JSON.stringify(prefs, null, 2) + "\\n", "utf8"); return true;'],
+  ["guard-client-pref-stage-call","server/config-prefs.ts","return publishConfigFile(JSON.stringify(prefs, null, 2) + \"\\n\", destination, !onlyIfMissing);","process.getBuiltinModule(\"fs\").writeFileSync(destination, JSON.stringify(prefs)); return true;"],
   ["guard-client-pref-atomic-replace", "server/config-files.ts",
     'if (replace) replaceFile(temporaryPath, dest);',
     'if (replace) writeFileSync(dest, readFileSync(temporaryPath));'],
@@ -108,8 +106,8 @@ export const serverOtherMutations = [
   // ---- brand-picker pack: six findings, two P1 ----------------------------
   // Item 1, guard 2: buildCommand is the last gate before shell:true and must
   // validate every interpolated value itself, not trust an upstream caller.
-  ["guard-buildcommand-validates-model", "server/runner.ts", "  if (!isValidModel(run.cli, run.model)) throw new Error(`buildCommand: refusing invalid model for \"${run.seatKey}\": ${run.model}`);\n", ""],
-  ["guard-buildcommand-validates-effort","server/runner.ts","  if (!isValidEffort(run.cli, run.effort, run.model)) throw new Error(`buildCommand: refusing invalid effort for \"${run.seatKey}\": ${run.effort}`);\n",""],
+  ["guard-buildcommand-validates-model","server/runner.ts","  if (!isValidModel(run.cli, run.model)) throw new Error(`buildCommand: refusing invalid model for the ${run.name} position: ${run.model}`);\n",""],
+  ["guard-buildcommand-validates-effort","server/runner.ts","  if (!isValidEffort(run.cli, run.effort, run.model)) throw new Error(`buildCommand: refusing invalid effort for the ${run.name} position: ${run.effort}`);\n",""],
   // Item 1, layer 3: discovery output is untrusted -- a line that doesn't
   // look like a real "provider/model" id must never survive into the
   // suggestion list the seat-kind cascade assigns from unvalidated.
@@ -123,7 +121,7 @@ export const serverOtherMutations = [
   ["guard-claude-readonly-disallowed-tools", "server/runner.ts",
     'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none --disallowedTools Bash,PowerShell,Edit,MultiEdit,Write,NotebookEdit";',
     'const CLAUDE_READ_ONLY_FLAGS = "--permission-mode plan --permission-prompts none";'],
-  ["guard-opencode-reviewer-deny-bash", "server/runner-crew.ts", "permission: { edit: \"deny\", bash: \"deny\" },", "permission: { edit: \"deny\" },"],
+  ["guard-opencode-reviewer-deny-bash", "server/runner-crew.ts", "permission: { edit: \"deny\", bash: run.executionCapability === \"run-commands\" ? \"allow\" : \"deny\" },", "permission: { edit: \"deny\" },"],
   // Item 3, guard 4: the cascade must produce a model that is actually valid
   // for the TARGET kind -- opencode requires a "provider_id/model_id" shape,
   // not just a safe character set.
@@ -298,7 +296,7 @@ export const serverOtherMutations = [
   ["guard-pack17-step-from-title","server/leader-acp.ts","activity.start(id, acpToolStep(update.kind))","activity.start(id, { label: String(update.title), helper: false })"],
   ["guard-pack17-model-not-reported","server/leader-acp.ts","if (modelName) cb.onModel?.(modelName); }"," }"],
   ["guard-pack17-http-assumed","server/leader-acp.ts","const http = caps.mcpCapabilities?.http === true;","const http = true;"],
-  ["guard-pack17-runner-default","server/runner.ts","    default:\n      throw new Error(`buildCommand: no command for CLI \"${String(run.cli)}\" on \"${run.seatKey}\"`);\n",""],
+  ["guard-pack17-runner-default","server/runner.ts","    default:\n      throw new Error(`No start command is available for the ${run.name} position. Choose its CLI in Settings.`);\n",""],
   ["guard-pack17-shell-chars-allowed","server/config-acp.ts","const ACP_ARG = /^[A-Za-z0-9._:=/@+,-]{1,120}$/;","const ACP_ARG = /^[^\u0000-\u001f]{1,120}$/;"],
   ["guard-pack17-program-path-allowed","server/config-acp.ts","const ACP_PROGRAM = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;","const ACP_PROGRAM = /^[^\u0000-\u001f]{1,64}$/;"],
   ["guard-pack17-model-not-redacted","server/leader-acp.ts","modelName = safe(modelOption.currentValue, 100) || null;","modelName = clean(modelOption.currentValue, 100) || null;"],

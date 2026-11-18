@@ -11,7 +11,7 @@ function row(name, file, from, to, test) {
 const page = "pack29-cli-login-page", leader = "pack29-catalog-leader", settings = "pack29-onboarding-install-page";
 
 // A pasted code is cleared at once and sent once; the capability and address never reach the DOM as markup; the message shapes are the frozen contract.
-row("ui-secret-cleared", login, 'clearInputs(cli);\n      if (!code) return false;\n      input.value = ""; input.disabled = true;', 'if (!code) return false;\n      input.disabled = true;', page);
+row("ui-secret-cleared", login, "clearInputs(cli);\n      if (!code) { if (cli === \"opencode\") { parts.hint.textContent = REASON.invalidKey; input.disabled = false; } return false; }\n      input.value = \"\"; input.disabled = true;", 'if (!code) return false;\n      input.disabled = true;', page);
 row("ui-code-once", login, 'event.phase !== "waitingCode" || mine.codeSent >= event.revision) return false;', 'event.phase !== "waitingCode") return false;', page);
 row("ui-code-sent-setter", login, "if (sent) mine.codeSent = event.revision;", "", page);
 row("ui-capability-not-in-dom", login, "root.dataset.state = view.state;", 'root.dataset.state = view.state; root.dataset.cap = own.get(cli)?.loginId ?? "";', page);
@@ -25,8 +25,8 @@ row("ui-unmanaged-no-signin", login, 'const offered = (cli) => cli === "github" 
 // The wizard: an eligible catalog tool is "Not tested yet" and never chosen by itself.
 row("ui-untested-label", "public/first-run/tools.js", 'return tool.tested === true ? "tested" : "untested";', 'return "tested";', page);
 row("ui-no-auto-select", "public/first-run/tools.js", 'draft.leader : readyClis()[0] ?? "");', 'draft.leader : choices()[0] ?? "");', page);
-// Settings keeps the maker's command collapsed under Install by hand.
-row("settings-by-hand-collapsed", "public/app/11-settings-render.js", '<details class="settings-install-by-hand">', '<details class="settings-install-by-hand" open>', settings);
+// Settings keeps recovery inside the app.
+row("settings-by-hand-collapsed", "public/app/11-settings-render.js", 'Choose Install here. If it fails, choose Try again.', 'Open a terminal to install this tool.', 'audit-p6-settings');
 // ACP availability: matching saved profile, installed === true and a detected version; an uninstalled or unknown tool is neither offered nor launchable.
 row("acp-profile", acp, "return sameProfile(cli, catalogProfile(entry)) && status?.installed === true", "return status?.installed === true", leader);
 row("acp-installed", acp, "&& status?.installed === true", "&& status?.installed !== false", leader);
@@ -43,6 +43,6 @@ row("acp-facts-tested", acp, 'tested: entry.leader.qualified === true, leaderLab
 row("settings-connect-unregistered", "public/app/11-settings-render.js", "&& tool.registered !== true;", ";", "pack29-settings-connect-page");
 row("settings-connect-confirm", "public/app/11-settings-render.js", 'payload = { type: "registerCatalogCli", cli, confirm: true };', 'payload = { type: "registerCatalogCli", cli, confirm: false };', "pack29-settings-connect-page");
 row("settings-connected-badge-needs-connect", "public/app/11-settings-render.js", "tool?.signedIn === true && !unsupportedVersion && !needsConnect ?", "tool?.signedIn === true && !unsupportedVersion ?", "pack29-settings-connect-page");
-row("r1-guide-shell", "public/first-run/cli-help.js", "Visit the official setup guide at the address below.", "Open PowerShell and paste the install command.", "pack29-onboarding-install-guide");
-row("r1-settings-shell", "public/app/11-settings-render.js", "Visit the official setup guide, then return here and press Check again.", "Open PowerShell and paste the install command.", "pack29-onboarding-install-page");
+row("r1-guide-shell", "public/first-run/cli-help.js", "Press Install here to set up this tool. Use Cancel if you need to stop.", "Open PowerShell and paste the install command.", "audit-p6-settings");
+row("r1-settings-shell", "public/app/11-settings-render.js", "Use Cancel to stop, then Check again to refresh.", "Open PowerShell and paste the install command.", "audit-p6-settings");
 export const pack29CliLoginUiMutations = rows;

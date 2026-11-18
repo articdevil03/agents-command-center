@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { randomBytes } from "node:crypto";
+import { assertOwnedPath, resolveOwnedRoot } from "../server/owned-path.js";
 
 const LIMIT = 16 * 1024;
 const toolValid = (tool) => typeof tool === "string" && tool.length <= 32 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(tool);
@@ -17,16 +18,31 @@ function recordJson(record) {
 // io is an injectable filesystem boundary; production always uses node:fs.
 export function createCliCredentialStore({ safeStorage, dir, io = fs }) {
   const directory = resolve(dir);
+  let base, root;
+  function checked(path) {
+    // Retry unresolved roots, but never adopt a replacement after a successful pin.
+    if (!root) {
+      try {
+        const nextBase = resolveOwnedRoot(dirname(directory), { io, allowRootLink: true });
+        if (io.existsSync(nextBase.source)) assertOwnedPath(nextBase, nextBase.source);
+        const nextRoot = resolveOwnedRoot(directory, { io });
+        if (io.existsSync(directory)) assertOwnedPath(nextRoot, directory);
+        base = nextBase; root = nextRoot;
+      } catch { throw new Error("Unsafe credential directory."); }
+    }
+    assertOwnedPath(base, directory, { allowMissingLeaf: true });
+    return assertOwnedPath(root, path, { allowMissingLeaf: true });
+  }
   const available = () => { try { return safeStorage.isEncryptionAvailable() === true; } catch { return false; } };
   function checkDirectory(create = false) {
+    checked(directory);
     if (!io.existsSync(directory)) {
       if (!create) return false;
-      const parent = dirname(directory);
-      if (io.realpathSync(parent).toLowerCase() !== parent.toLowerCase()) throw new Error("Unsafe credential directory.");
       io.mkdirSync(directory, { mode: 0o700 });
     }
+    checked(directory);
     const stat = io.lstatSync(directory);
-    if (stat.isSymbolicLink() || !stat.isDirectory() || io.realpathSync(directory).toLowerCase() !== directory.toLowerCase()) throw new Error("Unsafe credential directory.");
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Unsafe credential directory.");
     return true;
   }
   function fileFor(tool) {
@@ -34,6 +50,7 @@ export function createCliCredentialStore({ safeStorage, dir, io = fs }) {
     return join(directory, tool + ".cred");
   }
   function checkFile(file) {
+    checked(file);
     try { const stat = io.lstatSync(file); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Unsafe credential file."); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
   }
@@ -50,32 +67,35 @@ export function createCliCredentialStore({ safeStorage, dir, io = fs }) {
         for (const name of io.readdirSync(directory)) {
           if (!name.startsWith(tool + ".cred.tmp-")) continue;
           const stale = join(directory, name);
-          try { const stat = io.lstatSync(stale); if (stat.isFile() && !stat.isSymbolicLink()) io.unlinkSync(stale); } catch { /* A locked leftover must not block the save. */ }
+          try { const stat = io.lstatSync(stale); if (stat.isFile() && !stat.isSymbolicLink()) io.unlinkSync(checked(stale)); } catch { /* A locked leftover must not block the save. */ }
         }
         temp = file + ".tmp-" + randomBytes(16).toString("hex");
-        descriptor = io.openSync(temp, "wx", 0o600);
+        descriptor = io.openSync(checked(temp), "wx", 0o600);
         io.writeFileSync(descriptor, encrypted);
         io.fsyncSync(descriptor);
         io.closeSync(descriptor); descriptor = null;
+        checked(temp); checkFile(file);
         io.renameSync(temp, file);
         temp = null;
       } catch { throw new Error("Could not save credential safely."); }
       finally {
         if (descriptor !== null) { try { io.closeSync(descriptor); } catch {} }
-        if (temp) { try { io.unlinkSync(temp); } catch {} }
+        if (temp) { try { io.unlinkSync(checked(temp)); } catch {} }
       }
     },
     // Only a missing directory or file means "no key". Every other failure throws so the reply is ok:false.
     async get(tool) {
       try {
         const file = fileFor(tool);
-        if (!available() || !checkDirectory()) return null;
+        if (!checkDirectory()) return null;
         checkFile(file);
-        const stat = io.statSync(file);
+        const stat = io.statSync(checked(file));
+        if (!available()) throw new Error("Credential encryption unavailable.");
         if (stat.size > LIMIT * 4) throw new Error("Invalid credential size.");
-        const json = safeStorage.decryptString(io.readFileSync(file));
+        const json = safeStorage.decryptString(io.readFileSync(checked(file)));
         if (typeof json !== "string" || Buffer.byteLength(json) > LIMIT) throw new Error("Invalid credential size.");
         const record = JSON.parse(json); recordJson(record);
+        checked(file);
         return record;
       } catch (error) {
         if (error?.code === "ENOENT") return null;
@@ -87,7 +107,7 @@ export function createCliCredentialStore({ safeStorage, dir, io = fs }) {
         const file = fileFor(tool);
         if (!checkDirectory()) return;
         checkFile(file);
-        try { io.unlinkSync(file); } catch (error) { if (error.code !== "ENOENT") throw error; }
+        try { io.unlinkSync(checked(file)); } catch (error) { if (error.code !== "ENOENT") throw error; }
       } catch { throw new Error("Could not remove credential safely."); }
     },
   };

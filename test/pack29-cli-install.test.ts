@@ -9,7 +9,7 @@ import { request, cancel, serviceFixture } from "./pack29-cli-install.setup.ts";
 
 test("shutdown preserves disconnected root and waits for every worker result", async () => {
   const text = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
-  const start = text.indexOf("let shutdownWork:"), end = text.indexOf('process.on("SIGINT"', start);
+  const start = text.indexOf("let shutdownWork:"), end = text.indexOf('bindShutdown(requestShutdown);', start);
   assert.ok(start > 0 && end > start, "shutdown implementation found");
   for (const connected of [false, true]) for (const confirmed of [false, true]) {
     const exits: number[] = [], terminated: boolean[] = [];
@@ -153,7 +153,7 @@ test("shutdown closes admission and drains cancellation, orphan uncertainty bloc
 
 test("actual server shutdown waits for installer drain in connected and disconnected branches", async () => {
   const text = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
-  const start = text.indexOf("let shutdownWork:"), end = text.indexOf('process.on("SIGINT"', start);
+  const start = text.indexOf("let shutdownWork:"), end = text.indexOf('bindShutdown(requestShutdown);', start);
   assert.ok(start > 0 && end > start, "production shutdown functions must be found");
   for (const connected of [true, false]) {
     const fx = serviceFixture({ hold: true }), exitCodes: number[] = [];

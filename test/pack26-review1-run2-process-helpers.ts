@@ -91,7 +91,8 @@ export async function shutdownFixture(t: Parameters<typeof ownedTemp>[0], discon
   const calls: any[] = [], deps = fixedDependencies as any, original = deps.spawnSync;
   deps.spawnSync = (...args: any[]) => { calls.push(args); return { status: 0 }; };
   const initialize = 'process.connected = false; process.pid = 123456;\n';
-  const serverSource = startup ? source.replace("let shutdownWork", `${initialize}let shutdownWork`)
+  if (startup && source.split("let pendingShutdown").length !== 2) throw new Error("startup latch must be found exactly once");
+  const serverSource = startup ? source.replace("let pendingShutdown", `${initialize}let pendingShutdown`)
     : source + (disconnected ? `\n${initialize}` : "");
   try { return { server: await loadFixed({ skipHealth: true, serverSource, testRoot }), calls }; }
   finally { if (original === undefined) delete deps.spawnSync; else deps.spawnSync = original; }

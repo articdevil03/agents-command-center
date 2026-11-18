@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { stateFixture, shutdownFixture } from "./pack26-review1-run2-process-helpers.ts";
 import { socketGitFixture } from "./pack26-review1-run2-git-helpers.ts";
 import { startHelper } from "./round2-fixed-deps.ts";
@@ -52,7 +54,8 @@ test("P26R2S seat common retirement seam cancels Git on actual folder-change dis
   const f = await stateFixture(t), pending = f.launch();
   try {
     const id = f.journal().activeExecutionId;
-    f.ws.message({ type: "changeFolder", tabId: f.tabId, folder: f.bin });
+    const nextFolder = join(f.folder, "next"); mkdirSync(nextFolder);
+    f.ws.message({ type: "changeFolder", tabId: f.tabId, folder: nextFolder });
     assert.equal(f.operations.get(id)?.cancelled, true, "common Leader Stop seam must latch cancellation outside the run inventory");
     f.child.stdout.write("true"); f.exit(); await assert.rejects(pending, /cancelled/);
     assert.equal(f.spawns.length, 1);

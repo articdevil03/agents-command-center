@@ -17,13 +17,13 @@ export function archivePath(root: string, tabId: string, taskId?: string, leaf?:
   if (taskId !== undefined) id(taskId);
   if (leaf !== undefined && !["source.json", "task.json", "manifest.json", "complete.json"].includes(leaf)) throw new Error("Invalid archive leaf.");
   const path = join(resolve(root), "tasks", "finished", tabId, ...(taskId ? [taskId] : []), ...(leaf ? [leaf] : []));
-  refuseLinks(path);
+  refuseLinks(path, root);
   return path;
 }
 export function executionArchivePath(root: string, tabId: string, runId: string): string {
   id(runId);
   const path = join(archivePath(root, tabId), "_executions", `${runId}.json`);
-  refuseLinks(path);
+  refuseLinks(path, root);
   return path;
 }
 // Bound the opened handle as well as the directory entry before parsing JSON.
@@ -132,7 +132,7 @@ export function listTaskArchives(root: string, tabId: string, kind: "task" | "ex
   if (!["task", "execution"].includes(kind) || !Number.isInteger(limit) || limit < 1 || limit > 50) throw new Error("Archive page limit must be 1..50.");
   if (cursor !== null) id(cursor);
   const base = kind === "task" ? archivePath(root, tabId) : join(archivePath(root, tabId), "_executions");
-  refuseLinks(base);
+  refuseLinks(base, root);
   const selected: string[] = [];
   let dir;
   try { dir = opendirSync(base); }
@@ -144,7 +144,7 @@ export function listTaskArchives(root: string, tabId: string, kind: "task" | "ex
       // Only an ID-shaped candidate is an archive; anything else in the folder (Thumbs.db, a stray name) is ignored and never touched.
       if (!name || name.startsWith(".") || !isArchiveId(name)) continue;
       // A candidate that is a link still refuses, before its type can make it disappear from the list.
-      refuseLinks(join(base, entry.name));
+      refuseLinks(join(base, entry.name), root);
       if (kind === "task" ? !entry.isDirectory() : !entry.isFile()) continue;
       if (cursor !== null && name <= cursor) continue;
       if (kind === "task" && !optionalArchiveBytes(archivePath(root, tabId, name, "complete.json"), 4096)) continue;

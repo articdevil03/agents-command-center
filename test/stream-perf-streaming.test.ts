@@ -7,7 +7,9 @@ test("streamed reply: a 200-message chat and 600 deltas make a bounded number of
   await withPage(async ({ ev, waitFor, tabA }) => {
     await ev(`__ccDeliver({type:"chatHistory",tabId:${J(tabA)},messages:${J(historyOf(200))},revision:200,savedRevision:200});true`);
     await waitFor(`document.querySelectorAll("#view .msg").length===200`, "200 messages rendered");
-    assert.ok(await ev("window.__renders") >= 1, "controlled full chat history proves the replacement counter is alive");
+    assert.equal(await ev("window.__messageAdds"), 200, "controlled history proves the message insertion counter is alive");
+    assert.ok(await ev("window.__renders") >= 1, "controlled history proves the full-template render counter is alive");
+    await ev(`window.__retainedMessages=[...document.querySelectorAll('#view .msg')];true`);
     // Control: the chat really scrolls, and sits at the bottom to start with.
     assert.ok(await ev(`document.querySelector("#view").scrollHeight-document.querySelector("#view").clientHeight`) > 1000, "the 200-message chat scrolls");
     await ev(`(()=>{const v=document.querySelector("#view");v.scrollTop=v.scrollHeight;return true})()`);
@@ -20,7 +22,7 @@ test("streamed reply: a 200-message chat and 600 deltas make a bounded number of
     await waitFor(`__bubble()===${J(full)}`, "the last frame paints the whole streamed text");
     const duringStream = await ev("window.__renders");
     console.log(`Stream perf: ${parts.length} deltas, ${duringStream} full chat renders during the stream`);
-    assert.ok(duringStream >= 1, "the first delta created the streaming bubble (the render counter is alive)");
+    assert.equal(await ev(`window.__retainedMessages.filter(n=>n.isConnected).length`), 200, "all 200 history nodes survive every delta");
     assert.ok(duringStream <= 3, `at most 3 full chat renders for 600 deltas, got ${duringStream}`);
     assert.equal(await ev("__bubble()"), full, "the streamed text is shown exactly");
     assert.ok(await ev("__gap()") <= 4, "stays stuck to the bottom while streaming");
@@ -110,6 +112,7 @@ test("streamed text is escaped, background tabs and tab switches never leak, the
     });
 
     await t.test("switching tabs mid-stream shows the right draft and the old frame does not paint into the new tab", async () => {
+      await ev(`__ccDeliver({type:'chatDone',tabId:${J(tabA)}});__ccDeliver({type:'chatDone',tabId:${J(tabB)}});true`);
       await history(tabA, base);
       await history(tabB, [{ role: "user", text: "tab B history", at: 1_700_000_000_000, revision: 1 }]);
       await delta(tabA, "AAA ");
@@ -128,6 +131,7 @@ test("streamed text is escaped, background tabs and tab switches never leak, the
       await ev(`document.querySelector('#tabs [data-tab-id=${J(tabA)}]').click();true`);
       await waitFor(`document.querySelector("#view").dataset.tabId===${J(tabA)}`, "back on A");
       await delay(120);
+      assert.equal(await ev("__bubble()"), "AAA more AAA ", "returning to A preserves its entire active draft through history");
       assert.equal(await ev(`document.querySelector("#view").textContent.includes("BBB")`), false, "A shows nothing of B's draft");
     });
 

@@ -6,6 +6,7 @@ import { serverProcess, appKey, serverStopping, startServer, stopServer } from "
 import { MIN_WIDTH, MIN_HEIGHT, readWindowBounds, writeWindowBounds } from "./window-state.js";
 import { classifyNavigation, isAllowedObsidianUrl, wireNavigationPolicy } from "./navigation.js";
 import { showClosingNoticeUntil } from "./closing-notice.js";
+import { shellPage, errorPage, showingFailure } from "./shell-page.js";
 
 const SMOKE_STOP_TIMEOUT_MS = 30_000;
 const BG_COLOR = "#0a0a0c";
@@ -22,32 +23,6 @@ if (smokeReadyFile) {
 
 const boundsPath = join(app.getPath("userData"), "window-bounds.json");
 let mainWindow = null; // the only window whose page may call the IPC handlers below
-
-// The window has no native title bar or buttons: the loading and error pages are dragged by their body and end in the same minimize,
-// maximize/restore and close buttons as the app's top bar (its dark look), wired to the same cc:window-* handlers below.
-export function shellPage(content) {
-  return `data:text/html,${encodeURIComponent(`<!doctype html><meta charset="utf-8"><style>
-html{height:100%}body{margin:0;box-sizing:border-box;min-height:100%;padding:2rem;background:${BG_COLOR};color:#f0f0f0;font-family:system-ui,sans-serif;-webkit-app-region:drag}
-.winbtns{position:fixed;top:11px;right:14px;display:flex;gap:6px;-webkit-app-region:no-drag}
-.winbtns button{width:36px;height:36px;padding:0;border:0;border-radius:10px;display:grid;place-items:center;background:#19191c;box-shadow:0 1px 2px 0 #00000066,0 0 0 1px #ffffff12;color:#b4b4ba;cursor:pointer}
-.winbtns button:hover{background:#222226;color:#ededef}#winClose:hover{background:#e5484d;box-shadow:none;color:#fff}
-.winbtns button:focus-visible{outline:2px solid #6aa8ff;outline-offset:2px}
-#winMax[data-maximized="true"] .wmax,#winMax:not([data-maximized="true"]) .wrestore{display:none}
-</style><body>${content}<div class="winbtns">
-<button id="winMin" type="button" aria-label="Minimize" title="Minimize" onclick="cc.minimizeWindow()"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="M4.5 9h9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-<button id="winMax" type="button" aria-label="Maximize" title="Maximize" data-maximized="false" onclick="cc.toggleMaximizeWindow()"><svg class="wmax" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="4.5" y="4.5" width="9" height="9" rx="2" stroke="currentColor" stroke-width="1.5"/></svg><svg class="wrestore" width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><rect x="3.75" y="6.25" width="8" height="8" rx="1.8" stroke="currentColor" stroke-width="1.5"/><path d="M6.25 3.75h6.2a1.8 1.8 0 0 1 1.8 1.8v6.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-<button id="winClose" type="button" aria-label="Close" title="Close" onclick="cc.closeWindow()"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" aria-hidden="true"><path d="m5 5 8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
-</div><script>
-const max = document.getElementById("winMax");
-const show = (maximized) => { const label = maximized === true ? "Restore" : "Maximize"; max.dataset.maximized = String(maximized === true); max.setAttribute("aria-label", label); max.title = label; };
-if (window.cc) { cc.onWindowMaximized(show); cc.isWindowMaximized().then(show); }
-</script></body>`)}`;
-}
-
-function errorPage(reason) {
-  const escaped = reason.replace(/&/g, "&amp;").replace(/</g, "&lt;");
-  return shellPage(`<h2>Command Center server unavailable</h2><pre style="white-space:pre-wrap">${escaped}</pre>`);
-}
 
 // loadURL rejects when a newer load supersedes it (ERR_ABORTED), which is expected; any other failed load is logged, never an unhandled rejection.
 // onFail (the app page only): a page that cannot load must not leave the loading page up for ever.
@@ -105,7 +80,7 @@ function createWindow() {
     if (win.isDestroyed() || details?.reason === "clean-exit") return;
     const now = Date.now();
     crashTimes = [...crashTimes.filter((at) => now - at < 60_000), now];
-    if (appOrigin === null || crashTimes.length > 2) loadPage(win, errorPage(`The window's page stopped (${details?.reason ?? "unknown reason"}). Close and reopen Command Center.`));
+    if (appOrigin === null || crashTimes.length > 2) loadPage(win, errorPage(`The window's page stopped (${details?.reason ?? "unknown reason"}). Close and reopen Command Center.`, true));
     else { reloadingAfterCrash = true; win.webContents.reload(); }
   });
   // A reload gives no promise to catch: a failed main-frame load after a crash shows the error page, once. ERR_ABORTED (-3) is a newer page
@@ -114,7 +89,7 @@ function createWindow() {
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, _url, isMainFrame) => {
     if (!reloadingAfterCrash || isMainFrame === false || errorCode === -3 || win.isDestroyed()) return;
     reloadingAfterCrash = false;
-    loadPage(win, errorPage(`The window's page could not be reloaded after it stopped (${errorDescription ?? errorCode}). Close and reopen Command Center.`));
+    loadPage(win, errorPage(`The window's page could not be reloaded after it stopped (${errorDescription ?? errorCode}). Close and reopen Command Center.`, true));
   });
   win.webContents.on("unresponsive", () => {
     if (hangAsked || win.isDestroyed()) return;
@@ -260,7 +235,7 @@ if (!gotLock) {
   // A launch that arrives while this instance is still shutting down loses the lock and quits, so this instance starts the app again once it is gone.
   let relaunchAfterQuit = false;
   app.on("second-instance", () => {
-    if (serverStopping) { relaunchAfterQuit = true; return; }
+    if (serverStopping && (quitPending || !showingFailure)) { relaunchAfterQuit = true; return; }
     const win = BrowserWindow.getAllWindows()[0];
     if (!win) return;
     if (win.isMinimized()) win.restore();
@@ -279,7 +254,7 @@ if (!gotLock) {
 
     const result = await startServer((reason) => {
       if (smokeReadyFile) app.quit();
-      else if (!win.isDestroyed()) loadPage(win, errorPage(reason));
+      else if (!win.isDestroyed()) loadPage(win, errorPage(reason, true));
     });
     if (!smokeReadyFile) {
       if (win.isDestroyed()) return;
@@ -318,7 +293,7 @@ if (!gotLock) {
     const win = BrowserWindow.getAllWindows()[0];
     if (win && closeNeedsAsking(win)) { askBeforeClose(win); return; }
     quitPending = true;
-    const stopped = stopServer();
+    const stopped = stopServer().then((confirmed) => confirmed || stopServer());
     if (!sessionEnding) showClosingNoticeUntil(stopped);
     stopped.then(() => {
       quitReady = true;

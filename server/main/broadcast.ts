@@ -94,7 +94,7 @@ export function stateMessage(): Record<string, unknown> {
         ...fixedCrewState(tab),
         ...(tab.fixedCrew ? { fixedTask: fixedTasks?.summary(tab.id) ?? null } : {}),
         crew,
-        permissionMode: effectiveMode(tab.id),
+        permissionMode: leaders.get(tab.id)?.getPermissionMode?.() === "plan" ? "plan" : effectiveMode(tab.id),
         acpLeader: hasAcpLeader(tab.id) ? { name: acpLeaderOf(tab.id)?.name ?? null, model: leaderModels.get(tab.id) ?? null } : null,
         pendingApprovals: [...pendingApprovals.values()].filter((item) => item.tabId === tab.id).map(({ approvalId, tool, summary, createdAt, origin }) => ({ approvalId, tool, summary, createdAt, askedBy: askerOf(tab.id, origin) })),
         permissionAction: settingsService.state.permissionActions[tab.id],

@@ -170,7 +170,7 @@ test("Round2 fixture observations catch removed tree, status, rejection and curr
   }
   const cases = [
     { from: 'if (fixed) fixedTreeEnd(tabId, startedRun.runId, evidence === "confirmed");', to: "", observe: observeClose, message: /tree-end callback must update journal/ },
-    { from: 'if (fixed && status !== "working") fixedRunStatus(tabId, startedRun.runId, status);', to: "", observe: observeClose, message: /status callback must update journal/ },
+    { from: 'if (fixed) fixedRunStatus(tabId, startedRun.runId, status);', to: "", observe: observeClose, message: /status callback must update journal/ },
     { from: 'rejectFixedLaunch(actor.tabId, execution.id); throw new Error(result.error);', to: 'throw new Error(result.error);', observe: observeRejection, message: /rejection callback must release reservation/ },
     { from: 'leaderInstances.get(actor.tabId) === actor.instance', to: 'true', observe: observeActor, message: /stale current actor must be rejected before runner/ },
   ];

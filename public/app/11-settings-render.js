@@ -61,6 +61,7 @@
   }
   let settingsScrollLock = 0;
   const openSettingsForms = new Set();
+  const openSettingsHelp = new Set();
   function trackSettingsScroll() {
     const body = $("setBody"); const sections = [...body.querySelectorAll(".settings-section")];
     if (!sections.length || Date.now() - settingsScrollLock < 400) return;
@@ -89,12 +90,14 @@
   }
   // An installed catalog tool that speaks ACP but has not been saved as a connection yet: it is not in the model picker until Connect (same rule as the wizard's connect, public/first-run/install.js).
   const settingsCanConnect = (cli, tool) => catalogEntry(cli)?.installable === true && catalogEntry(cli).leader?.kind === "acp" && tool?.installed === true && tool.registered !== true;
+  // One install at a time: true while any tool's install is running or stuck. The Install buttons and their click handler read this one scan.
+  const installBusy = () => Object.values(serverState?.settings?.catalogTools ?? {}).some((t) => t?.action?.kind === "install" && (t.action.status === "running" || t.action.reason === "cleanupUnconfirmed"));
   function settingsToolRow(cli, tool) {
     const key = `install-${cli}`;
     const version = tool?.version ? ` · ${tool.version}` : "";
     // An installation the server is running (it may have been started in setup, or before a reload) shows its step and holds Install.
     const progress = serverState?.settings?.catalogTools?.[cli]?.action, installing = progress?.kind === "install" && progress.status === "running";
-    const stuckInstall = cli === "copilot" && progress?.kind === "install" && progress.reason === "cleanupUnconfirmed";
+    const stuckInstall = progress?.kind === "install" && progress.reason === "cleanupUnconfirmed";
     const unsupportedVersion = cli === "opencode" && tool?.installed === true && tool.supportedVersion !== true;
     const signing = ["running", "orphan", "stuck"].includes(cliLoginUi?.viewOf(cli).state), held = Boolean(cliLoginUi?.busy());
     const needsConnect = settingsCanConnect(cli, tool), connectKey = `connect-${cli}`;
@@ -102,9 +105,9 @@
     const subtitle = removing ? "Removing..." : installing ? window.CC_FIRST_RUN_CATALOG?.phaseText(progress.phase, toolName(cli), progress.message) ?? "Installing…" : signing ? "Signing in…" : unsupportedVersion ? (tool.supportedVersion === false ? "OpenCode 1 is needed" : "The OpenCode version could not be read") : cli === "opencode" && tool?.credentialSource === "environment" ? "A key is set outside Command Center. Its connection is not checked." : tool?.installed === false ? "Not installed." : needsConnect ? `Installed · Not connected yet${version}` : tool?.installed === true
       ? `${tool.keySaved === true && tool.signedIn !== true ? "Installed · Key saved" : tool.signedIn === true ? "Signed in" : tool.signedIn === false ? "Installed · Not signed in" : cli === "gemini" ? "Installed · Gemini checks its own sign-in" : "Installed · Sign-in status unknown"}${version}`
       : `Install status unknown${version}`;
-    const install = (tool?.installed === false || unsupportedVersion) && !(cli === "copilot" && (installing || stuckInstall)) ? `<button type="button" class="btn primary sm" data-setting-action="install-cli" data-cli="${cli}" data-focus-key="${key}" ${settingsActionRunning(key) || installing || held ? "disabled" : ""}>${unsupportedVersion ? "Install OpenCode 1" : cli === "copilot" && progress?.status === "failed" ? "Try again" : "Install"}</button>` : "";
-    const cancelInstall = cli === "copilot" && (installing || stuckInstall) ? `<button type="button" class="btn sm" data-setting-action="cancel-cli-install" data-cli="${cli}" data-focus-key="cancel-install-${cli}" ${settingsActionRunning(`cancel-install-${cli}`) ? "disabled" : ""}>${stuckInstall ? "Stop again" : "Cancel"}</button>` : "";
-    const installNote = cli === "copilot" && progress?.kind === "install" && progress.status === "failed" ? `<small class="wrap" data-tool-install-note>${esc(window.CC_FIRST_RUN_CATALOG.reasonText(progress.reason, toolName(cli), cli))}</small>` : "";
+    const install = (tool?.installed === false || unsupportedVersion || stuckInstall) && !(cli === "copilot" && (installing || stuckInstall)) ? `<button type="button" class="btn primary sm" data-setting-action="install-cli" data-cli="${cli}" data-focus-key="${key}" ${settingsActionRunning(key) || installing || stuckInstall || held || installBusy() ? "disabled" : ""}>${progress?.kind === "install" && progress.status === "failed" ? "Try again" : unsupportedVersion ? "Install OpenCode 1" : "Install"}</button>` : "";
+    const cancelInstall = installing || stuckInstall ? `<button type="button" class="btn sm" data-setting-action="cancel-cli-install" data-cli="${cli}" data-focus-key="cancel-install-${cli}" ${settingsActionRunning(`cancel-install-${cli}`) ? "disabled" : ""}>${stuckInstall ? "Stop again" : "Cancel"}</button>` : "";
+    const installNote = progress?.kind === "install" && ((cli === "copilot" && progress.status === "failed") || stuckInstall) ? `<small class="wrap" data-tool-install-note>${esc(window.CC_FIRST_RUN_CATALOG.reasonText(progress.reason, toolName(cli), cli))}</small>` : "";
     const connect = needsConnect ? `<button type="button" class="btn primary sm" data-setting-action="connect-cli" data-cli="${esc(cli)}" data-focus-key="${connectKey}" ${settingsActionRunning(connectKey) ? "disabled" : ""}>Connect</button>` : "";
     const retryRemove = progress?.kind === "remove" && progress.status === "failed" && progress.message === "Some files could not be removed. Close programs that use them and try again.";
     const removeKey = `remove-install-${cli}`;
@@ -117,8 +120,11 @@
     const note = unsupported ? `<small class="wrap" data-tool-signin-note>${esc(unsupported)}</small>` : "";
     const slot = tool?.installed === true ? `<div class="cli-login-slot" data-cli-login-slot="${esc(cli)}"></div><div data-cli-key-slot="${esc(cli)}"></div>` : "";
     const connected = tool?.signedIn === true && !unsupportedVersion && !needsConnect ? `<span class="tool-connected" data-tool-status="connected"><i></i>${cli === "opencode" ? "Ready" : "Connected"}</span>` : "";
-    const guide = cli !== "copilot" && tool?.installed === false ? window.CC_FIRST_RUN_HELP?.tools?.[cli]?.page ?? catalogEntry(cli)?.sources?.[0] ?? "" : "";
-    const copy = guide ? `<details class="settings-install-by-hand"><summary>Install by hand</summary><p>Visit the official setup guide, then return here and press Check again.</p><div class="cmd"><code>${esc(guide)}</code><button type="button" data-copy-address="${esc(guide)}">Copy address</button></div></details>` : "";
+    const help = window.CC_FIRST_RUN_HELP, info = help?.tools[cli];
+    const helpOpen = openSettingsHelp.has(cli), helpId = `settingsHelp-${cli}`;
+    const steps = info?.steps ?? help?.steps ?? [];
+    const guide = tool?.installed === false && help ? `<button type="button" class="btn sm" data-settings-help="${esc(cli)}" data-focus-key="settings-help-${esc(cli)}" aria-expanded="${helpOpen}" aria-controls="${esc(helpId)}">How to set up</button><div id="${esc(helpId)}" class="settings-help"${helpOpen ? "" : " hidden"}>${info?.about ? `<p>${esc(info.about)}</p>` : ""}<ol>${steps.map((step) => `<li>${esc(step)}</li>`).join("")}</ol><p>${esc(help.stillMissing)}</p></div>` : "";
+    const copy = tool?.installed === false ? `<small class="wrap">${cli === "copilot" ? "Choose Install here. If it fails, choose Try again. Use Cancel to stop, then Check again to refresh." : "Choose Install. If it fails, choose Try again, then Check again."}</small>${guide}` : "";
     return `<div class="crow tool-row" data-tool-row data-cli="${esc(cli)}"><span class="logo">${logo(cli, 18, 0)}</span><div class="d"><b>${esc(toolName(cli))}</b><small data-tool-subtitle title="${esc(subtitle)}">${esc(subtitle)}</small>${note}${installNote}${removeNote}${copy}</div><div class="tool-row-action" data-tool-row-action>${connected}${install}${cancelInstall}${remove}${connect}${login}${actionStatusMarkup(key)}${actionStatusMarkup(connectKey)}${actionStatusMarkup(loginKey)}${actionStatusMarkup(removeKey)}</div>${slot}</div>`;
   }
   function skillBlock(cli, inventory = {}) {
@@ -136,11 +142,11 @@
     const canRemoveMcp = cli === "claude" || cli === "codex";
     const mcpRows = mcpItems.map((server) => {
       const key = `mcp-remove-${cli}-${server.name}`;
-      return `<div class="sitem"><span>${esc(server.name)}</span>${canRemoveMcp ? `<span class="skill-row-actions"><button type="button" class="btn sm" data-setting-action="mcp-remove" data-cli="${cli}" data-name="${esc(server.name)}" data-focus-key="${esc(key)}" ${settingsActionRunning(key) ? "disabled" : ""}>Remove</button>${actionStatusMarkup(key)}</span>` : '<small>Remove it with OpenCode itself</small>'}</div>`;
+      return `<div class="sitem"><span>${esc(server.name)}</span>${canRemoveMcp ? `<span class="skill-row-actions"><button type="button" class="btn sm" data-setting-action="mcp-remove" data-cli="${cli}" data-name="${esc(server.name)}" data-focus-key="${esc(key)}" ${settingsActionRunning(key) ? "disabled" : ""}>Remove</button>${actionStatusMarkup(key)}</span>` : '<button type="button" class="btn sm" disabled>Remove</button>'}</div>`;
     });
     const mcpFormKey = `mcp-${cli}`;
-    const mcpForm = `<form class="settings-form" data-mcp-form="${cli}" ${openSettingsForms.has(mcpFormKey) ? "" : "hidden"}><input class="settings-input" name="name" maxlength="64" data-focus-key="mcp-name-${cli}" placeholder="Name, like github" aria-label="MCP name" required><input class="settings-input" name="commandOrUrl" data-focus-key="mcp-command-${cli}" placeholder="https://example.com/mcp or npx -y server" aria-label="HTTPS URL or command" required><div class="settings-actions"><button class="btn sm primary" type="submit" data-focus-key="mcp-submit-${cli}" ${settingsActionRunning(`mcp-add-${cli}`) ? "disabled" : ""}>Add MCP</button>${actionStatusMarkup(`mcp-add-${cli}`)}</div></form>`;
-    const mcp = `<div class="sblock"><div class="sh"><span>MCP servers</span><button type="button" class="btn sm" data-settings-add="${mcpFormKey}" data-focus-key="${mcpFormKey}-toggle" aria-expanded="${String(openSettingsForms.has(mcpFormKey))}">+ Add</button></div>${inventory.inventoryError ? `<p class="settings-help">${esc(inventory.inventoryError)}</p>` : ""}${mcpRows.join("") || '<span class="sempty">None installed</span>'}${mcpForm}</div>`;
+    const mcpForm = !canRemoveMcp ? "" : `<form class="settings-form" data-mcp-form="${cli}" ${openSettingsForms.has(mcpFormKey) ? "" : "hidden"}><input class="settings-input" name="name" maxlength="64" data-focus-key="mcp-name-${cli}" placeholder="Name, like github" aria-label="MCP name" required><input class="settings-input" name="commandOrUrl" data-focus-key="mcp-command-${cli}" placeholder="https://example.com/mcp or npx -y server" aria-label="HTTPS URL or command" required><div class="settings-actions"><button class="btn sm primary" type="submit" data-focus-key="mcp-submit-${cli}" ${settingsActionRunning(`mcp-add-${cli}`) ? "disabled" : ""}>Add MCP</button>${actionStatusMarkup(`mcp-add-${cli}`)}</div></form>`;
+    const mcp = `<div class="sblock"><div class="sh"><span>MCP servers</span>${canRemoveMcp ? `<button type="button" class="btn sm" data-settings-add="${mcpFormKey}" data-focus-key="${mcpFormKey}-toggle" aria-expanded="${String(openSettingsForms.has(mcpFormKey))}">+ Add</button>` : '<button type="button" class="btn sm" disabled>+ Add</button>'}</div>${!canRemoveMcp ? '<p class="settings-help">OpenCode MCP changes are not available yet. You can still use the tools already listed here.</p>' : ""}${inventory.inventoryError ? `<p class="settings-help">${esc(inventory.inventoryError)}</p>` : ""}${mcpRows.join("") || '<span class="sempty">None installed</span>'}${mcpForm}</div>`;
     const skillsRows = (inventory.skills ?? []).map((name) => `<div class="sitem"><span title="${esc(name)}">${esc(name)}</span></div>`).join("") || '<span class="sempty">None installed</span>';
     const skills = `<div class="sblock"><div class="sh"><span>Skills</span></div>${skillsRows}</div>`;
     const plugins = cli === "claude" ? `<div class="sblock"><div class="sh"><span>Plugins</span><button type="button" class="btn sm" data-settings-add="plugins-claude" data-focus-key="plugins-claude-toggle" aria-expanded="${String(openSettingsForms.has("plugins-claude"))}">+ Add</button></div>${pluginItems.map((name) => {
@@ -148,17 +154,6 @@
       return `<div class="sitem"><span title="${esc(name)}">${esc(name)}</span><span class="skill-row-actions"><button type="button" class="btn sm" data-setting-action="plugin-remove" data-name="${esc(name)}" data-focus-key="${esc(key)}" ${settingsActionRunning(key) ? "disabled" : ""}>Remove</button>${actionStatusMarkup(key)}</span></div>`;
     }).join("") || '<span class="sempty">None installed</span>'}<form class="settings-form" data-plugin-form ${openSettingsForms.has("plugins-claude") ? "" : "hidden"}><input class="settings-input" name="name" maxlength="128" data-focus-key="plugin-name" placeholder="Claude Code plugin identifier" aria-label="Plugin name" required><div class="settings-actions"><button class="btn sm primary" type="submit" data-focus-key="plugin-submit" ${settingsActionRunning("plugin-add") ? "disabled" : ""}>Install plugin</button>${actionStatusMarkup("plugin-add")}</div></form></div>` : "";
     return `<section class="card skill-card" data-skill-cli="${cli}">${header}${instructionsBlock}${skills}${mcp}${plugins}</section>`;
-  }
-  function mcpInputValid(name, commandOrUrl) {
-    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) return "MCP name must use 1-64 letters, numbers, underscores, or hyphens.";
-    if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(commandOrUrl) && !/^https:\/\//i.test(commandOrUrl)) return "MCP URLs must be credential-free HTTPS URLs.";
-    if (/^https:\/\//i.test(commandOrUrl)) {
-      try { const url = new URL(commandOrUrl); if (url.protocol === "https:" && !url.username && !url.password) return ""; }
-      catch { /* the CLI will not receive a malformed URL */ }
-      return "MCP URLs must be credential-free HTTPS URLs.";
-    }
-    if (!commandOrUrl.trim() || /[;&|<>`$(){}\[\]*?~%!^\r\n]/.test(commandOrUrl)) return "MCP commands must be non-empty and contain no shell metacharacters.";
-    return "";
   }
   function updateVaultControls() {
     const body = $("setBody"), project = currentProject();
@@ -282,13 +277,10 @@
       if (openSettingsForms.has(key)) openSettingsForms.delete(key); else openSettingsForms.add(key);
       renderSettings();
     }));
-    body.querySelectorAll("[data-copy-address]").forEach((button) => button.addEventListener("click", async () => {
-      const address = button.dataset.copyAddress;
-      try { await navigator.clipboard.writeText(address); showToast("Address copied"); }
-      catch {
-        const input = document.createElement("textarea"); input.value = address; input.setAttribute("readonly", ""); input.style.position = "fixed"; input.style.opacity = "0"; document.body.append(input); input.select();
-        const copied = document.execCommand("copy"); input.remove(); showToast(copied ? "Address copied" : "Could not copy. Select it and copy by hand");
-      }
+    body.querySelectorAll("[data-settings-help]").forEach((button) => button.addEventListener("click", () => {
+      const cli = button.dataset.settingsHelp;
+      if (openSettingsHelp.has(cli)) openSettingsHelp.delete(cli); else openSettingsHelp.add(cli);
+      renderSettings();
     }));
     body.querySelectorAll("[data-setting]").forEach((button) => button.addEventListener("click", () => {
       const key = button.dataset.setting; const next = button.getAttribute("aria-checked") !== "true";
@@ -308,13 +300,13 @@
       let payload = null; let key = ""; let confirmation = null;
       if (action === "cancel-cli-install") {
         const progress = serverState?.settings?.catalogTools?.[cli]?.action;
-        if (cli !== "copilot" || progress?.kind !== "install" || !(progress.status === "running" || progress.reason === "cleanupUnconfirmed") || settingsActionRunning(`cancel-install-${cli}`)) return;
+        if (progress?.kind !== "install" || !(progress.status === "running" || progress.reason === "cleanupUnconfirmed") || settingsActionRunning(`cancel-install-${cli}`)) return;
         sendSettingsAction(`cancel-install-${cli}`, { type: "cancelCliInstall", cli, installRequestId: progress.requestId });
         renderSettings(); return;
       }
       if (action === "install-cli") {
         if (cli === "opencode" || cli === "copilot") {
-          const tool = settingsToolFacts(cli), active = Object.values(serverState?.settings?.catalogTools ?? {}).some((t) => t?.action?.kind === "install" && (t.action.status === "running" || t.action.reason === "cleanupUnconfirmed"));
+          const tool = settingsToolFacts(cli), active = installBusy();
           if (cliLoginUi?.busy() || active || settingsActionRunning(`install-${cli}`) || (tool?.installed !== false && !(tool?.installed === true && tool.supportedVersion !== true))) return;
         }
         key = `install-${cli}`; payload = { type: "installCli", cli, confirm: true }; confirmation = { title: `Install ${toolName(cli)}?`, body: `${installConsent(cli)} Signing in comes after.`, ok: "Install" };
@@ -347,7 +339,7 @@
     }));
     body.querySelectorAll("[data-mcp-form]").forEach((form) => form.addEventListener("submit", (event) => {
       event.preventDefault(); const cli = form.dataset.mcpForm; const name = form.elements.name.value.trim(); const commandOrUrl = form.elements.commandOrUrl.value.trim();
-      const error = mcpInputValid(name, commandOrUrl);
+      const error = window.CC_FIRST_RUN_CATALOG.mcpInputValid(name, commandOrUrl);
       if (error) { showToast(error); return; }
       const key = `mcp-add-${cli}`;
       // The Settings text promises "Add and Remove ... ask first": an MCP tool is a program that runs on this PC.

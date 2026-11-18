@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs";
+import { lstatSync } from "node:fs";
+import { preserveBadFile, readFileWithRetry } from "./safe-file.ts";
 import { isSafeSeatId } from "./process.ts";
 import { launchSafetyPath, clientPrefsPath, publishConfigFile, liveWritePath, isObject, LEGACY_LEADER } from "./config-files.ts";
 
@@ -17,7 +18,7 @@ export type LaunchSafety = {
 };
 export function readLaunchSafety(path: string = launchSafetyPath): LaunchSafety {
   let raw: any;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); }
+  try { raw = JSON.parse(readFileWithRetry(path).toString("utf8")); }
   catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { blocked: [], timestamps: [], notices: [], nextNoticeId: 1, released: [], uncertain: [], live: [] };
     throw new Error(`launch safety file is unreadable: ${path} (${(err as Error).message}); fix or delete it`, { cause: err });
@@ -73,11 +74,34 @@ function isValidPreviewUrlValue(value: unknown): value is string {
   try { const parsed = new URL(value.trim()); return parsed.protocol === "http:" || parsed.protocol === "https:"; }
   catch { return false; }
 }
-export function readClientPrefs(path: string = clientPrefsPath): ClientPrefs {
+const blockedPrefs = new Set<string>();
+// A successful later read cannot repair defaults already held by the caller.
+const unreadablePrefs = new Set<string>();
+function preservePreferences(path: string, unreadable = false): void {
+  const preserved = preserveBadFile(path).ok;
+  if (unreadable || !preserved) blockedPrefs.add(path); else blockedPrefs.delete(path);
+  console.error(blockedPrefs.has(path)
+    ? "Your preferences could not be read or safely preserved. Saving preferences is blocked; the original has been left untouched. Try restarting the app."
+    : "Some saved preferences were damaged. A copy of the original was kept before using defaults.");
+}
+// Only the start-up read may set the permanent block (the values held in memory are then defaults, not the saved ones). A failed re-read at write time refuses just that write.
+export function readClientPrefs(path: string = clientPrefsPath, atWrite = false): ClientPrefs {
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch { return { ...DEFAULT_CLIENT_PREFS }; }
-  if (!isObject(raw)) return { ...DEFAULT_CLIENT_PREFS };
+  let contents: Buffer;
+  const defaults = () => ({ ...DEFAULT_CLIENT_PREFS, dismissedRuns: [] });
+  try { contents = readFileWithRetry(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") blockedPrefs.delete(path);
+    else { if (!atWrite) unreadablePrefs.add(path); preservePreferences(path, true); }
+    return defaults();
+  }
+  try { raw = JSON.parse(contents.toString("utf8")); }
+  catch { preservePreferences(path); return defaults(); }
+  if (!isObject(raw)) { preservePreferences(path); return defaults(); }
   if (raw.avatar === `${LEGACY_LEADER}.svg`) raw.avatar = "atlas.svg"; // the leader's earlier preset name
+  const fields = raw;
+  const malformed = Object.keys(DEFAULT_CLIENT_PREFS).some((key) => Object.hasOwn(fields, key) && !applyClientPrefUpdate(DEFAULT_CLIENT_PREFS, key, fields[key]).ok);
+  if (malformed) preservePreferences(path); else blockedPrefs.delete(path);
   return {
     sidebarCollapsed: typeof raw.sidebarCollapsed === "boolean" ? raw.sidebarCollapsed : DEFAULT_CLIENT_PREFS.sidebarCollapsed,
     notificationsEnabled: typeof raw.notificationsEnabled === "boolean" ? raw.notificationsEnabled : DEFAULT_CLIENT_PREFS.notificationsEnabled,
@@ -95,7 +119,17 @@ export function readClientPrefs(path: string = clientPrefsPath): ClientPrefs {
   };
 }
 export function writeClientPrefs(prefs: ClientPrefs, path?: string, onlyIfMissing = false): boolean {
-  return publishConfigFile(JSON.stringify(prefs, null, 2) + "\n", liveWritePath(path, clientPrefsPath), !onlyIfMissing);
+  const destination = liveWritePath(path, clientPrefsPath);
+  // Retain the existing diagnostic contract for a folder occupying the file's location.
+  let isDirectory = false;
+  try { isDirectory = lstatSync(destination).isDirectory(); } catch { /* the reader handles missing and unreadable files */ }
+  if (isDirectory) throw new Error("config write: could not write your preferences because a folder is in the way.");
+  if (unreadablePrefs.has(destination)) throw new Error("Your preferences cannot be saved until the app restarts and reads your previous choices.");
+  // Recheck at the write boundary too: damage or locks may have appeared since startup.
+  readClientPrefs(destination, true);
+  if (blockedPrefs.has(destination)) throw new Error("Your preferences cannot be saved because the original file could not be read or safely preserved. Try restarting the app.");
+  try { return publishConfigFile(JSON.stringify(prefs, null, 2) + "\n", destination, !onlyIfMissing); }
+  catch { throw new Error("Your preferences could not be saved. Your previous choices have been kept."); }
 }
 export function applyClientPrefUpdate(prefs: ClientPrefs, key: unknown, value: unknown): { ok: true; prefs: ClientPrefs } | { ok: false; error: string } {
   if (key === "sidebarCollapsed" || key === "rightPanelCollapsed" || key === "notificationsEnabled" || key === "bellEnabled" || key === "crewRailOpen" || key === "detailsOpen") {

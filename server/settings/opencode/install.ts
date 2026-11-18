@@ -23,10 +23,10 @@ export async function installManagedRelease(run: RunCli, env: NodeJS.ProcessEnv,
     if (undo) { await undo(); undo = undefined; }
     if (candidate) await removeCandidate(candidate.dir);
   };
-  const failure = async (reason: "cancelled" | "timeout" | "installFailed" | "cleanupUnconfirmed"): Promise<InstallTransaction> => {
+  const failure = async (reason: "cancelled" | "timeout" | "installFailed" | "cleanupUnconfirmed" | "rateLimited"): Promise<InstallTransaction> => {
     let cleaned = !processResult || processResult.cleanupConfirmed === true;
     if (cleaned) try { await rollback(); } catch { cleaned = false; }
-    return { result: { code: reason === "timeout" ? 124 : -1, stdout: "", stderr: "", cancelled: abort.aborted,
+    return { failureReason: reason === "rateLimited" ? reason : undefined, result: { code: reason === "timeout" ? 124 : -1, stdout: "", stderr: "", cancelled: abort.aborted,
       cleanupConfirmed: cleaned, retryCleanup: async () => {
         if (processResult && processResult.cleanupConfirmed !== true && !await processResult.retryCleanup?.()) return false;
         try { await rollback(); return true; } catch { return false; }
@@ -108,8 +108,9 @@ export async function installManagedRelease(run: RunCli, env: NodeJS.ProcessEnv,
       undo = await publishCandidate(candidate!.root, executable, version);
       candidatesInProgress.delete(candidate!.dir);
     } };
-  } catch {
-    return failure(abort.aborted ? "cancelled" : signal.aborted || processResult?.code === 124 ? "timeout" : "installFailed");
+  } catch (error) {
+    return failure(abort.aborted ? "cancelled" : signal.aborted || processResult?.code === 124 ? "timeout" :
+      error instanceof ReleaseFailure && error.rateLimited ? "rateLimited" : "installFailed");
   }
 }
 

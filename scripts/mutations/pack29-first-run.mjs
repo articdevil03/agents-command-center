@@ -138,10 +138,5 @@ export const pack29FirstRunMutations = [
     "&& !workspaceHasRealProject(workspace)",
     ""
   ],
-  [
-    "p29-first-run-logs-link",
-    "server/fixed-crew/recovery.ts",
-    "  noLinks(logs);",
-    "  // link guard removed"
-  ]
+  ["p29-first-run-logs-link","server/fixed-crew/recovery.ts","  noLinks(logs, root);","  // link guard removed"],
 ];

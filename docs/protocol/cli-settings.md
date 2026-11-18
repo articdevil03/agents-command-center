@@ -1,12 +1,21 @@
 # CLI settings and catalog
 
+Settings remembers whether each tool's in-app help is open across updates, independently per tool; closed help stays closed. Key choice fields show Choose... on opening or reset, require an explicit selection when required, and clear secret inputs on reset.
+
 The permission mode cannot change while an OpenCode or Codex turn is running: "Finish or stop <name>'s current turn first, then change the mode." OpenCode reads its permission rules when a turn starts, so a change must wait until that turn ends. In Bypass, the leader also auto-answers OpenCode permission requests.
 
 Canonical install progress survives page refresh/reconnect in `state.settings.catalogTools[id].action`:
-`{requestId, kind:"install", status:"running"|"done"|"failed", phase:"checking"|"installing"|"verifying"|"cancelling"|null, reason:null|"needsNode"|"needsGit"|"needsWinget"|"needsPowerShell"|"downloadFailed"|"blockedByWindows"|"notFoundAfterInstall"|"cancelled"|"cleanupUnconfirmed"|"timeout"|"installFailed", message}`.
+`{requestId, kind:"install", status:"running"|"done"|"failed", phase:"checking"|"installing"|"verifying"|"cancelling"|null, reason:null|"needsNode"|"needsGit"|"needsWinget"|"needsPowerShell"|"downloadFailed"|"blockedByWindows"|"notFoundAfterInstall"|"cancelled"|"cleanupUnconfirmed"|"timeout"|"installFailed"|"rateLimited", message}`.
 Messages are static server strings. `installed`, `version` and `signedIn` use catalog detection profiles (unknown is null, Copilot uses `copilot version`).
 Raw output, credentials and environment never enter state or logs. Each output stream retains at most 64 KiB while still draining.
 `cleanupUnconfirmed` retains the lock and `globalWork` close warning; another stop attempt retries owned cleanup.
+Release-list rate limits use reason `rateLimited` and message `GitHub is limiting requests right now. Wait a few minutes, then choose Try again.` HTTP 429, exhausted 403 (`x-ratelimit-remaining: 0`) or Retry-After on a failed release-list response stops immediately, without retry or fallback. Whole-history paging and semantic-maximum selection are intentionally retained, with all origin, digest, version, archive and paging bounds intact.
+The wizard's `reasonText()` maps `rateLimited` to the same message. Missing Windows PowerShell reads "This tool needs Windows PowerShell, which was not found on this PC. Restore it in Windows, then choose Try again." in Settings; the wizard ends with "choose Check again."
+Settings recovery: the Install button reads Try again after a failed installation for every managed tool, including an OpenCode upgrade, followed by Check again. Every running managed installation offers Cancel; unconfirmed cleanup offers Stop again and holds retry disabled until cleanup is confirmed (Copilot hides retry while held). Wizard recovery: Install, then Try again after a failure, Cancel for every managed installation, and Check again. External installation-guide fallbacks are absent; browser sign-in and key links remain. Wizard guidance makes no paid/free-tier claims.
+
+Startup uses `initialVaultStatus` without filesystem inspection. Refresh uses `readVaultStatus` with a 1500 ms asynchronous presence-check deadline; timeout/unavailability means missing. Neither writes a probe. Only explicit Connect/Change uses the exclusive unique write probe and removes precisely that owned file, preserving foreign probes. The refresh does not establish writeability.
+
+OpenCode MCP Add/Remove controls are disabled and their server entry points refuse before any vendor call: `OpenCode MCP changes are not available yet. You can still use the tools already listed here.` Existing inventory remains visible. Claude/Codex MCP management remains available.
 
 ## Catalog connections
 
@@ -110,7 +119,10 @@ missing, unreadable or invalid ciphertext. Extra fields are refused. Tool IDs ma
 characters. Record JSON is limited to 16 KiB. The client timeout is five seconds.
 
 Electron encrypts JSON using safeStorage into `<userData>/credentials/<tool>.cred`.
-The directory must resolve without links. Set writes an exclusive random temporary
+This guarantee applies only to Command Center's own encrypted store. OpenCode Go sign-in uses a private local request to OpenCode, which manages its own credential persistence; vendor storage encryption has not been verified. This is not evidence of a verified plaintext leak.
+Links above userData are allowed and resolved against a pinned base. The credentials
+directory itself, its files and temporary files must remain inside that base without
+links; replacing or retargeting a pinned root is refused. Set writes an exclusive random temporary
 file beside the destination, flushes and closes it, then renames atomically. Before
 writing, set removes only that tool's pre-existing regular temporary files. Failure
 preserves the previous record and removes only its temporary file. Encryption
@@ -144,8 +156,8 @@ the page never sends it back. Every catalog `signIn` has `managed:boolean` and
 
 The original `cliLogin` action remains running until completion. Admission is not Done.
 The server privately sends only the initiating socket:
-`{type:"cliLoginState", cli, loginRequestId, loginId, revision, status, phase, reason, verificationUrl, deviceCode, pasteRequired, expiresAt}`.
-`status` is `running|done|failed`. `phase` is `starting|waitingBrowser|waitingCode|verifying|null`.
+`{type:"cliLoginState", cli, loginRequestId, loginId, revision, status, phase, reason, verificationUrl, deviceCode, pasteRequired, expiresAt, cleanupPending}`.
+`status` is `running|done|failed`. `phase` is `starting|waitingKey|waitingBrowser|waitingCode|verifying|null`.
 `reason` is a static reason below or null. `verificationUrl`, `deviceCode`, `loginId`
 and `expiresAt` are nullable. `pasteRequired` is boolean. Revision increases per update.
 The unpredictable capability stays in page memory. Reconnect can resubscribe using it;
@@ -154,10 +166,14 @@ Cancel uses the public original `loginRequestId`, and returns no private details
 Private fields are cleared on completion, cancel, expiry and shutdown.
 
 Shared `state.settings.catalogTools[id].action` contains ONLY
-`{requestId, kind:"login", status, phase, reason, message}`. No URL, device code,
+`{requestId, kind:"login", status, phase, reason, message, cleanupPending}`. No URL, device code,
 pasted code, capability or raw output enters shared state, actionResult, logs or errors.
 The current validated progress event replaces its predecessor; no transcript or event
 history is retained (the current event stays below 64 KiB).
+
+GitHub start/cancel preserve the previous connection result until a fresh authentication probe supplies one. A failed or thrown probe sets unknown, not disconnected. Account names are not published by managed login.
+OpenCode `submitCliLoginKey` consumes exactly `{type, requestId, cli:"opencode", loginId, apiKey}`. Both the controller and private runner normalize outer whitespace on the server before writing. Empty keys, more than 4096 UTF-8 bytes and remaining C0/C1 controls are refused with static secret-free text. The request key is deleted and page inputs cleared; keys never enter shared state or logs.
+`cleanupPending:true` is independent of `possiblySaved`. Failed/throwing repeated cleanup keeps the shared admission lock and a failed/stuck action. Reloaded Settings and wizard expose Stop again through the original public request ID. Confirmed cleanup sets false and releases admission; it never claims a possibly saved key was removed or rolled back.
 
 | Tool | Fixed hidden command | Policy |
 |---|---|---|
@@ -165,7 +181,8 @@ history is retained (the current event stays below 64 KiB).
 | Codex | `codex login --device-auth` | auth.openai.com/codex/device; known link/code prompts; code `^[A-Z0-9]{4}-[A-Z0-9]{5}$`; status `codex login status` |
 | Copilot | `copilot login --device-code` | github.com/login/device; documented visit/code prompt; code `^[A-Z0-9]{4}-[A-Z0-9]{4}$`; no status probe |
 | Grok | `grok login --device-auth` | candidate, auth.x.ai; generic login/device prompt and bounded code envelope; exact vendor text NOT VERIFIED; no status probe |
-| OpenCode, Gemini, Qwen, Kimi, MiMo, Mistral, MiniMax | unsupported | No verified piped flow or verification host. Existing saved authentication can still be checked at first chat. |
+| OpenCode | private local key submission | OpenCode 1; Get my key opens opencode.ai/auth; existing credentials require explicit replacement. |
+| Gemini, Qwen, Kimi, MiMo, Mistral, MiniMax | unsupported | No verified piped flow or verification host. Existing saved authentication can still be checked at first chat. |
 
 Only recognized positive read-only status probes can establish Signed in. Login exit
 zero or success text cannot. No paid chat is a silent probe. Other tools finish with
@@ -212,6 +229,33 @@ messages, state or logs. Potential vendor echo after submission is discarded.
 Native vendor sign-in, credential persistence and absence of vendor-created consoles
 still require real-account visual qualification. No automated test logs in to a vendor.
 
+## Trusted filesystem boundaries
+
+`resolveOwnedRoot(root, { io, allowRootLink = false })` returns an opaque pinned
+handle with the original `source` and canonical `path`. Links above the trusted base
+are allowed. Data roots opt into relocation with `allowRootLink: true`;
+project roots, managed application/tools and credential folders stay strict.
+`assertOwnedPath(handle, candidate, { allowMissingLeaf = false })` checks components,
+canonical containment and retained root identity, then returns the canonical path.
+Wrappers retain the handle across calls. Future leaves require `allowMissingLeaf: true`.
+Recovery, task records, journals, archives and fingerprints reuse these checks.
+
+Managed installs accept linked profile ancestors above LOCALAPPDATA. Links at or
+inside Command Center, tools, tool versions, descriptors and executable files are
+refused. Activation must stay inside its selected tool root. Cleanup checks each
+entry and removes files before verified-empty directories without following links.
+
+Setup resolves install and saved-data paths, including missing future leaves, before
+checking overlap. Equal, containing or contained paths are refused even through
+aliases. Links at or inside the install tree, changed resolved roots and failed
+resolution stop Setup. Each tree pass checks at most 5,000 entries. Every refusal
+keeps its plain installer detail and appends the same line to
+`%TEMP%\command-center-setup.log`. Silent refusals return exit code 3 and leave
+that log line. Relocated managed
+application/tools folders do not block app setup; runtime tool guards remain strict.
+Ancestors above the
+trusted install base may be links. The existing link-safe uninstall policy remains.
+
 ## Managed Copilot installation
 
 Copilot uses the managed official GitHub release ZIP route, with no WinGet, npm or
@@ -222,8 +266,7 @@ streamed bytes. HTTPS origins and manual redirects use the shared release policy
 The download ceiling is 192 MiB, expanded ceiling 256 MiB. OpenCode retains its
 128 MiB download and 512 MiB expanded ceilings and existing transfer-only fallback.
 Copilot has a 1500-second install deadline; OpenCode retains 600 seconds.
-After admission, Copilot best-effort removes orphan install folders before creating
-a candidate, preserving the active descriptor target, in-progress candidates and links.
+At admission and after activation, both Copilot and OpenCode best-effort sweep orphan install folders, preserving the active descriptor target, in-progress candidates, foreign names and links. OpenCode protects both native and nested npm executable layouts. Locked or uncertain cleanup stays conservative and adds a plain warning without failing an otherwise successful installation.
 
 The entire archive must contain exactly one regular `copilot.exe`. Unsafe paths,
 links, duplicates, case variants, empty archives and oversized entries are refused.
@@ -244,12 +287,12 @@ Install, progress, Cancel, Installed and Try again states with no shell instruct
 Copilot offers no manual installation button or setup-guide link.
 The obsolete Copilot prerequisites were removed: installation needs neither
 WinGet nor PowerShell. PowerShell 6+ is not consumed as catalog data and was removed.
-Uninstalling Command Center removes `%LOCALAPPDATA%\Command Center\tools` (the managed
-OpenCode and Copilot installations); an update keeps it (the old uninstaller runs with
-`--updated` and `/KEEP_APP_DATA`). The folder is removed with `rd /s` through an
-environment variable, never `RMDir /r`, which follows a link inside the folder and
-empties its target. A link at the folder or its parent leaves it where it is. Copilot's own
-runtime folder `%LOCALAPPDATA%\copilot` is Copilot's and stays.
+Uninstall removes only tool entries with valid Command Center ownership records, preserves foreign or unmarked entries and linked targets, and reports files it cannot safely remove; updates keep the tools. Copilot's own runtime folder stays.
+
+Setup asks only processes inside its canonical install-folder boundary to close normally, waits for the app's own processes (the shell and the server) to finish while leaving other programs the app started alone, and stops safely on refusal, failure or uncertainty without force-killing. Paths cross through environment data rather than PowerShell source; tool cleanup normalizes forward-slash and network paths and applies the same ownership and link checks.
+Setup runs this check during install, upgrade, reinstall and uninstall whenever the main program file exists in the install folder; otherwise it skips the check.
+
+Packaging permits only `config/.gitkeep` from config, rejects all other config entries even without private scan patterns, and runs gate entry points across supported Node versions. Publishing requires a fresh successful runtime-proof record for that exact installer and build attempt, so a silent exit zero cannot publish it.
 
 NOT VERIFIED 2026-11-16: real release download, native execution on x64 or arm64,
 real sign-in and ACP sessions, vendor-created windows, and whether Copilot shell

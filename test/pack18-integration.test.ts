@@ -89,7 +89,7 @@ test("FI3 the leader's fixed action on an ACP seat in Ask mode asks first (namin
     const item = await f.c.wait(() => f.c.tab("fixed").pendingApprovals?.[0], "the leader's approval card");
     assert.deepEqual(item.askedBy, { kind: "leader", slot: "leader", name: "Leader" });
     assert.equal(item.tool, "fixed-action");
-    assert.equal(item.summary, `Action: planning\nPosition: Planner (planner)\nExecution: acp:fake-int / default / default\nFolder: ${f.server.work}\n\nLeader brief:\n${brief}`);
+    assert.equal(item.summary, `Action: planning\nPosition: Planner\nExecution: acp:fake-int / default / default\nFolder: work\n\nLeader brief:\n${brief}`);
     assert.equal(f.c.tab("fixed").runs.length, 0, "nothing is started before the user answers");
     assert.equal(stamps(f).length, 0, "no budget is used before the user answers");
     assert.deepEqual(await f.c.request({ type: "answerApproval", tabId: "fixed", approvalId: item.approvalId, allow: true }), { ok: true });

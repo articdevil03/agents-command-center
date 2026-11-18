@@ -96,7 +96,8 @@ test("a failed turn clears the OpenCode lock", async () => {
     f.leader.send(JSON.stringify([{ error: "synthetic turn failure" }]));
     assert.equal(f.leader.modeLocked?.(), true);
     await until(() => f.errors.length > 0, "turn failure reported");
-    assert.match(f.errors[0], /synthetic turn failure/);
+    assert.equal(f.errors[0], "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(f.errors[0], /synthetic turn failure|session|permission/);
     assert.equal(f.leader.modeLocked?.(), false);
     assert.equal((await f.dispatch("ask")).type, "actionResult");
   } finally { await f.close(); }

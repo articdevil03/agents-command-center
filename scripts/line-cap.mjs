@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { extname, join } from "node:path";
+import { isMain } from "./is-main.mjs";
 
 // The size cap: no file a change touches may be over 400 lines. Changed = differs from CC_LINE_CAP_BASE (default origin/master), plus
 // uncommitted and untracked files. `--all` checks every tracked file. Deleted files are ignored. Nothing is skipped silently.
@@ -33,7 +34,7 @@ export function countLines(text) {
   return text === "" || text.endsWith("\n") ? breaks : breaks + 1;
 }
 
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   const root = git(process.cwd(), "rev-parse", "--show-toplevel")[0];
   const explicitBase = process.env.CC_LINE_CAP_BASE;
   const base = explicitBase || "origin/master";

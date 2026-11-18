@@ -1,6 +1,6 @@
 const store = "electron/cli-credentials.js", panel = "public/first-run/key-panel.js";
 export const pack32UiMutations = [
-  ["p32-ui-plaintext", store, 'if (!available()) throw new Error("Credential encryption unavailable.");', 'if (!available()) { io.writeFileSync(file, json); return; }'],
+  ["p32-ui-plaintext", store, 'if (!available()) throw new Error("Credential encryption unavailable.");\n        const encrypted', 'if (!available()) { io.writeFileSync(file, json); return; }\n        const encrypted'],
   ["p32-ui-atomic", store, 'io.renameSync(temp, file);', 'io.writeFileSync(file, encrypted); io.unlinkSync(temp);'],
   ["p32-ui-tool-validation", store, 'if (!toolValid(tool)) throw new Error("Invalid credential tool.");', '/* mutation: accepts unvalidated tools */'],
   ["p32-ui-record-log", store, 'available = store.available() === true;', 'console.log(message.record); available = store.available() === true;'],
@@ -10,11 +10,11 @@ export const pack32UiMutations = [
   ["p32-ui-connect", "server/settings/catalog-acp.ts", 'return sameProfile(cli, catalogProfile(entry)) && status?.installed === true', 'return status?.signedIn === true && sameProfile(cli, catalogProfile(entry)) && status?.installed === true'],
   ["p32-ui-key-focus", "public/first-run/key-panel.js", "input.dataset.focusKey = `${surface}-key-${cli}-${field.id}`;", "/* mutation: no key input focus key */"],
   ["p32-ui-failure-fields", "public/first-run/key-panel.js", "clearSecrets(panel); // Clear secrets before the send boundary, including failed or throwing sends.", "clear(panel); // mutation: loses non-secret fields on failure"],
-  ["p32-ui-parent-link", "electron/cli-credentials.js", "if (io.realpathSync(parent).toLowerCase() !== parent.toLowerCase()) throw new Error(\"Unsafe credential directory.\");", "/* mutation: parent link accepted */"],
-  ["p32-ui-stale-temp", "electron/cli-credentials.js", "if (stat.isFile() && !stat.isSymbolicLink()) io.unlinkSync(stale);", "/* mutation: stale temp retained */"],
+  ["p32-ui-parent-link","electron/cli-credentials.js","assertOwnedPath(base, directory, { allowMissingLeaf: true });","/* mutation: parent link accepted */"],
+  ["p32-ui-stale-temp","electron/cli-credentials.js","if (stat.isFile() && !stat.isSymbolicLink()) io.unlinkSync(checked(stale));","/* mutation: stale temp retained */"],
   ["p32-fix-get-failure", store, 'if (error?.code === "ENOENT") return null;\n        throw new Error("Could not read credential safely.");', 'return null;'],
   ["p32-fix-locked-sweep", store, 'catch { /* A locked leftover must not block the save. */ }', 'catch (error) { throw error; }'],
-  ["p32-fix-stale-link", store, "if (stat.isFile() && !stat.isSymbolicLink()) io.unlinkSync(stale);", "if (stat.isFile() || stat.isSymbolicLink()) io.unlinkSync(stale);"],
+  ["p32-fix-stale-link","electron/cli-credentials.js","if (stat.isFile() && !stat.isSymbolicLink()) io.unlinkSync(checked(stale));","if (stat.isFile() || stat.isSymbolicLink()) io.unlinkSync(checked(stale));"],
   ["p32-fix-placeholder", panel, "if (field.placeholder) input.placeholder = field.placeholder;", "/* mutation: no placeholder */"],
   ["p32-fix-panel-trim", panel, 'input.dataset.secret || input.tagName === "SELECT" ? input.value : input.value.trim();', "input.value;"],
   ["p32-fix-key-saved-text", "public/app/11-settings-render.js", 'tool.keySaved === true && tool.signedIn !== true ? "Installed · Key saved" : ', ""],

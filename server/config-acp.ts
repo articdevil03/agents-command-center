@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
 import { acpClisPath, publishConfigFile, liveWritePath, isObject } from "./config-files.ts";
 import type { AcpKind } from "./config.ts";
+import { preserveBadFile, readFileWithRetry } from "./safe-file.ts";
 
 // ---- ACP CLIs: leader CLIs the user added from Settings by their start command (config/acp-clis.json). No shell ever: the program is a bare name resolved on PATH, the arguments are a list of plain tokens. ----
 export type AcpCli = { id: string; name: string; program: string; args: string[]; lastModel?: string };
@@ -26,9 +26,21 @@ export function parseAcpStartCommand(text: unknown): { program: string; args: st
   if (!words.length) throw new Error("The start command is required (for example: gemini --acp)");
   return { program: words[0], args: words.slice(1) };
 }
+const unreadableTools = new Set<string>();
 export function readAcpClis(path: string = acpClisPath): AcpCli[] {
   let raw: unknown;
-  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch (err) { if ((err as NodeJS.ErrnoException).code === "ENOENT") return []; throw new Error(`ACP CLI list is unreadable: ${path} (${(err as Error).message}); fix or delete it`); }
+  let bytes: Buffer;
+  try { bytes = readFileWithRetry(path); }
+  catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    unreadableTools.add(path);
+    throw new Error("Your saved tools could not be read. Restart the app to try again.");
+  }
+  try { raw = JSON.parse(bytes.toString("utf8")); }
+  catch { throw new Error(`Your saved tools list is unreadable: ${path}`); }
+  return parseAcpClis(raw, path);
+}
+function parseAcpClis(raw: unknown, path: string): AcpCli[] {
   if (!isObject(raw) || !Array.isArray(raw.clis)) throw new Error(`ACP CLI list is malformed, expected { clis: [] }: ${path}`);
   const list = raw.clis.map(validateAcpCli);
   if (new Set(list.map((cli) => cli.id)).size !== list.length) throw new Error(`ACP CLI list has a duplicate name: ${path}`);
@@ -38,5 +50,21 @@ export function writeAcpClis(clis: AcpCli[], path?: string): void {
   const checked = clis.map(validateAcpCli);
   if (new Set(checked.map((cli) => cli.id)).size !== checked.length) throw new Error("that name is already used by another ACP CLI");
   if (checked.length > ACP_MAX_CLIS) throw new Error(`at most ${ACP_MAX_CLIS} ACP CLIs`);
-  publishConfigFile(JSON.stringify({ clis: checked }, null, 2) + "\n", liveWritePath(path, acpClisPath), true);
+  const destination = liveWritePath(path, acpClisPath);
+  if (unreadableTools.has(destination)) throw new Error("Your saved tools cannot be changed until the app restarts and reads the previous list.");
+  let bytes: Buffer | undefined;
+  try { bytes = readFileWithRetry(destination); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      preserveBadFile(destination);
+      throw new Error("Your saved tools cannot be changed because the original list could not be read. Try restarting the app.");
+    }
+  }
+  if (bytes) {
+    try { parseAcpClis(JSON.parse(bytes.toString("utf8")), destination); }
+    catch {
+      if (!preserveBadFile(destination).ok) throw new Error("Your saved tools cannot be changed because the original list could not be safely preserved.");
+    }
+  }
+  publishConfigFile(JSON.stringify({ clis: checked }, null, 2) + "\n", destination, true);
 }

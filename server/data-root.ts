@@ -8,6 +8,7 @@
 // it always has. The single shared resolution, so config.ts, runner.ts and
 // index.ts can never drift into using two different roots for the same launch.
 import { resolve } from "node:path";
+import { resolveOwnedRoot } from "./owned-path.js";
 
 // Filesystem-free decision: tests can prove both outcomes without touching
 // the directory whose protection they are checking.
@@ -29,5 +30,8 @@ export function resolveDataRoot(env: NodeJS.ProcessEnv, repoRoot: string): strin
   const dir = env.CC_DATA_DIR?.trim();
   // resolve() turns a relative CC_DATA_DIR into an absolute path (against the server's cwd) before anything uses it, so every
   // caller compares the same absolute root (history.ts, runner.ts); it is a no-op on an already-absolute path.
-  return dir ? resolve(dir) : repoRoot;
+  if (!dir) return repoRoot;
+  try { return resolveOwnedRoot(resolve(dir), { allowRootLink: true }).path; }
+  // Recovery owns the blocked notice. An unavailable relocation must not kill module loading.
+  catch { return resolve(dir); }
 }

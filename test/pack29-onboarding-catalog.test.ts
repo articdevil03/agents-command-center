@@ -41,7 +41,7 @@ test("P29 B3 catalog: every real catalog entry has its row, in its group, with t
       assert.equal(found.length, 1, `${entry.id}: exactly one row (found ${found.length})`);
       const [r] = found;
       if (entry.installable) {
-        assert.deepEqual([r.group, r.chip, r.buttons], ["lead", "Not found", (entry.id === "copilot" ? ["Install"] : ["Install", entry.id === "opencode" ? "How to set up" : "Install by hand"])], `${entry.id}: Install and the fallback (OpenCode installs in the app, so its fallback says How to set up)`);
+        assert.deepEqual([r.group, r.chip, r.buttons], ["lead", "Not found", (entry.id === "copilot" ? ["Install"] : ["Install", entry.id === "opencode" ? "How to set up" : "How to set up"])], `${entry.id}: Install and the fallback (OpenCode installs in the app, so its fallback says How to set up)`);
         const consent = await ev(`document.getElementById('frunWhy-'+${J(entry.id)})?.textContent ?? ''`);
         assert.ok(consent.startsWith("Downloads and ") && consent.includes(`${entry.vendor}'s`) && consent.endsWith("on this PC.") || consent.includes("uv may also download Python.") || (entry.id === "opencode" && consent === "Downloads and checks OpenCode 1 from its official releases, then installs it for your Windows account.") || (entry.id === "copilot" && consent === "Downloads and checks GitHub Copilot CLI from its official releases, then installs it for your Windows account."), `${entry.id}: the consent names the maker (${consent})`);
       } else {
@@ -62,7 +62,7 @@ test("P29 B3 catalog: every real catalog entry has its row, in its group, with t
     const kimi = seed.cliCatalog.find((e: any) => e.id === "kimi");
     const kimiSaved = { id: kimi.leader.connectionId, name: "Command Center Kimi Code", program: "kimi", args: ["acp"], kind: `acp:${kimi.leader.connectionId}` };
     const states: Array<[string, Record<string, unknown>, unknown[], string, string, string[]]> = [
-      ["unknown", { installed: null, registered: false, leaderEligible: false }, [], "Unknown", "Not checked yet. Press Check again.", ["Check again", "Install by hand"]],
+      ["unknown", { installed: null, registered: false, leaderEligible: false }, [], "Unknown", "Not checked yet. Press Check again.", ["Check again", "How to set up"]],
       ["installed, not saved", { installed: true, version: "1.0.0", signedIn: true, registered: false, leaderEligible: false }, [], "Installed", NOT_VERIFIED, ["Connect"]],
       // Kimi has no managed sign-in (Pack 29 W5): never a Sign in button, its unsupported line instead (pack29-cli-login-page.test.ts).
       ["installed, not signed in", { installed: true, version: "1.0.0", signedIn: false, registered: false, leaderEligible: false }, [], "Installed", NOT_VERIFIED, ["Connect"]],

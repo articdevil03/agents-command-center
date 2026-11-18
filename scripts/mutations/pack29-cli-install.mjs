@@ -89,8 +89,8 @@ row("ui-unknown-install", "public/first-run/install.js", '(installed !== false &
   '(installed === true && !unsupported) || locked()', "pack29-onboarding-install-page");
 row("ui-enabled-rule", "public/first-run/tools.js", 'tool?.installed === false && entry?.installable === true',
   'tool?.installed !== true && entry?.installable === true', "pack29-onboarding-install-page");
-row("ui-disabled-rule", "public/first-run/tools.js", "${locked ? \" disabled\" : \"\"}>${id === \"copilot\" && current?.state === \"failed\" ? \"Try again\" : \"Install\"}</button>",
-  "${false ? \" disabled\" : \"\"}>${id === \"copilot\" && current?.state === \"failed\" ? \"Try again\" : \"Install\"}</button>", "pack29-onboarding-install-page");
+row("ui-disabled-rule", "public/first-run/tools.js", "${locked ? \" disabled\" : \"\"}>${current?.state === \"failed\" ? \"Try again\" : \"Install\"}</button>",
+  "${false ? \" disabled\" : \"\"}>${current?.state === \"failed\" ? \"Try again\" : \"Install\"}</button>", "pack29-onboarding-install-page");
 row("ui-provider-no-install", "public/first-run/tools.js", '${esc(text.chip)}</span></div></div>`;',
   '${esc(text.chip)}</span><button data-frun-install="${id}">Install</button></div></div>`;', "pack29-onboarding-catalog");
 export const pack29CliInstallMutations = rows;

@@ -42,9 +42,10 @@ export function completeFirstRun(ws: WebSocket, message: any): void {
     }
   }
   if (typeof message.name !== "string" || !message.name.trim() || message.name.trim().length > 100
-    || /[\u0000-\u001f\u007f]/.test(message.name)) throw new Error("project name is required and must be at most 100 characters without controls");
+    || /[\p{Cc}\u2028\u2029\u202A-\u202E\u2066-\u2069\u200B\uFEFF]/u.test(message.name)) throw new Error("project name is required and must be at most 100 characters without control or invisible formatting characters");
   const name = message.name.trim();
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  if (!/[\p{L}\p{N}]/u.test(name)) throw new Error("project name must contain a letter or number");
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "project";
   if (!isTabSlug(slug)) throw new Error(`invalid or duplicate project id: ${slug}`);
   let id = slug;
   for (let suffix = 2; workspaces.projects.some((project) => project.id.toLowerCase() === id); suffix++) id = `${slug}-${suffix}`;

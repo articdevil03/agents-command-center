@@ -1,3 +1,13 @@
+import { isMain } from "./is-main.mjs";
+import { auditP9Mutations } from "./mutations/audit-p9.mjs";
+import { auditP8Mutations } from "./mutations/audit-p8.mjs";
+import { auditP7Mutations } from "./mutations/audit-p7.mjs";
+import { auditP6Mutations } from "./mutations/audit-p6.mjs";
+import { auditP5Mutations } from "./mutations/audit-p5.mjs";
+import { auditP4Mutations } from "./mutations/audit-p4.mjs";
+import { auditP3Mutations } from "./mutations/audit-p3.mjs";
+import { auditP2Mutations } from "./mutations/audit-p2.mjs";
+import { auditP1Mutations } from "./mutations/audit-p1.mjs";
 import { pack37SmallFixesMutations } from "./mutations/pack37-small-fixes.mjs";
 import { pack36ModeLockMutations } from "./mutations/pack36-mode-lock.mjs";
 import { pack35MimoMutations } from "./mutations/pack35-mimo.mjs";
@@ -45,7 +55,7 @@ import { pack27AdvisorMutations } from "./mutations/pack27-advisor.mjs";
 export const hasDesignFolder = (repoRoot) => existsSync(join(repoRoot, "design"));
 const REPO_ROOT = fileURLToPath(new URL("..", import.meta.url));
 // Everything the disposable copy holds. build holds the icon source test/icon.test.ts reads; never copy design/ wholesale (large untracked art).
-export const COPIED_PATHS = ["server", "public", "config", "test", "scripts", "electron", "package.json", ".gitignore", "design/simple/mutate.py", "build"]
+export const COPIED_PATHS = ["server", "public", "config", "test", "scripts", "electron", "README.md", "PROTOCOL.md", "package.json", ".gitignore", "design/simple/mutate.py", "build"]
   .filter((name) => !name.startsWith("design/") || hasDesignFolder(REPO_ROOT));
 
 // The sweep's disposable copy lives in the repo root under this prefix (gitignored through ".cc-test-*/"); a sweep that stopped early
@@ -112,6 +122,15 @@ export function removeWithRetry(path, attempts = 41, delayMs = 250) {
 }
 
 export const mutations = [
+  ...auditP9Mutations,
+  ...auditP8Mutations,
+  ...auditP7Mutations,
+  ...auditP6Mutations,
+  ...auditP5Mutations,
+  ...auditP4Mutations,
+  ...auditP3Mutations,
+  ...auditP2Mutations,
+  ...auditP1Mutations,
   ...pack35MimoMutations, ...pack35RemoveMutations, ...pack35DefaultMutations,
   ...pack34CopilotMutations,
   ...pack33GithubMutations,
@@ -173,6 +192,6 @@ export const controlMutations = [
 ];
 
 // The sweep lives in scripts/sweep/. Started with .then (not top-level await) because the sweep's modules import this one, which must have finished loading.
-if (import.meta.main) {
+if (isMain(import.meta.url)) {
   import("./sweep/main.mjs").then(({ main }) => main(process.argv.slice(2))).then((code) => { process.exitCode = code; }, (err) => { console.error(err); process.exitCode = 1; });
 }

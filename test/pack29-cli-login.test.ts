@@ -168,7 +168,7 @@ test("server shutdown closes login admission synchronously, waits for login drai
   const { stripTypeScriptTypes } = await import("node:module");
   const { runInNewContext } = await import("node:vm");
   const source = readFileSync(new URL("../server/index.ts", import.meta.url), "utf8");
-  const first = source.indexOf("let shutdownWork:"), last = source.indexOf('process.on("SIGINT"', first);
+  const first = source.indexOf("let shutdownWork:"), last = source.indexOf('bindShutdown(requestShutdown);', first);
   assert.ok(first > 0 && last > first, "actual shutdown body found");
   for (const connected of [false, true]) for (const confirmed of [false, true]) {
     let release!: (ok: boolean) => void, closed = 0, drains = 0;

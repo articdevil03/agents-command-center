@@ -100,7 +100,7 @@
       else return { state: "idle" };
       const mineNow = mine?.requestId === requestId;
       if (now.status === "running") return { state: mineNow ? "running" : "orphan", phase: now.phase ?? "starting", reason: now.reason ?? null, requestId, event: mineNow ? mine.event : null };
-      if (now.status === "failed") return { state: now.reason === "cleanupUnconfirmed" ? "stuck" : "failed", reason: now.reason ?? "loginFailed", requestId };
+      if (now.status === "failed") return { state: now.cleanupPending === true || now.reason === "cleanupUnconfirmed" ? "stuck" : "failed", reason: now.reason ?? "loginFailed", cleanupPending: now.cleanupPending, requestId };
       return { state: "done", reason: now.reason ?? null, requestId };
     }
     const active = (cli) => ["running", "orphan", "stuck"].includes(viewOf(cli).state);
@@ -135,13 +135,13 @@
     }
     // The box is emptied and switched off before anything else, also when the send fails; the code is never kept.
     function submit(cli, parts) {
-      const input = parts.input, code = cli === "opencode" ? input.value : input.value.trim();
+      const input = parts.input, code = input.value.trim();
       clearInputs(cli);
-      if (!code) return false;
+      if (!code) { if (cli === "opencode") { parts.hint.textContent = REASON.invalidKey; input.disabled = false; } return false; }
       input.value = ""; input.disabled = true;
       const mine = own.get(cli), event = mine?.event;
       if (cli === "opencode") {
-        if (!code.trim() || new TextEncoder().encode(code).length > 4096 || /[\x00-\x1f\x7f-\x9f]/.test(code)) { parts.hint.textContent = REASON.invalidKey; input.disabled = false; return false; }
+        if (new TextEncoder().encode(code).length > 4096 || /[\x00-\x1f\x7f-\x9f]/.test(code)) { parts.hint.textContent = REASON.invalidKey; input.disabled = false; return false; }
         if (!mine?.loginId || viewOf(cli).state !== "running" || viewOf(cli).stopping || event?.status !== "running" || event.phase !== "waitingKey" || mine.codeSent >= event.revision) return false;
         mine.codeSent = event.revision; // Consume before send, including reentrant or failed sends. Never retain the key for retry.
         parts.hint.textContent = "";
@@ -165,7 +165,7 @@
       const revision = Number.isFinite(message.revision) ? message.revision : (mine.event?.revision ?? 0) + 1;
       if (mine.event && revision <= mine.event.revision) return true;
       const running = message.status === "running";
-      mine.event = { status: message.status, phase: message.phase ?? null, reason: message.reason ?? null, revision, pasteRequired: running && message.pasteRequired === true,
+      mine.event = { status: message.status, phase: message.phase ?? null, reason: message.reason ?? null, cleanupPending: message.cleanupPending === true, revision, pasteRequired: running && message.pasteRequired === true,
         verificationUrl: running ? message.cli === "github" ? message.verificationUrl === "https://github.com/login/device" ? message.verificationUrl : null : safeUrl(message.verificationUrl) : null, deviceCode: running ? message.cli === "github" ? /^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(message.deviceCode) ? message.deviceCode : null : safeCode(message.deviceCode) : null };
       if (!running || (message.cli === "opencode" && message.phase !== "waitingKey")) clearInputs(message.cli);
       if (!running) mine.loginId = null; // the capability ends with the sign-in
@@ -236,6 +236,8 @@
       else if (view.state === "orphan") text = TEXT.orphan;
       else if (view.state === "running") text = view.reason === "browserUnavailable" ? REASON.browserUnavailable : isKey ? view.phase === "waitingKey" ? "Sign in with your OpenCode Go key" : "Saving your key…" : view.phase === "verifying" ? TEXT.verifying : asking ? TEXT.browser : TEXT.starting;
       else if (view.state === "stuck" || view.state === "failed" || view.state === "done") text = view.reason ? reasonText(view.reason) : "";
+      if (view.state === "stuck" && view.reason === "possiblySaved") text += " Could not confirm sign-in stopped. Choose Stop again.";
+      if (view.state === "failed" && view.reason === "possiblySaved" && view.cleanupPending === false) text = "Sign-in stopped. " + text;
       if (isKey && view.state === "done" && !view.reason) text = "Key saved. OpenCode will check it when you first chat.";
       if (cli === "github") {
         if (view.state === "running" && asking && !view.stopping) text = "Waiting for you to finish in your browser";

@@ -162,8 +162,8 @@ function registerServerShutdownHandlers(proc, calls, t) {
   const timeouts = [];
   const clientA = { terminate: () => calls.push("websocket:a") };
   const clientB = { terminate: () => calls.push("websocket:b") };
-  runInNewContext(shutdownSource, {
-    process: proc, console: { log() {}, error() {} },
+  runInNewContext(stripTypeScriptTypes(sourceText("server/shutdown-latch.ts")).replaceAll("export ", "") + "\n" + shutdownSource, {
+    process: proc, listen() {}, console: { log() {}, error() {} },
     describeError: error => String(error),
     settingsService: { cliKeys: { close: () => calls.push("keys:close") }, models: { close: () => calls.push("models:close"), drain: async () => { calls.push("models:drain"); } }, installer: { close() {}, drain: async () => true }, login: { close: () => calls.push("login:close"), drain: async () => { calls.push("login:drain"); return true; } } },
     fixedGitOperations: { close: () => calls.push("git:close"), drain: () => { calls.push("git:drain"); return drain; } },

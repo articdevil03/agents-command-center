@@ -15,7 +15,7 @@ export const pack28ClosingNoticeMutations = [
   ["p28-stop-gate","electron/main.js","stopped.then(() => {","Promise.resolve().then(() => {"],
   ["p28-quit-once","electron/main.js","if (quitPending) return;",""],
   ["p28-quit-setter","electron/main.js","quitPending = true;",""],
-  ["p28-relaunch-priority","electron/main.js","if (serverStopping) { relaunchAfterQuit = true; return; }","if (false) { relaunchAfterQuit = true; return; }"],
+  ["p28-relaunch-priority","electron/main.js","if (serverStopping && (quitPending || !showingFailure)) { relaunchAfterQuit = true; return; }","if (false) { relaunchAfterQuit = true; return; }"],
   ["p28-relaunch-setter","electron/main.js","relaunchAfterQuit = true;",""],
   ["p28-session","electron/main.js","if (!sessionEnding) showClosingNoticeUntil(stopped);","showClosingNoticeUntil(stopped);"],
   ["p28-node","electron/closing-notice.js","nodeIntegration: false","nodeIntegration: true"],

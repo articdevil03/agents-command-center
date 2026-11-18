@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { once } from "node:events";
 import { LEADER_START_TIMEOUT_MS } from "../server/leader-common.ts";
 import * as path from "node:path";
@@ -89,7 +90,12 @@ test("OpenCode leader: every failure path ends the turn exactly once", { timeout
   await withServer({ leader: OPENCODE_LEADER }, async (h) => {
     let start = h.chat(script({ error: "boom from opencode" }));
     await h.wait(() => h.turnEnded(start).length >= 1, "session.error"); await h.idle(); await sleep(100);
-    assert.equal(h.turnEnded(start).length, 1); assert.match(h.turnEnded(start)[0].message, /boom from opencode/);
+    assert.equal(h.turnEnded(start).length, 1); assert.equal(h.turnEnded(start)[0].message, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(JSON.stringify(h.turnEnded(start)), /boom from opencode/);
+    const saved = readFileSync(path.join(h.temp, "data", "chats", `${TAB}.jsonl`), "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.role === "assistant");
+    assert.equal(saved.at(-1)?.text, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(JSON.stringify(saved), /boom from opencode/);
+    assert.doesNotMatch(JSON.stringify(h.tab()), /boom from opencode/);
     start = h.chat(script({ exit: true }));
     await h.wait(() => h.turnEnded(start).length >= 1, "exit turn"); await sleep(400);
     assert.equal(h.turnEnded(start).length, 1); assert.equal(h.turnEnded(start)[0].type, "chatError");
@@ -100,7 +106,12 @@ test("OpenCode leader: every failure path ends the turn exactly once", { timeout
   await withServer({ leader: OPENCODE_LEADER, env: { FAKE_OPENCODE_PROMPT_FAILS: "1" } }, async (h) => {
     const start = h.chat("will be refused");
     await h.wait(() => h.turnEnded(start).length >= 1, "failed prompt"); await sleep(100);
-    assert.equal(h.turnEnded(start).length, 1); assert.match(h.turnEnded(start)[0].message, /prompt_async returned 500: prompt refused by fake/);
+    assert.equal(h.turnEnded(start).length, 1); assert.equal(h.turnEnded(start)[0].message, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(JSON.stringify(h.turnEnded(start)), /prompt_async|prompt refused by fake|returned 500/);
+    const saved = readFileSync(path.join(h.temp, "data", "chats", `${TAB}.jsonl`), "utf8").trim().split("\n").map((line) => JSON.parse(line)).filter((row) => row.role === "assistant");
+    assert.equal(saved.at(-1)?.text, "OpenCode could not finish this turn. Try again.");
+    assert.doesNotMatch(JSON.stringify(saved), /prompt_async|prompt refused by fake|returned 500/);
+    assert.doesNotMatch(JSON.stringify(h.tab()), /prompt_async|prompt refused by fake|returned 500/);
   });
 });
 

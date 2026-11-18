@@ -51,6 +51,8 @@ export async function recoveryFixture(t: { after: (fn: () => any) => void }, opt
   ws.terminate = () => { ws.readyState = 3; };
   server.createTabLeader(tabId);
   const tab = server.tabLocation(tabId).tab;
+  // A check in Accept now waits for the owner's approval card (P5 R-1); these recovery tests drive the lifecycle, not the card.
+  server.settingsService.state.permissionModes[tabId] = "bypass";
   const seats = Object.fromEntries(Object.entries(tab.fixedCrew.preferences).map(([slot, p]: [string, any]) => [slot, p.assignment]));
   const expected = (id = tabId) => { const task = server.fixedTasks.get(id); return task ? { taskId: task.id, planVersion: task.planVersion, recordRevision: task.recordRevision } : null; };
   const apply = (event: any) => server.fixedTasks.apply({ tabId, ...expected(), requestId: `run3-${Math.random().toString(36).slice(2)}` }, event, server.fixedTasks.actor("leader", "run3-leader"));

@@ -1,11 +1,12 @@
+import { isMain } from "./is-main.mjs";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { FORBIDDEN_PACKAGED_ENTRIES } from "./export-public/scan.mjs";
+import { FORBIDDEN_PACKAGED_ENTRIES, assertConfigClean } from "./export-public/scan.mjs";
 
 export const root = fileURLToPath(new URL("..", import.meta.url));
 export const builderCli = createRequire(import.meta.url).resolve("electron-builder/cli.js");
@@ -53,12 +54,14 @@ export async function run(command, args, { env = process.env, timeoutMs = 600000
 export function assertPackageClean(app) {
   assert.ok(lstatSync(app).isDirectory(), `packaged app missing: ${app}`);
   for (const entry of FORBIDDEN_PACKAGED_ENTRIES) assert.equal(existsSync(join(app, entry)), false, `private packaged entry: ${entry}`);
+  assertConfigClean(app);
   const names = readdirSync(app).sort();
   console.log(`resources/app top level: ${JSON.stringify(names)}`);
   return names;
 }
 
 export async function scanPackaged(app) {
+  assertPackageClean(app);
   const patterns = resolve(process.env.CC_EXPORT_PATTERNS ?? join(root, ".leak-patterns.local"));
   if (!existsSync(patterns)) {
     if (process.env.CC_EXPORT_PATTERNS !== undefined) throw new Error(`CC_EXPORT_PATTERNS file is missing: ${patterns}`);
@@ -67,6 +70,18 @@ export async function scanPackaged(app) {
   }
   console.log("leak scan running: packaged resources/app");
   await run(process.execPath, [join(root, "scripts/export-public.mjs"), "--scan-packaged", app]);
+}
+
+export function assertRuntimeProofRecord(file, artifact, runId, startedAt) {
+  const fail = () => { throw new Error("Installer was not published because its runtime check has no valid success record."); };
+  let record;
+  try { record = JSON.parse(readFileSync(file, "utf8")); } catch { fail(); }
+  if (record?.proof !== "pack29-runtime" || record.runId !== runId
+    || record.artifactSha256 !== sha256(readFileSync(artifact))
+    || !Number.isSafeInteger(record.checksRun) || record.checksRun < 1
+    || !Number.isSafeInteger(record.startedAt) || !Number.isSafeInteger(record.endedAt)
+    || record.startedAt < startedAt || record.endedAt < record.startedAt || record.endedAt > Date.now()) fail();
+  return record;
 }
 
 export async function buildInstaller() {
@@ -84,11 +99,15 @@ export async function buildInstaller() {
     const builder = process.env.CC_INSTALLER_BUILDER ?? builderCli;
     await run(process.execPath, [builder, "--win", "nsis", "--x64", `--config.directories.output=${stage}`], { env });
     const exe = join(stage, "win-unpacked/Command Center.exe");
+    const candidate = join(stage, artifact);
+    const successRecord = join(stage, "runtime-proof-success.json");
+    const runId = randomUUID(), proofStartedAt = Date.now();
+    Object.assign(env, { CC_RUNTIME_PROOF_RECORD: successRecord, CC_RUNTIME_PROOF_ARTIFACT: candidate, CC_RUNTIME_PROOF_RUN_ID: runId });
     const proof = process.env.CC_INSTALLER_PROOF ?? join(root, "scripts/pack29-runtime-proof.mjs");
     await run(process.execPath, [proof, "--electron", exe], { env });
     assertPackageClean(join(stage, "win-unpacked/resources/app"));
     await scanPackaged(join(stage, "win-unpacked/resources/app"));
-    const candidate = join(stage, artifact);
+    assertRuntimeProofRecord(successRecord, candidate, runId, proofStartedAt);
     const hash = sha256(readFileSync(candidate));
     const output = join(dist, "installers");
     mkdirSync(output, { recursive: true });
@@ -123,6 +142,7 @@ export async function buildInstaller() {
   }
 }
 
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
+if (isMain(import.meta.url)) {
+  if (process.argv.includes("--help")) { console.log("Usage: node scripts/dist-installer.mjs"); process.exit(0); }
   buildInstaller().catch((error) => { console.error(error); process.exitCode = 1; });
 }

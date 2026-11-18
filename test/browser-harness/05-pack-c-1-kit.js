@@ -30,7 +30,7 @@
       const button = requireElement(selector); const form = button.form;
       if (type === "mcpAdd" && form) { form.elements.name.value = fields.name; form.elements.commandOrUrl.value = fields.commandOrUrl; }
       if (type === "pluginInstall" && form) form.elements.name.value = fields.name;
-      const buttonDisabledBeforeClick = button.disabled; const formValues = form ? { name: form.elements.name?.value, commandOrUrl: form.elements.commandOrUrl?.value, valid: form.checkValidity() } : null; button.focus(); button.click(); confirmIfAsked();
+      const buttonDisabledBeforeClick = button.disabled; const formValues = form ? { name: form.elements.name?.value, commandOrUrl: form.elements.commandOrUrl?.value, valid: form.checkValidity() } : null; button.focus(); button.click(); await confirmIfAsked();
       await settleMicrotasks();
       const sent = window.__sent.slice(start).filter((item) => item.type === type).at(-1);
       const idGood = markUnique(sent?.requestId);

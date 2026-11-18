@@ -46,9 +46,21 @@ export async function loadHistoryRun(seatKey: unknown, timestamp: unknown, full:
   } catch { /* old logs may not have a sibling brief */ }
   return { brief, output: tail.text, truncated: tail.truncated, totalBytes: tail.totalBytes, outcome: parseOutcome(tail.text) };
 }
+// A loop from the end: a regex on a long run of dots or spaces can take quadratic time.
+function trimDotsAndSpaces(part: string): string {
+  let end = part.length;
+  while (end > 0 && (part[end - 1] === "." || part[end - 1] === " ")) end--;
+  return part.slice(0, end);
+}
 async function serveStatic(requestPath: string): Promise<{ status: number; body: Buffer | string; type?: string }> {
   let decoded: string;
   try { decoded = decodeURIComponent(requestPath); } catch { return { status: 400, body: "bad path" }; }
+  // task-types.ts uses the same device-name rule. HTTP also accepts decoded
+  // separators and Windows trailing-dot/space aliases, so check every segment.
+  if (decoded.split(/[\\/]/).some((part) => /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$/i.test(trimDotsAndSpaces(part).split(".")[0].trimEnd()))) {
+    return { status: 403, body: "forbidden" };
+  }
+  if (decoded.includes(":")) return { status: 403, body: "forbidden" };
   const safePath = decoded === "/" ? "/index.html" : decoded;
   const file = resolve(publicDir, `.${safePath}`);
   if (!isWithinDir(file, resolve(publicDir))) return { status: 403, body: "forbidden" };
@@ -67,6 +79,24 @@ async function readBody(req: import("node:http").IncomingMessage, limit: number)
   return Buffer.concat(chunks);
 }
 export async function handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try { await dispatchHttpRequest(req, res); }
+  catch (error) {
+    console.error("HTTP request failed:", describeError(error)
+      .replace(/(?:[a-z]:[\\/]+|file:\/\/\/|\/)(?:Users|home)[\\/]+[^\\/\r\n<>"]+/gi, "[user folder]")
+      .replace(/\b(?:sk|ghp|github_pat|AIza)[-_]?[a-z0-9_-]{12,}\b|\b[a-f0-9]{32,}\b/gi, "[redacted]")
+      .replace(/\bBearer\s+[a-z0-9._~+\/-]+=*/gi, "Bearer [redacted]")
+      .replace(/((?:key|token|secret|password|authorization)["']?\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s,;<>]+)/gi, "$1[redacted]"));
+    // Keep a request failure local. An async Node request listener otherwise
+    // becomes an unhandled rejection and leaves its response open.
+    if (res.destroyed || res.writableEnded) return;
+    try {
+      if (res.headersSent) { res.destroy(); return; }
+      res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Request could not be completed.");
+    } catch { res.destroy(); }
+  }
+}
+async function dispatchHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
   // A website must not frame the app (clickjacking on Allow / Bypass), and uploads must never be sniffed into something else.
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Content-Security-Policy", "frame-ancestors 'none'");
@@ -93,7 +123,9 @@ export async function handleHttpRequest(req: IncomingMessage, res: ServerRespons
   if (!isAllowedOrigin(req.headers.origin)) { refuseUpload(403, "forbidden origin"); return; }
   // Every write route needs the app key; only GETs (the page itself) stay open so the page can load and read its key.
   if (req.method !== "GET" && req.method !== "HEAD" && !hasValidAppKey(req.headers["x-app-key"])) { refuseUpload(403, "forbidden"); return; }
-  const url = new URL(req.url ?? "/", `http://${req.headers.host}`);
+  let url: URL;
+  try { url = new URL(req.url ?? "/", `http://${req.headers.host}`); }
+  catch { res.writeHead(400); res.end("bad request target"); return; }
   const beginUpload = (): boolean => {
     if (!uploadRequestId) {
       res.writeHead(400, { "Content-Type": "application/json" });

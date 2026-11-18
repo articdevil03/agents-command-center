@@ -1,24 +1,41 @@
 import { createHash } from "node:crypto";
 import { lstatSync, opendirSync, openSync, readSync, closeSync, fstatSync, type Stats } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { path, type Plan, type Revision } from "./task-types.ts";
+import { resolveOwnedRoot, assertOwnedPath } from "../owned-path.js";
+import { dataRoot as configuredDataRoot } from "../config-files.ts";
 
 export function digest(value: unknown): string {
   const canonical = (v: any): any => Array.isArray(v) ? v.map(canonical) : v && typeof v === "object"
     ? Object.fromEntries(Object.keys(v).sort().map((key) => [key, canonical(v[key])])) : v;
   return createHash("sha256").update(JSON.stringify(canonical(value))).digest("hex");
 }
-// Check every ancestor, including ancestors of the root. Missing leaves are
-// allowed so deletions and future additions participate in the fingerprint.
-export function refuseLinks(file: string): void {
-  const parent = dirname(file);
-  if (parent !== file) refuseLinks(parent);
-  try { if (lstatSync(file).isSymbolicLink()) throw new Error("Linked task paths are refused"); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+const taskRoots = new Map<string, ReturnType<typeof resolveOwnedRoot>>();
+// Keep successful pins after refusal. Only a restart may adopt a replaced root.
+export function refuseLinks(file: string, root?: string): void {
+  const contains = (base: string) => {
+    const rel = relative(base, resolve(file));
+    return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+  };
+  // Production has one configured boundary. Explicit temporary stores also
+  // pin theirs before archive/journal helpers use the legacy single-path API.
+  if (!root && contains(configuredDataRoot)) root = configuredDataRoot;
+  if (!root) root = [...taskRoots.keys()].sort((a, b) => b.length - a.length).find(contains);
+  if (!root) throw new Error("A task storage root is required.");
+  root = resolve(root);
+  let boundary = taskRoots.get(root);
+  if (!boundary) { boundary = resolveOwnedRoot(root, { allowRootLink: true }); taskRoots.set(root, boundary); }
+  assertOwnedPath(boundary, file, { allowMissingLeaf: true });
 }
 export function fingerprint(root: string, plan: Plan): Revision {
-  const base = resolve(root);
-  refuseLinks(base);
+  let boundary: ReturnType<typeof resolveOwnedRoot>;
+  try { boundary = resolveOwnedRoot(root); }
+  catch (error) {
+    if (/linked/i.test((error as Error).message)) throw new Error("Linked task paths are refused", { cause: error });
+    throw error;
+  }
+  const base = boundary.path;
+  const check = (file: string) => assertOwnedPath(boundary, file, { allowMissingLeaf: true });
   const entries = new Map<string, Stats | null>();
   let bytes = 0;
   const signature = (info: Stats | null) => info === null ? "missing" : [info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs].join(":");
@@ -28,6 +45,7 @@ export function fingerprint(root: string, plan: Plan): Revision {
     if (entries.has(name)) return;
     if (entries.size >= MAX_FINGERPRINT_ENTRIES) refuseBudget("entries");
     const file = join(base, ...name.split("/"));
+    check(file);
     let info: Stats;
     try { info = lstatSync(file); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; entries.set(name, null); return; }
@@ -45,7 +63,7 @@ export function fingerprint(root: string, plan: Plan): Revision {
     }
   }
   const coverage = [...plan.paths, ...plan.consumers, ...plan.sharedInputs].sort();
-  for (const name of coverage) { path(name); refuseLinks(join(base, ...name.split("/"))); visit(name); }
+  for (const name of coverage) { path(name); check(join(base, ...name.split("/"))); visit(name); }
   // Complete metadata preflight precedes ALL content reads, including for overlapping coverage.
   const files: Record<string, string> = {};
   const buffer = Buffer.allocUnsafe(64 * 1024);
@@ -53,6 +71,7 @@ export function fingerprint(root: string, plan: Plan): Revision {
     const file = join(base, ...name.split("/"));
     if (!info) { files[name] = "missing"; continue; }
     if (info.isDirectory()) { files[name] = "directory"; continue; }
+    check(file);
     const fd = openSync(file, "r");
     try {
       const hash = createHash("sha256");
@@ -73,7 +92,7 @@ export function fingerprint(root: string, plan: Plan): Revision {
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; current = null; }
     if (signature(current) !== signature(info)) changed();
   }
-  for (const name of coverage) refuseLinks(join(base, ...name.split("/")));
+  for (const name of coverage) check(join(base, ...name.split("/")));
   return { files, digest: digest(files) };
 }
 export const MAX_FINGERPRINT_ENTRIES = 4096;

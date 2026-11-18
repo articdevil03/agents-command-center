@@ -11,7 +11,7 @@ import { editorTestMs, J, withPage, skipped, click, deliver, deliverState, setVa
 // position cannot be changed through the chip, the menu, a kept listener or a confirmation, and the menu follows the lock, search and focus).
 
 const FIXED_FILES = ["/logos.js", "/model-picker.js", "/fixed-crew/state.js", "/fixed-crew/view.js", "/fixed-crew/task-state.js", "/fixed-crew/task-archive-view.js", "/fixed-crew/task-view.js", "/fixed-crew/task-events.js", "/fixed-crew/events.js", "/fixed-crew/project-dialog.js"];
-const APP_FILES = ["01-markdown-state", "02-selectors-format", "03-state-sync", "04-messages", "05-layers-approvals", "06-crew-rail", "06a-tab-status", "07-chat", "08-seat-view-details", "09-needs-you-stopping", "10-dialogs-seat-card", "11-settings-render", "12-events-queue-init"].map((name) => `/app/${name}.js`);
+const APP_FILES = ["01-markdown-state", "02-selectors-format", "03-state-sync", "03a-chat-events", "04-messages", "05-layers-approvals", "05a-confirmations", "06-crew-rail", "06a-tab-status", "07-chat", "07a-conversation-dom", "08-seat-view-details", "09-needs-you-stopping", "10-dialogs-seat-card", "11-settings-render", "12-events-queue-init"].map((name) => `/app/${name}.js`);
 const START_UP = "/app/12-events-queue-init.js";
 
 test("FCPICK load order: the model picker and every fixed crew file load before the page's start-up script, no old editor tag remains, and Settings and a creation dialog boot with 18 unique positions", { timeout: editorTestMs(60_000) }, async (t) => {

@@ -21,7 +21,7 @@ export function createTaskStore(dataRoot: string, folderFor: (tabId: string) => 
   const actors = new WeakSet<object>();
   const noAdmissionCancellations = new WeakSet<object>();
   const taskDir = join(resolve(dataRoot), "tasks");
-  function fileFor(tabId: string): string { id(tabId); const file = join(taskDir, `${tabId}.json`); refuseLinks(file); return file; }
+  function fileFor(tabId: string): string { id(tabId); const file = join(taskDir, `${tabId}.json`); refuseLinks(file, dataRoot); return file; }
   function authority(actor: Actor): void {
     if (!actors.has(actor)) throw new Error("Server actor authority required");
   }

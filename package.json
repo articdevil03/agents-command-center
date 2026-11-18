@@ -41,7 +41,7 @@
       "electron/**/*",
       "server/**/*",
       "public/**/*",
-      "config/**/*",
+      "config/.gitkeep",
       "package.json",
       "LICENSE",
       "!config/launch-safety.json",

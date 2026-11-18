@@ -32,7 +32,14 @@ test("shared catalog key panel through real wizard and Settings listeners, clear
         assert.deepEqual(await ev(`[...document.querySelectorAll(${J(panel + ' [data-key-field]')})].map(i=>i.dataset.keyField)`), Object.keys(fields));
         assert.deepEqual(await ev(`(()=>{const i=document.querySelector(${J(panel + ' input[type="password"]')});return [i.autocomplete,i.spellcheck,i.name,i.value]})()`), ["off", false, "", ""]);
         for (const field of CLI_KEY_PROFILES[cli]) {
-          if (field.kind === "choice") assert.deepEqual(await ev(`[...document.querySelector(${J(panel + ' select')}).options].map(o=>[o.textContent,o.value])`), field.choices!.map((choice) => [choice.label, choice.value]));
+          if (field.kind === "choice") {
+            assert.deepEqual(await ev(`[...document.querySelector(${J(panel + ' select')}).options].map(o=>[o.textContent,o.value])`), [["Choose...", ""], ...field.choices!.map((choice) => [choice.label, choice.value])]);
+            const before = await sentCount(ev);
+            await ev(`(()=>{const p=document.querySelector(${J(panel)}),fields=${J(fields)};for(const i of p.querySelectorAll('input'))i.value=fields[i.dataset.keyField];return true})()`);
+            await click(ev, panel + ' [data-key-act="save"]');
+            assert.deepEqual(await sentSince(ev, "submitCliKey", before), [], "Choose placeholder blocks native form submission");
+            assert.equal(await ev(`document.querySelector(${J(panel + ' select')}).validity.valueMissing`), true);
+          }
         }
         await ev(`(()=>{const p=document.querySelector(${J(panel)}),fields=${J(fields)};for(const i of p.querySelectorAll('[data-key-field]'))i.value=fields[i.dataset.keyField];window.__keyInputs=[...p.querySelectorAll('input,select')];return true})()`);
         if (surface === "settings") {

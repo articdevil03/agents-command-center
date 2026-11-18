@@ -55,7 +55,7 @@ test("each tab's state lists only its own pending approvals", async () => {
   alpha.catch(() => {}); beta.catch(() => {});
   await waitFor(() => server.pendingApprovals.size === 2, "two pending approvals");
   const listed = server.stateMessage().projects.flatMap((project: any) => project.tabs).map((tab: any) => [tab.id, tab.pendingApprovals.map((item: any) => item.summary)]).filter(([, list]: any) => list.length);
-  assert.equal(JSON.stringify(listed), JSON.stringify([["alpha-dev", ["Action: assist\nPosition: Helper (helper)\nExecution: codex / gpt-6.1-sol / low\nFolder: C:/work/alpha\n\nLeader brief:\nalpha work"]], ["beta-dev", ["Action: assist\nPosition: Helper (helper)\nExecution: codex / gpt-6.1-sol / low\nFolder: C:/work/beta\n\nLeader brief:\nbeta work"]]]));
+  assert.equal(JSON.stringify(listed), JSON.stringify([["alpha-dev", ["Action: assist\nPosition: Helper\nExecution: codex / gpt-6.1-sol / low\nFolder: alpha\n\nLeader brief:\nalpha work"]], ["beta-dev", ["Action: assist\nPosition: Helper\nExecution: codex / gpt-6.1-sol / low\nFolder: beta\n\nLeader brief:\nbeta work"]]]));
 });
 
 test("answering an approval with another tab's id is refused even when that tab has a live leader", async () => {

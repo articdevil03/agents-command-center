@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { mkdirSync, unlinkSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { isTabSlug } from "./chat-store.ts";
-import { keepBadCopy, writeFileSynced, replaceFile } from "./safe-file.ts";
+import { preserveBadFile, readFileWithRetry, writeFileSynced, replaceFile } from "./safe-file.ts";
 
 export type RequestStatus = "pending" | "accepted" | "declined" | "destinationRemoved";
 export type TabRequest = {
@@ -56,26 +56,42 @@ function atomicWrite(path: string, text: string): void {
 export class RequestsStore {
   readonly path: string;
   private rows: TabRequest[];
+  private writesBlocked = false;
 
   constructor(dataRoot: string) {
     this.path = join(resolve(dataRoot), "requests.json");
     this.rows = [];
     let data: unknown;
-    try { data = JSON.parse(readFileSync(this.path, "utf8")); }
+    let bytes: Buffer;
+    try { bytes = readFileWithRetry(this.path); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      // A file the app cannot read (empty after a crash, hand-edited) is kept beside it and the list starts empty, so the app still starts.
-      keepBadCopy(this.path);
+      this.preserveOriginal(true);
       return;
     }
+    try { data = JSON.parse(bytes.toString("utf8")); }
+    catch { this.preserveOriginal(); return; }
     if (!Array.isArray(data) || !data.every(validRow) || new Set(data.map((row) => row.id)).size !== data.length) {
-      keepBadCopy(this.path);
+      this.preserveOriginal();
       return;
     }
     this.rows = data.map((row) => ({ ...row }));
   }
 
   list(): TabRequest[] { return this.rows.map((row) => ({ ...row })); }
+
+  private preserveOriginal(unreadable = false): void {
+    const preserved = preserveBadFile(this.path).ok;
+    this.writesBlocked = unreadable || !preserved;
+    console.error(this.writesBlocked
+      ? "Saved requests could not be read or safely preserved. Requests cannot be changed; the original has been left untouched. Try restarting the app."
+      : "Saved requests were damaged. A copy of the original was kept before starting an empty list.");
+  }
+
+  private save(): void {
+    if (this.writesBlocked) throw new Error("Saved requests cannot be changed because the original could not be read or safely preserved. Try restarting the app.");
+    atomicWrite(this.path, `${JSON.stringify(this.rows, null, 2)}\n`);
+  }
 
   send(input: SendRequestInput, tabExists: (tabId: string) => boolean, now = Date.now()): TabRequest {
     const checked = validateMessage(input);
@@ -90,7 +106,7 @@ export class RequestsStore {
     const resolved = previous.filter((item) => item.status !== "pending");
     const dropped = new Set(resolved.slice(0, Math.max(0, resolved.length - MAX_RESOLVED_KEPT)));
     this.rows = [...previous.filter((item) => !dropped.has(item)), row];
-    try { atomicWrite(this.path, `${JSON.stringify(this.rows, null, 2)}\n`); }
+    try { this.save(); }
     catch (error) { this.rows = previous; throw error; }
     return { ...row };
   }
@@ -105,8 +121,8 @@ export class RequestsStore {
     const previous = { ...row };
     row.status = status;
     row.resolvedAt = now;
-    try { atomicWrite(this.path, `${JSON.stringify(this.rows, null, 2)}\n`); }
-    catch (error) { Object.assign(row, previous); throw error; }
+    try { this.save(); }
+    catch (error) { delete row.resolvedAt; Object.assign(row, previous); throw error; }
     return { ...row };
   }
 
@@ -121,7 +137,7 @@ export class RequestsStore {
       }
     }
     if (changed) {
-      try { atomicWrite(this.path, `${JSON.stringify(this.rows, null, 2)}\n`); }
+      try { this.save(); }
       catch (error) { this.rows = previous; throw error; }
     }
     return changed;

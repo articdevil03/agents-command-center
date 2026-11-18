@@ -76,7 +76,7 @@
     // Saved: the server's own folder replaces the typed one, and a finished MCP add empties its form; the plugin draft stays.
     requireElement('#s-folders [data-setting-action="folder-save"]').click();
     const folderSave = window.__sent.filter((item) => item.type === "setDefaultProjectFolder").at(-1);
-    mcpForm().requestSubmit(); confirmIfAsked();
+    mcpForm().requestSubmit(); await confirmIfAsked();
     const mcpAdd = window.__sent.filter((item) => item.type === "mcpAdd").at(-1);
     const savedState = structuredClone(window.__latestState);
     savedState.requestActions = { ...(savedState.requestActions ?? {}), [folderSave.requestId]: { requestId: folderSave.requestId, status: "done", message: "Done" }, [mcpAdd.requestId]: { requestId: mcpAdd.requestId, status: "done", message: "Done" } };
